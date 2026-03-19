@@ -2,6 +2,12 @@
 
 ## Near-Term (Next)
 
+### Automated Test Harness
+- CI-friendly wrapper that runs `generate-control.mjs` then `compare-outputs.mjs` in sequence
+- Configurable tolerance per output key (tighter for returns, looser for intermediates)
+- HTML report generation from comparison-results.json
+- Regression detection: compare current baseline against previous baseline
+
 ### Unit Test Suite
 - Tests for `lib/irr.mjs` with known IRR cases (simple, multi-year, edge cases)
 - Tests for `lib/waterfall.mjs` with standard American and European structures
@@ -59,3 +65,14 @@
 - Custom financial patterns (MIP, promote, clawback)
 - Custom output formatters
 - Custom chart types for the dashboard
+
+## Done
+
+### Eval Framework (2026-03-19)
+- `eval-framework/generate-control.mjs` — reads BASE_CASE from engine, generates test matrix
+- `eval-framework/compare-outputs.mjs` — compares candidate vs control with input alias normalization
+
+### Skill: Terminology Mapping (2026-03-19)
+- Financial term aliases in SKILL.md (incentive structures, waterfall, returns, share economics)
+- Parallelization guidance across all 4 phases
+- Cheat sheet pattern for fast Excel analysis

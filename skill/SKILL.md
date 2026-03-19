@@ -30,9 +30,107 @@ This skill runs a 4-phase pipeline:
 - The xlsx npm package: `npm install xlsx`
 - The Excel file (.xlsx) must be accessible at a known path
 
+## Financial Terminology Mapping
+
+Financial models use inconsistent terminology across firms and sectors. When analyzing an Excel model, map any of these equivalent terms to the standardized engine output field names.
+
+### Incentive Structures
+
+All of these refer to the same economic concept — a performance-based payout to operators/managers carved from investment returns:
+
+| Term | Context |
+|------|---------|
+| MIP (Management Incentive Plan) | PE operating companies |
+| Profit Interest Plan / Profit Share | Pass-through entities, LLCs |
+| Promote | Real estate partnerships |
+| Carried Interest Pool | Operating company level (not fund level) |
+| Performance Allocation | Tax/legal documents |
+| Value Creation Plan (VCP) | European PE |
+| Long-Term Incentive Plan (LTIP) | Corporate, listed companies |
+| Phantom Equity Plan | Non-equity-issuing entities |
+| Co-Investment Plan | GP/management co-invest structures |
+
+Map all of these to `mip.payment`, `mip.triggered`, `mip.valuePerShare` in the engine output.
+
+### Waterfall / Distribution Terms
+
+| Standardized | Equivalent Terms |
+|---|---|
+| Distribution Waterfall | Promote Structure, Carried Interest Waterfall |
+| Return Hurdle | Preferred Return, Pref, Hurdle Rate |
+| Catch-Up | GP Catch-Up, Make-Whole |
+| Residual Split | Back-End Split, Tail Economics |
+| GP Promote | GP Carry, GP Performance Fee |
+| LP Preferred Return | LP Pref, LP Hurdle |
+| GP Co-Invest | GP Commitment, GP Capital |
+
+Map to `waterfall.lpTotal`, `waterfall.gpCarry`, `waterfall.tiers`.
+
+### Return Metrics
+
+| Standardized | Equivalent Terms |
+|---|---|
+| MOIC | MoC, Multiple on Invested Capital, Money Multiple, Return Multiple |
+| IRR | Internal Rate of Return, Annualized Return |
+| Gross | Pre-Carry, Pre-Promote, Pre-Fee |
+| Net | Post-Carry, Post-Promote, Post-Fee, After Carry |
+
+Map to `returns.grossMOIC`, `returns.netMOIC`, `returns.grossIRR`, `returns.netIRR`.
+
+### Share/Unit Economics
+
+| Standardized | Equivalent Terms |
+|---|---|
+| Issuance Price | Strike Price, Grant Price, Unit Price, Share Price |
+| PPS (Price Per Share) | Per Share, Per Unit, Value Per Share |
+| Pool | Allocation Pool, Share Pool, Unit Pool |
+| Dilution | Pool Percentage, Participation Rate |
+
+Map to `perShare.gross`, `perShare.net`, `mip.valuePerShare`.
+
+### How to Apply
+
+When analyzing an Excel model, if you encounter any term in the "Equivalent Terms" column, treat it as the standardized term in the "Standardized" column. Use the standardized engine output field names (`grossMOIC`, `netIRR`, `lpTotal`, `gpCarry`, `mipPayment`, etc.) regardless of what the Excel model calls them.
+
+---
+
+## Parallelization Guidance
+
+### Phase 1 (Analyze) — Parallelize sheet reads
+
+- Read multiple Excel sheets simultaneously using separate agent calls
+- Look for summary/cheat sheet/overview tabs FIRST before diving into detail sheets
+- If multi-series model (e.g. A-1 + A-2), the later series usually contains the earlier — focus extraction on the most complete sheet
+
+### Phase 2 (Generate) — Parallelize engine builds
+
+- If multi-series, build both engines concurrently as separate agents
+- Each engine should be self-contained (own BASE_CASE, own calibration)
+- Combine after both are built
+
+### Phase 3 (Test) — Sequential then parallel
+
+- Build base-case test FIRST (sequential — needs calibration)
+- Then run cascade tests in parallel batches
+
+### Phase 4 (Dashboard) — After engines pass tests
+
+- Only build dashboard after engines achieve >90% accuracy on eval
+
+### When NOT to parallelize
+
+- Calibration (must be sequential — base case first, then scale factors)
+- Waterfall debugging (iterative by nature)
+
+---
+
 ## Phase 1 — Analyze
 
 Read the Excel workbook and produce a `model-map.json` that describes the model structure.
+
+### Cheat Sheet Pattern
+
+Before diving into detailed sheets, search for tabs named "Summary", "Cheat Sheet", "Overview", "Dashboard", or "Key Metrics". These often contain the base case inputs and outputs in a condensed format, saving significant analysis time. Extract base case values from these tabs first, then cross-reference with detail sheets only as needed.
 
 ### Steps
 

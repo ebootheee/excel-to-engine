@@ -1,5 +1,38 @@
 # excel-to-engine — Changelog
 
+## 2026-03-19 (evening)
+
+### Skill Improvements from Blind Testing Feedback
+
+**SKILL.md — Financial Terminology Mapping:**
+- Added comprehensive alias table mapping equivalent terms across sectors (MIP = Promote = Carried Interest Pool = LTIP = Phantom Equity, etc.)
+- Covers incentive structures, waterfall/distribution terms, return metrics, and share/unit economics
+- Instructs Claude to normalize all variants to standardized engine output field names
+
+**SKILL.md — Parallelization Guidance:**
+- Added section on when/how to parallelize across the 4 phases
+- Phase 1: read sheets in parallel, prioritize summary tabs
+- Phase 2: build multi-series engines concurrently
+- Phase 3: base case sequential, then cascade tests in parallel
+- Phase 4: only after engines pass eval
+- Explicit warnings on when NOT to parallelize (calibration, waterfall debugging)
+
+**SKILL.md — Cheat Sheet Pattern:**
+- Added guidance to search for Summary/Cheat Sheet/Overview/Dashboard tabs before diving into detail sheets
+
+**Eval Framework — generate-control.mjs (new):**
+- Reads BASE_CASE dynamically from reference engine instead of hardcoding input ranges
+- Generates test matrix centered on actual base case values with configurable ±range per input type
+- Produces control-baseline.json with base case outputs and single-variable sweep results
+
+**Eval Framework — compare-outputs.mjs (new):**
+- Compares candidate engine against control baseline within configurable tolerance
+- Input normalization layer with alias mapping (e.g., ownedExitMultiple = exitMultiple = capRateMultiple)
+- Handles canonical-to-alias, alias-to-canonical, and sibling alias resolution
+- Reports per-output and per-sweep-point pass/fail with deviation percentages
+
+---
+
 ## 2026-03-19
 
 ### Initial Build — Core Libraries + Templates

@@ -1,71 +1,239 @@
 /**
- * Generate Control Baseline
+ * generate-control.mjs — Generate control baseline test matrix from a reference engine
  *
- * Runs your reference engines across a matrix of input scenarios and captures
- * all key outputs as a JSON "answer key" for blind evaluation.
+ * Reads BASE_CASE from the reference engine and generates test input combinations
+ * centered around the actual base case values (not hardcoded guesses).
  *
- * Usage: node eval-framework/generate-control.mjs <path-to-reference-engine-dir>
- * Output: eval-framework/control-baseline.json
+ * Usage:
+ *   node eval-framework/generate-control.mjs <engine-path> [output-path]
+ *
+ * Example:
+ *   node eval-framework/generate-control.mjs ./outpost/engine.js ./eval-framework/control-baseline.json
+ *
+ * @license MIT
  */
 
-import { fileURLToPath } from 'url';
-import { dirname, resolve } from 'path';
 import { writeFileSync } from 'fs';
+import { resolve } from 'path';
+import { pathToFileURL } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const engineDir = process.argv[2];
-if (!engineDir) { console.error('Usage: node generate-control.mjs <engine-dir>'); process.exit(1); }
-const enginePath = resolve(engineDir);
+// ---------------------------------------------------------------------------
+// Configuration — how to vary each input type around its base case
+// ---------------------------------------------------------------------------
 
-let computeModel, computeModelA2;
-try { computeModel = (await import(resolve(enginePath, 'engine.js'))).computeModel; } catch(e) { console.error(e.message); process.exit(1); }
-try { computeModelA2 = (await import(resolve(enginePath, 'engine-a2.js'))).computeModelA2; } catch { console.log('No A-2 engine'); }
+// Default: generate 5 steps spanning ±30% around the base case value
+const DEFAULT_RANGE_FACTOR = 0.30;
+const DEFAULT_STEPS = 5;
 
-const EXIT_YEARS = [2028, 2029, 2030, 2031];
-const EXIT_YEARS_A2 = [2029, 2030, 2031, 2032];
-const EXIT_MULTIPLES = [14, 18, 22, 26];
-const NUM_SITES = [0, 10, 20];
-const ISSUANCE_PRICES = [1.20, 1.35, 1.50];
+// Override ranges for specific input patterns (matched by key name)
+const RANGE_OVERRIDES = {
+  // Multiples get ±30% (default)
+  exitMultiple:       { factor: 0.30, steps: 5 },
+  ownedExitMultiple:  { factor: 0.30, steps: 5 },
+  capRateMultiple:    { factor: 0.30, steps: 5 },
 
-function round(v, d=6) { return v==null||isNaN(v)?null:Math.round(v*10**d)/10**d; }
-function extract(m, label) {
-  return { label, grossMOIC:round(m.returns?.grossMOIC,4), netMOIC:round(m.returns?.netMOIC,4),
-    grossIRR:round(m.returns?.grossIRR,6), netIRR:round(m.returns?.netIRR,6),
-    grossExitValue:round(m.exitValuation?.grossExitValue,0), netProceeds:round(m.exitValuation?.netProceeds,0),
-    transactionCosts:round(m.exitValuation?.transactionCosts,0), debtPayoff:round(m.exitValuation?.debtPayoff,0),
-    lpTotal:round(m.waterfall?.lpTotal,0), gpCarry:round(m.waterfall?.gpCarry,0),
-    mipTriggered:m.mip?.triggered, mipPayment:round(m.mip?.payment,0),
-    mipValuePerShare:round(m.mip?.valuePerShare,4), mipHurdle:round(m.mip?.hurdle,2),
-    grossPerShare:round(m.perShare?.gross,4), netPerShare:round(m.perShare?.net,4) };
-}
+  // Counts are integers — use ±50% but round
+  numFutureAcquisitions: { factor: 0.50, steps: 5, integer: true },
+  numSites:              { factor: 0.50, steps: 5, integer: true },
 
-const a1s = [], a2s = [], invs = [];
-for (const y of EXIT_YEARS) for (const m of EXIT_MULTIPLES) for (const s of NUM_SITES) {
-  const inp = {exitYear:y,ownedExitMultiple:m,numFutureAcquisitions:s};
-  try { a1s.push({inputs:inp,outputs:extract(computeModel(inp),`A1_${y}_${m}x_${s}s`)}); } catch(e) { a1s.push({inputs:inp,error:e.message}); }
-}
-if (computeModelA2) for (const y of EXIT_YEARS_A2) for (const m of EXIT_MULTIPLES) for (const s of NUM_SITES) for (const p of ISSUANCE_PRICES) {
-  const inp = {exitYear:y,ownedExitMultiple:m,numFutureAcquisitions:s,issuancePrice:p};
-  try { a2s.push({inputs:inp,outputs:extract(computeModelA2(inp),`A2_${y}_${m}x_${s}s_$${p}`)}); } catch(e) { a2s.push({inputs:inp,error:e.message}); }
-}
-for (const [lo,hi] of [[14,18],[18,22],[22,26]]) {
-  const mL=computeModel({ownedExitMultiple:lo}), mH=computeModel({ownedExitMultiple:hi});
-  invs.push({rule:`A1: ${hi}x multiple > ${lo}x multiple → higher Gross MOIC`,lo:round(mL.returns.grossMOIC,4),hi:round(mH.returns.grossMOIC,4),holds:mH.returns.grossMOIC>mL.returns.grossMOIC});
-}
-invs.push({rule:'A1: 10x multiple → MIP should NOT trigger',holds:!computeModel({ownedExitMultiple:10}).mip?.triggered});
-invs.push({rule:'A1: 22x multiple → MIP SHOULD trigger',holds:computeModel({ownedExitMultiple:22}).mip?.triggered===true});
-if (computeModelA2) for (const [lo,hi] of [[1.20,1.35],[1.35,1.50]]) {
-  const mL=computeModelA2({issuancePrice:lo}), mH=computeModelA2({issuancePrice:hi});
-  invs.push({rule:`A2: $${hi} issuance > $${lo} issuance → higher per-share gross`,holds:(mH.perShare?.gross||0)>(mL.perShare?.gross||0)});
-}
+  // Years — small discrete range
+  exitYear:           { factor: 0.40, steps: 5, integer: true },
+  holdPeriodYears:    { factor: 0.40, steps: 5, integer: true },
 
-const control = {
-  metadata:{generatedAt:new Date().toISOString(),note:'Control baseline. DO NOT share with test instance.'},
-  baseCases:{a1:extract(computeModel({}),'A1_BASE'),...(computeModelA2?{a2:extract(computeModelA2({}),'A2_BASE')}:{})},
-  a1Scenarios:a1s, a2Scenarios:a2s, combinedScenarios:[], invariants:invs,
-  tolerances:{moic:0.02,irr:0.05,exitValue:0.02,mip:0.05,perShare:0.03,invariants:'exact'}
+  // Percentages — tighter range
+  preferredReturn:    { factor: 0.20, steps: 5 },
+  carryPercent:       { factor: 0.20, steps: 5 },
+  managementFeeRate:  { factor: 0.30, steps: 5 },
+
+  // Prices — wider range
+  issuancePrice:      { factor: 0.40, steps: 5 },
+  acquisitionPrice:   { factor: 0.30, steps: 5 },
 };
-const out = resolve(__dirname,'control-baseline.json');
-writeFileSync(out,JSON.stringify(control,null,2));
-console.log(`✅ ${a1s.length+a2s.length} scenarios + ${invs.length} invariants → ${out}`);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate an array of test values centered on baseValue.
+ */
+function generateRange(baseValue, key) {
+  const override = RANGE_OVERRIDES[key] || {};
+  const factor = override.factor ?? DEFAULT_RANGE_FACTOR;
+  const steps = override.steps ?? DEFAULT_STEPS;
+  const isInteger = override.integer ?? false;
+
+  if (baseValue === 0) {
+    // Can't do percentage range around zero — use small absolute range
+    const range = [];
+    for (let i = 0; i < steps; i++) {
+      range.push(i);
+    }
+    return range;
+  }
+
+  const low = baseValue * (1 - factor);
+  const high = baseValue * (1 + factor);
+  const step = (high - low) / (steps - 1);
+
+  const values = [];
+  for (let i = 0; i < steps; i++) {
+    let v = low + step * i;
+    if (isInteger) v = Math.round(v);
+    values.push(Number(v.toPrecision(6)));
+  }
+
+  // Ensure base case is included (replace nearest value)
+  const basePrecise = Number(baseValue.toPrecision(6));
+  if (!values.includes(basePrecise)) {
+    // Replace the middle value with the exact base case
+    const midIndex = Math.floor(steps / 2);
+    values[midIndex] = basePrecise;
+  }
+
+  // Deduplicate (integers can collapse)
+  return [...new Set(values)].sort((a, b) => a - b);
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+async function main() {
+  const enginePath = process.argv[2];
+  const outputPath = process.argv[3] || './eval-framework/control-baseline.json';
+
+  if (!enginePath) {
+    console.error('Usage: node eval-framework/generate-control.mjs <engine-path> [output-path]');
+    console.error('Example: node eval-framework/generate-control.mjs ./outpost/engine.js');
+    process.exit(1);
+  }
+
+  // Dynamically import the engine to get its BASE_CASE
+  const absPath = resolve(enginePath);
+  const engineUrl = pathToFileURL(absPath).href;
+
+  let engine;
+  try {
+    engine = await import(engineUrl);
+  } catch (err) {
+    console.error(`Failed to import engine at ${absPath}:`);
+    console.error(err.message);
+    process.exit(1);
+  }
+
+  const { BASE_CASE, computeModel } = engine;
+
+  if (!BASE_CASE || typeof BASE_CASE !== 'object') {
+    console.error('Engine does not export BASE_CASE');
+    process.exit(1);
+  }
+
+  if (typeof computeModel !== 'function') {
+    console.error('Engine does not export computeModel()');
+    process.exit(1);
+  }
+
+  console.log(`Loaded BASE_CASE with ${Object.keys(BASE_CASE).length} inputs from ${enginePath}`);
+  console.log('');
+
+  // Build the test matrix: for each numeric input, generate a range around base case
+  const inputRanges = {};
+  for (const [key, value] of Object.entries(BASE_CASE)) {
+    if (typeof value !== 'number') continue;
+    const range = generateRange(value, key);
+    inputRanges[key] = range;
+    console.log(`  ${key}: base=${value}, range=[${range[0]} ... ${range[range.length - 1]}] (${range.length} steps)`);
+  }
+
+  // Compute the base case output as the reference
+  console.log('\nComputing base case output...');
+  const baseCaseOutput = computeModel(BASE_CASE);
+
+  // Generate single-variable sweep results (vary one input at a time, hold others at base)
+  console.log('Running single-variable sweeps...');
+  const sweeps = {};
+
+  for (const [inputKey, range] of Object.entries(inputRanges)) {
+    sweeps[inputKey] = [];
+    for (const testValue of range) {
+      const testInputs = { ...BASE_CASE, [inputKey]: testValue };
+      try {
+        const result = computeModel(testInputs);
+        sweeps[inputKey].push({
+          inputValue: testValue,
+          outputs: extractKeyOutputs(result),
+        });
+      } catch (err) {
+        sweeps[inputKey].push({
+          inputValue: testValue,
+          error: err.message,
+        });
+      }
+    }
+  }
+
+  // Assemble the control baseline
+  const controlBaseline = {
+    generatedAt: new Date().toISOString(),
+    enginePath: enginePath,
+    baseCaseInputs: { ...BASE_CASE },
+    baseCaseOutputs: extractKeyOutputs(baseCaseOutput),
+    inputRanges,
+    sweeps,
+  };
+
+  const absOutputPath = resolve(outputPath);
+  writeFileSync(absOutputPath, JSON.stringify(controlBaseline, null, 2));
+  console.log(`\nControl baseline written to ${absOutputPath}`);
+  console.log(`  ${Object.keys(inputRanges).length} inputs, ${Object.values(sweeps).reduce((sum, s) => sum + s.length, 0)} total test points`);
+}
+
+/**
+ * Extract the key outputs we care about for comparison.
+ * Flattens nested structure to dot-notation keys.
+ */
+function extractKeyOutputs(result) {
+  const outputs = {};
+
+  // Returns
+  if (result.returns) {
+    for (const [k, v] of Object.entries(result.returns)) {
+      if (typeof v === 'number') outputs[`returns.${k}`] = v;
+    }
+  }
+
+  // Waterfall
+  if (result.waterfall) {
+    if (typeof result.waterfall.lpTotal === 'number') outputs['waterfall.lpTotal'] = result.waterfall.lpTotal;
+    if (typeof result.waterfall.gpCarry === 'number') outputs['waterfall.gpCarry'] = result.waterfall.gpCarry;
+  }
+
+  // MIP
+  if (result.mip) {
+    if (typeof result.mip.payment === 'number') outputs['mip.payment'] = result.mip.payment;
+    if (typeof result.mip.valuePerShare === 'number') outputs['mip.valuePerShare'] = result.mip.valuePerShare;
+    if (result.mip.triggered != null) outputs['mip.triggered'] = result.mip.triggered;
+  }
+
+  // Exit valuation
+  if (result.exitValuation) {
+    for (const [k, v] of Object.entries(result.exitValuation)) {
+      if (typeof v === 'number') outputs[`exitValuation.${k}`] = v;
+    }
+  }
+
+  // Per share
+  if (result.perShare) {
+    for (const [k, v] of Object.entries(result.perShare)) {
+      if (typeof v === 'number') outputs[`perShare.${k}`] = v;
+    }
+  }
+
+  return outputs;
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
