@@ -73,10 +73,13 @@ function saveHistory(history) {
 
 function runClaude(prompt, outputFile, maxTokens = 200000) {
   return new Promise((resolvePromise, reject) => {
+    // Use --dangerously-skip-permissions to allow file writes in headless mode
+    // The blind tester needs to create engine files, read Excel, run comparator
     const child = spawn('claude', [
       '--print',
       '--output-format', 'text',
-      '--max-turns', '50',
+      '--max-turns', '80',
+      '--dangerously-skip-permissions',
       '-p', prompt,
     ], {
       cwd: PROJECT_ROOT,
@@ -341,23 +344,33 @@ async function main() {
 
     // ─── Step 2: Score ───────────────────────────────────────────────────
     log('📊 Step 2: Running comparator...');
+
+    // CRITICAL: Delete stale comparison report before running comparator
+    // Without this, getScore() reads the previous run's report and returns a false positive
+    const reportSrc = resolve(EVAL_DIR, 'comparison-report.json');
+    if (existsSync(reportSrc)) {
+      const { unlinkSync } = await import('fs');
+      unlinkSync(reportSrc);
+      log('  Cleared stale comparison-report.json');
+    }
+
+    let score = 0;
     if (existsSync(resolve(candidateDir, 'engine.js'))) {
       const comparatorOutput = runComparator(candidateDir);
       writeFileSync(resolve(runDir, 'comparator-output.txt'), comparatorOutput);
       console.log(comparatorOutput);
 
-      // Copy comparison report
-      const reportSrc = resolve(EVAL_DIR, 'comparison-report.json');
+      // Copy comparison report to run dir
       if (existsSync(reportSrc)) {
         const reportContent = readFileSync(reportSrc, 'utf-8');
         writeFileSync(resolve(runDir, 'comparison-report.json'), reportContent);
       }
+      score = getScore();
     } else {
-      log('⚠️  No engine.js produced');
+      log('⚠️  No engine.js produced — scoring 0%');
       writeFileSync(resolve(runDir, 'comparator-output.txt'), 'No engine.js produced');
+      score = 0;
     }
-
-    const score = getScore();
     writeFileSync(resolve(runDir, 'score.txt'), String(score));
     log(`Score: ${score}%`);
 
