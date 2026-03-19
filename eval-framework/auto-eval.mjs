@@ -86,12 +86,47 @@ function runClaude(prompt, outputFile, maxTokens = 200000) {
 
     let stdout = '';
     let stderr = '';
+    let lastLine = '';
+    let lineCount = 0;
 
-    child.stdout.on('data', (data) => { stdout += data.toString(); });
-    child.stderr.on('data', (data) => { stderr += data.toString(); });
+    child.stdout.on('data', (data) => {
+      const text = data.toString();
+      stdout += text;
+      // Stream verbose output — show what Claude is doing
+      const lines = text.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        lineCount++;
+        lastLine = line.trim();
+        // Show progress indicators: tool calls, key actions, file writes
+        if (line.includes('Reading') || line.includes('Writing') || line.includes('Analyzing') ||
+            line.includes('engine') || line.includes('Excel') || line.includes('calibrat') ||
+            line.includes('waterfall') || line.includes('BASE_CASE') || line.includes('MOIC') ||
+            line.includes('IRR') || line.includes('error') || line.includes('Error') ||
+            line.includes('✅') || line.includes('❌') || line.includes('pass') || line.includes('fail')) {
+          console.log(`  │ ${line.trim().slice(0, 120)}`);
+        }
+        // Show periodic progress
+        if (lineCount % 50 === 0) {
+          console.log(`  │ ... (${lineCount} lines of output so far)`);
+        }
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      const text = data.toString();
+      stderr += text;
+      // Show stderr in real-time (errors, warnings)
+      const lines = text.split('\n').filter(l => l.trim());
+      for (const line of lines) {
+        if (line.includes('Error') || line.includes('error') || line.includes('Warning') || line.includes('FAIL')) {
+          console.log(`  │ ⚠️  ${line.trim().slice(0, 120)}`);
+        }
+      }
+    });
 
     child.on('close', (code) => {
       if (outputFile) writeFileSync(outputFile, stdout);
+      console.log(`  │ Claude finished (${lineCount} lines, exit code ${code})`);
       resolvePromise({ code, stdout, stderr });
     });
 
@@ -99,11 +134,11 @@ function runClaude(prompt, outputFile, maxTokens = 200000) {
       reject(err);
     });
 
-    // Timeout after 10 minutes
+    // Timeout after 15 minutes (increased from 10)
     setTimeout(() => {
       child.kill('SIGTERM');
-      reject(new Error('Claude CLI timed out after 10 minutes'));
-    }, 600000);
+      reject(new Error('Claude CLI timed out after 15 minutes'));
+    }, 900000);
   });
 }
 
@@ -268,7 +303,12 @@ async function main() {
     hr();
 
     // ─── Step 1: Run blind test ──────────────────────────────────────────
-    log('Step 1: Launching blind tester...');
+    log('📋 Step 1: Launching blind tester...');
+    log(`  Candidate dir: ${candidateDir}`);
+    log(`  Excel files: ${excelFiles.map(f => basename(f)).join(', ')}`);
+    if (previousFailures) {
+      log(`  Previous score: ${previousFailures.score}% — feeding failure analysis to improve this run`);
+    }
     const prompt = buildBlindTestPrompt(candidateDir, excelFiles, iteration, previousFailures);
 
     if (DRY_RUN) {
@@ -279,18 +319,28 @@ async function main() {
     }
 
     writeFileSync(resolve(runDir, 'prompt.txt'), prompt);
+    log('  ┌─ Claude output:');
 
     try {
+      const startTime = Date.now();
       const result = await runClaude(prompt, resolve(runDir, 'claude-output.txt'));
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
       writeFileSync(resolve(runDir, 'claude-stderr.txt'), result.stderr);
-      log(`Claude exited with code ${result.code}`);
+      log(`  └─ Claude finished in ${elapsed}s (exit code ${result.code})`);
     } catch (e) {
-      log(`Claude error: ${e.message}`);
+      log(`  └─ ❌ Claude error: ${e.message}`);
       writeFileSync(resolve(runDir, 'error.txt'), e.message);
     }
 
+    // Check what files were produced
+    const producedFiles = [];
+    if (existsSync(resolve(candidateDir, 'engine.js'))) producedFiles.push('engine.js');
+    if (existsSync(resolve(candidateDir, 'engine-a2.js'))) producedFiles.push('engine-a2.js');
+    if (existsSync(resolve(candidateDir, 'blind-test-log.md'))) producedFiles.push('blind-test-log.md');
+    log(`  Produced files: ${producedFiles.length > 0 ? producedFiles.join(', ') : '⚠️  NONE'}`);
+
     // ─── Step 2: Score ───────────────────────────────────────────────────
-    log('Step 2: Running comparator...');
+    log('📊 Step 2: Running comparator...');
     if (existsSync(resolve(candidateDir, 'engine.js'))) {
       const comparatorOutput = runComparator(candidateDir);
       writeFileSync(resolve(runDir, 'comparator-output.txt'), comparatorOutput);
@@ -330,28 +380,52 @@ async function main() {
     }
 
     // ─── Step 4: Analyze failures ────────────────────────────────────────
-    log('Step 3: Analyzing failures...');
+    log('🔍 Step 3: Analyzing failure patterns...');
     const reportPath = resolve(runDir, 'comparison-report.json');
     let analysis = 'No comparison report available';
     if (existsSync(reportPath)) {
       analysis = runAnalyzer(reportPath);
       writeFileSync(resolve(runDir, 'failure-analysis.txt'), analysis);
       console.log(analysis);
+
+      // Also show a quick summary of what passed vs failed by category
+      try {
+        const report = JSON.parse(readFileSync(reportPath, 'utf-8'));
+        const failsByType = {};
+        for (const f of report.failures || []) {
+          const label = f.label || '';
+          let type = 'Other';
+          if (label.includes('MOIC')) type = 'MOIC';
+          else if (label.includes('IRR')) type = 'IRR';
+          else if (label.includes('LP') || label.includes('GP') || label.includes('Carry')) type = 'Waterfall';
+          else if (label.includes('MIP') || label.includes('Trigger')) type = 'MIP';
+          else if (label.includes('Exit') || label.includes('Proceed')) type = 'ExitValue';
+          else if (label.includes('Share') || label.includes('PPS')) type = 'PerShare';
+          failsByType[type] = (failsByType[type] || 0) + 1;
+        }
+        log('  Failure breakdown:');
+        for (const [type, count] of Object.entries(failsByType).sort((a, b) => b[1] - a[1])) {
+          log(`    ${type}: ${count} failures`);
+        }
+      } catch {}
     }
 
     previousFailures = { score, analysis };
 
     // ─── Step 5: Improve skill (if not last iteration) ───────────────────
     if (iteration < MAX_ITERATIONS) {
-      log('Step 4: Improving skill...');
+      log('🔧 Step 4: Improving skill based on failure analysis...');
+      log('  ┌─ Skill improver output:');
       const improvePrompt = buildImprovePrompt(score, analysis, runDir);
       writeFileSync(resolve(runDir, 'improve-prompt.txt'), improvePrompt);
 
       try {
+        const startTime = Date.now();
         const result = await runClaude(improvePrompt, resolve(runDir, 'improve-output.txt'));
-        log('Skill improvement complete');
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
+        log(`  └─ Skill improvement complete (${elapsed}s)`);
       } catch (e) {
-        log(`Skill improvement error: ${e.message}`);
+        log(`  └─ ❌ Skill improvement error: ${e.message}`);
       }
     }
 

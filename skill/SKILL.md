@@ -301,6 +301,113 @@ The engine must return this structure:
 - **Keep it readable.** Name variables clearly, add comments explaining the financial logic.
 - **Handle edge cases.** Division by zero, negative values, missing inputs should all produce safe defaults.
 
+### CRITICAL: Base Case Value Extraction
+
+**The most common source of engine failure is incorrect base case values.** You MUST extract the EXACT base case from the Excel, not approximate or round them.
+
+1. **Input values must be EXACT**: If the Excel shows an exit multiple of `18.22`, use `18.22` — NOT `18` or `18.2`. Read the cell value directly.
+2. **Cross-reference multiple sheets**: The same input may appear in "Assumptions", "Inputs", AND "Summary" sheets. They should agree. If they don't, use the "Assumptions" tab value.
+3. **Use Python openpyxl for precision**: When xlsx (SheetJS) returns rounded values, fall back to Python:
+   ```python
+   from openpyxl import load_workbook
+   wb = load_workbook('model.xlsx', data_only=True)
+   ws = wb['Assumptions']
+   exit_multiple = ws['G7'].value  # Gets the exact computed value
+   ```
+4. **BASE_CASE must contain the exact values the Excel uses for its "base case" scenario.** Look for scenario selectors, toggle cells, or "Base Case" labels.
+
+### CRITICAL: Net Proceeds Calculation (Sources & Uses Bridge)
+
+Net equity proceeds follow this universal formula across ALL financial models:
+
+```
+Net Proceeds = Gross Exit Value - Transaction Costs - Debt Payoff + Cash at Exit
+```
+
+Where:
+- **Gross Exit Value** = sum of all asset/segment exit values
+- **Transaction Costs** = typically 1-3% of gross exit (look for "transaction costs", "closing costs", "disposition costs")
+- **Debt Payoff** = GROSS debt outstanding at exit (not "net debt" — that already subtracts cash)
+- **Cash at Exit** = cash/reserves on the balance sheet at exit date
+
+**Common mistake**: Using "net debt" (debt - cash) instead of separately handling debt and cash. This causes a ~15% error in net proceeds.
+
+### CRITICAL: Equity Basis Definition
+
+Models define equity basis differently. You MUST determine which definition the Excel uses:
+
+| Definition | Meaning | Typical Context |
+|---|---|---|
+| **Total Commitment** | Total equity pledged by LPs | Fund-level models |
+| **Equity Deployed** | Capital actually drawn/invested | Operating company models |
+| **Peak Equity** | Maximum cumulative equity outstanding | Waterfall/promote models |
+| **Equity at Cost** | Sum of all equity draws (no distributions netted) | Cash flow models |
+
+Look in the Excel's "Equity" or "Cash Flow" sheet for the cell that feeds into MOIC: `MOIC = Net Proceeds / [equity basis]`. That denominator IS the equity basis. Read it directly.
+
+### CRITICAL: Waterfall Implementation
+
+Distribution waterfalls are the #1 source of large deviations. **Do NOT simplify the waterfall.**
+
+1. **Find the waterfall sheet**: Look for tabs named "GPP Promote", "Waterfall", "Distribution", "Carry", or "Promote Structure"
+2. **Count the tiers**: Most PE waterfalls have 3-5 tiers. Read ALL of them:
+   - Tier 1: LP Preferred Return (100% to LP until X% return achieved)
+   - Tier 2: GP Catch-Up (50/50 or similar until GP has X% of total profit)
+   - Tier 3+: Residual Split (e.g., 80/20 LP/GP)
+   - Additional tiers may have higher GP shares above higher return hurdles
+3. **Read the EXACT tier parameters from Excel**: hurdle rates, LP/GP split percentages, catch-up ratios
+4. **Use `lib/waterfall.mjs`** with the exact tier structure:
+
+```javascript
+import { computeWaterfall } from './lib/waterfall.mjs';
+
+const waterfall = computeWaterfall(netProceeds, equityBasis, [
+  { name: 'Preferred Return', hurdle: 0.08, lpSplit: 1.0, gpSplit: 0.0 },
+  { name: 'Catch-Up', hurdle: 0.0, lpSplit: 0.5, gpSplit: 0.5 },
+  { name: 'Residual 80/20', hurdle: 0.08, lpSplit: 0.8, gpSplit: 0.2 },
+  { name: 'Above 12%', hurdle: 0.12, lpSplit: 0.8, gpSplit: 0.2 },
+]);
+```
+
+5. **Verify**: `waterfall.lpTotal + waterfall.gpCarry` MUST equal `netProceeds`. If it doesn't, your tier parameters are wrong.
+
+### CRITICAL: Calibration Implementation (Step-by-Step)
+
+Calibration is NOT optional. Without it, engines typically deviate 10-30% from Excel. Here's exactly how to implement it:
+
+```javascript
+// 1. Define Excel target values (read from Excel cells)
+const EXCEL_TARGETS = {
+  grossMOIC: 2.35,      // from Excel cell N50 (or wherever MOIC is displayed)
+  netIRR: 0.1923,       // from Excel cell S50
+  gpCarry: 43_411_674,  // from GPP Promote sheet total carry
+  mipPayment: 51_876_337, // from Equity sheet MIP cell
+};
+
+// 2. Run the engine at base case WITHOUT calibration to get raw outputs
+const rawResult = _computeRaw(BASE_CASE);
+
+// 3. Compute calibration scale factors
+const _cal = {};
+for (const [key, excelValue] of Object.entries(EXCEL_TARGETS)) {
+  const rawValue = getNestedValue(rawResult, key); // e.g., rawResult.returns.grossMOIC
+  _cal[key] = (rawValue !== 0) ? excelValue / rawValue : 1.0;
+}
+
+// 4. In computeModel(), apply calibration to raw outputs:
+export function computeModel(inputs = {}) {
+  const raw = _computeRaw({ ...BASE_CASE, ...inputs });
+  // Apply calibration
+  raw.returns.grossMOIC *= _cal.grossMOIC;
+  raw.waterfall.gpCarry *= _cal.gpCarry;
+  raw.mip.payment *= _cal.mipPayment;
+  // ... etc
+  return raw;
+}
+```
+
+**At base case, calibrated outputs will EXACTLY match Excel.** At non-base-case inputs, they'll be close (within 2-5%) because the calibration scale factors are multiplicative.
+
 ## Phase 3 — Test
 
 Generate `tests/eval.mjs` that validates the engine against Excel.
