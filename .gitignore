@@ -1,0 +1,4 @@
+node_modules/
+*.xlsx
+tests/eval-results.json
+.DS_Store

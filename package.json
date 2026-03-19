@@ -1,0 +1,34 @@
+{
+  "name": "excel-to-engine",
+  "version": "0.1.0",
+  "description": "Convert complex financial Excel models into JavaScript computation engines with auto-generated test suites and interactive dashboards",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "excel",
+    "financial-model",
+    "javascript",
+    "irr",
+    "waterfall",
+    "private-equity",
+    "real-estate",
+    "computation-engine"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/excel-to-engine/excel-to-engine"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "exports": {
+    "./lib/irr": "./lib/irr.mjs",
+    "./lib/waterfall": "./lib/waterfall.mjs",
+    "./lib/calibration": "./lib/calibration.mjs",
+    "./lib/excel-parser": "./lib/excel-parser.mjs"
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {}
+}

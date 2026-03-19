@@ -1,0 +1,205 @@
+/* excel-to-engine — Dashboard Styles */
+
+/* Tab navigation */
+.tab-btn {
+  color: #64748b;
+  transition: all 150ms ease;
+}
+.tab-btn:hover {
+  color: #334155;
+}
+.tab-btn.active {
+  background: white;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* Output cards */
+.output-card {
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  transition: border-color 150ms ease;
+}
+.output-card:hover {
+  border-color: #94a3b8;
+}
+.output-card .label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+.output-card .value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+.output-card .delta {
+  font-size: 0.75rem;
+  margin-top: 0.25rem;
+}
+.output-card .delta.positive {
+  color: #059669;
+}
+.output-card .delta.negative {
+  color: #dc2626;
+}
+.output-card .delta.neutral {
+  color: #64748b;
+}
+
+/* Input sliders */
+.input-group {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+}
+.input-group label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #334155;
+  margin-bottom: 0.375rem;
+}
+.input-group .value-display {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 0.8125rem;
+}
+.input-group input[type="range"] {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: #e2e8f0;
+  border-radius: 3px;
+  outline: none;
+}
+.input-group input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+.input-group input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: 2px solid white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+/* Sensitivity heatmap */
+#heatmapTable td {
+  text-align: center;
+  padding: 6px 8px;
+  min-width: 60px;
+  border: 1px solid #f1f5f9;
+  transition: background 150ms ease;
+}
+#heatmapTable th {
+  padding: 6px 8px;
+  font-weight: 600;
+  color: #475569;
+  border: 1px solid #f1f5f9;
+}
+#heatmapTable .header-row th {
+  background: #f8fafc;
+}
+#heatmapTable .row-header {
+  background: #f8fafc;
+  font-weight: 600;
+  text-align: right;
+}
+
+/* Heatmap color scale (green to red) */
+.heat-0 { background: #dcfce7; color: #166534; }
+.heat-1 { background: #bbf7d0; color: #166534; }
+.heat-2 { background: #fef9c3; color: #854d0e; }
+.heat-3 { background: #fed7aa; color: #9a3412; }
+.heat-4 { background: #fecaca; color: #991b1b; }
+
+/* Eval results */
+.eval-pass {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.eval-fail {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.eval-warn {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+}
+.status-badge.pass {
+  background: #dcfce7;
+  color: #166534;
+}
+.status-badge.fail {
+  background: #fef2f2;
+  color: #991b1b;
+}
+.status-badge.warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+/* Check result rows */
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+}
+.check-row.pass {
+  border-left: 3px solid #22c55e;
+}
+.check-row.fail {
+  border-left: 3px solid #ef4444;
+}
+.check-icon {
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .output-card .value {
+    font-size: 1.125rem;
+  }
+  header nav {
+    order: 3;
+    flex-basis: 100%;
+    margin-top: 0.5rem;
+  }
+}
