@@ -8,7 +8,7 @@
  *   node eval-framework/generate-control.mjs <engine-path> [output-path]
  *
  * Example:
- *   node eval-framework/generate-control.mjs ./outpost/engine.js ./eval-framework/control-baseline.json
+ *   node eval-framework/generate-control.mjs ./my-model/engine.js ./eval-framework/control-baseline.json
  *
  * @license MIT
  */
@@ -105,7 +105,7 @@ async function main() {
 
   if (!enginePath) {
     console.error('Usage: node eval-framework/generate-control.mjs <engine-path> [output-path]');
-    console.error('Example: node eval-framework/generate-control.mjs ./outpost/engine.js');
+    console.error('Example: node eval-framework/generate-control.mjs ./my-model/engine.js');
     process.exit(1);
   }
 

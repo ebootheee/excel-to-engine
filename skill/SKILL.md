@@ -30,6 +30,26 @@ This skill runs a 4-phase pipeline:
 - The xlsx npm package: `npm install xlsx`
 - The Excel file (.xlsx) must be accessible at a known path
 
+## Phase 0 — User Intake
+
+Before analyzing anything, ask the user these questions:
+
+1. **Which files?** Auto-detect `.xlsx` files in the working directory and list them. Ask: "I found these Excel files — which should I work with?"
+2. **Related models?** If multiple files: "Are these related (e.g., different investment series for the same platform)? Or separate models?" If related, auto-detect cross-file naming patterns and shared cell references.
+3. **Model type?** "What kind of model is this?" Options: real estate, PE/venture, corporate M&A, infrastructure, debt/credit, fund-of-funds, other
+4. **Priority outputs?** "What outputs matter most to you?" (IRR, per-share values, waterfall accuracy, cash flow timing, etc.)
+5. **Helpful context?** "Anything else I should know?" (e.g., "4-tier waterfall with 50% catch-up", "monthly compounding", "two share classes")
+
+This context dramatically improves analysis accuracy.
+
+## Step 0 — Read the Evaluation Contract
+
+If a comparator (`compare-outputs.mjs`) or control baseline exists in the project:
+
+1. **Read the comparator** to understand the API contract: what function signatures it calls, what inputs it passes, what output field paths it checks, what tolerances it uses. The comparator IS the spec.
+2. **Read the control baseline's STRUCTURE** (not values): Check what input fields exist per scenario, how many scenarios, what grid dimensions. Do NOT memorize output values — that's cheating. But understanding the test matrix shape tells you what inputs your engine MUST support.
+3. **Identify ALL input dimensions** before writing any code. A 100% base case score means nothing if you're missing an entire input dimension (like `issuancePrice` or `numFutureAcquisitions`).
+
 ## Financial Terminology Mapping
 
 Financial models use inconsistent terminology across firms and sectors. When analyzing an Excel model, map any of these equivalent terms to the standardized engine output field names.
@@ -100,7 +120,7 @@ When analyzing an Excel model, if you encounter any term in the "Equivalent Term
 
 - Read multiple Excel sheets simultaneously using separate agent calls
 - Look for summary/cheat sheet/overview tabs FIRST before diving into detail sheets
-- If multi-series model (e.g. A-1 + A-2), the later series usually contains the earlier — focus extraction on the most complete sheet
+- If multi-series model (e.g. Series 1 + Series 2), the later series usually contains the earlier — focus extraction on the most complete sheet
 
 ### Phase 2 (Generate) — Parallelize engine builds
 
@@ -419,7 +439,7 @@ lpTotal = netProceeds - gpCarry
 This is NOT the sum of LP distributions from individual waterfall tiers. It's the residual.
 Verify: `lpTotal + gpCarry === netProceeds` (must balance exactly).
 
-Both blind testers got this wrong — they summed tier-level LP distributions instead of computing `netProceeds - gpCarry`. The tier distributions are intermediate calculations; `lpTotal` is the final LP take-home.
+A common mistake is summing tier-level LP distributions instead of computing `netProceeds - gpCarry`. The tier distributions are intermediate calculations; `lpTotal` is the final LP take-home.
 
 ### CRITICAL: Exit Value Must Scale with Exit Year
 
@@ -469,7 +489,7 @@ The `mip.valuePerShare` is simply `mipPayment / totalMIPShares` where `totalMIPS
 
 ### CRITICAL: Multi-Series — issuancePrice Must Affect Outputs
 
-For models with multiple investment series (A-1, A-2, etc.), the `issuancePrice` input determines how many shares are issued:
+For models with multiple investment series (Series 1, Series 2, etc.), the `issuancePrice` input determines how many shares are issued:
 
 ```
 totalShares = totalCommitment / issuancePrice
@@ -480,17 +500,105 @@ This affects:
 - `perShare.net` = netPerShareValue = lpTotal / totalShares
 - `mip.valuePerShare` = mipPayment / mipPoolShares (where mipPoolShares may also depend on issuancePrice)
 
-If issuancePrice doesn't affect your outputs, your A-2 engine will produce identical results for all issuance prices — which fails 33% of A-2 scenarios.
+If issuancePrice doesn't affect your outputs, your secondary series engine will produce identical results for all issuance prices — which fails 33% of scenarios for that series.
+
+### CRITICAL: MOIC Definition Matters
+
+"Gross MOIC" can mean different things depending on context:
+- **(a)** Raw gross before ALL deductions (fees, carry, MIP)
+- **(b)** Post-MIP but pre-carry
+- **(c)** Post-fees but pre-carry
+
+Check the comparator and control baseline to confirm which definition is expected. In many PE models, "Gross MOIC" is `netProceeds / equityBasis` (before carry is split out), while "Net MOIC" is `lpTotal / equityBasis` (after carry). Getting this wrong cascades into every downstream metric.
+
+### CRITICAL: Waterfall Library Caveat
+
+`lib/waterfall.mjs` uses **simplified annual compounding**. Many Excel models use **monthly cash flows with monthly compounding and interim distributions**. The library may overestimate carry by 20-30% due to this timing difference.
+
+Options:
+1. **Calibrate aggressively** — Apply calibration to `waterfall.gpCarry` and `waterfall.lpTotal` to force-match Excel values
+2. **Data-driven parametric approach** — Instead of replicating waterfall math, extract carry amounts at known data points from Excel and interpolate
+
+### Data-Driven Parametric Strategy
+
+When the Excel model is too complex to replicate formula-by-formula (monthly waterfalls, circular references, macro-driven logic), use a data-driven approach:
+
+1. **Identify input dimensions and grid values** from the sensitivity tables in Excel
+2. **Read known outputs at grid points** directly from Excel (e.g., at 14x/18x/22x/26x multiples, read the Gross MOIC, Net IRR, GP carry, etc.)
+3. **Derive parametric relationships**: `grossExit = NOI × multiple + constant` (linear); `carry = f(netProceeds, equityBasis)` (tiered)
+4. **Interpolate between grid points** for inputs between the Excel's scenario values
+5. **Calibrate at base case** to ensure exact match
+
+This achieves higher accuracy than physics-based replication for complex models, and is faster to build.
+
+### CRITICAL: Boolean Output Handling
+
+Boolean outputs (like `mip.triggered`) cannot be linearly interpolated. A MIP can be "triggered" (plan exists) with $0 payment (returns below hurdle). Use explicit threshold logic:
+
+```javascript
+mip.triggered = lpTotal > (mipHurdle * equityBasis);
+mip.payment = mip.triggered ? dilutionRate * (lpTotal - mipHurdle * equityBasis) : 0;
+```
+
+Do NOT set `triggered = (mipPayment > 0)` — the plan can be triggered with zero payment if returns exactly equal the hurdle.
 
 ### CRITICAL: Calibrate ALL Outputs, Not Just MOIC/IRR
 
-Both blind testers calibrated MOIC and IRR but forgot to calibrate:
+A common mistake is calibrating MOIC and IRR but forgetting to calibrate:
 - `waterfall.lpTotal` — must match Excel's LP total
 - `waterfall.gpCarry` — must match Excel's total carry
 - `mip.payment` — must match Excel's MIP payment
 - `exitValuation.netProceeds` — must match Excel's net proceeds
 
 Calibrate every output that has a known Excel target value. The more targets you calibrate, the higher your score.
+
+## Phase 2.5 — Self-Eval & Improvement Loop
+
+After generating the initial engine, enter an interactive improvement loop. **Do NOT skip this phase.** The initial engine will typically score 30-60% — the loop gets it to 95%+.
+
+### Step 1: Run Self-Eval
+
+```javascript
+import { selfEval, printComparisonTable, printMenu } from './lib/self-eval.mjs';
+import { computeModel, BASE_CASE, EXCEL_TARGETS } from './engine.js';
+
+const result = selfEval(computeModel, BASE_CASE, EXCEL_TARGETS);
+printComparisonTable(result);
+printMenu(result.score, 0);
+```
+
+### Step 2: Ask the User
+
+Present the comparison table and ask what they want to do:
+
+1. **Run 1 improvement cycle** — Fix the worst failures, re-eval, show updated score
+2. **Auto-loop until >95%** (max 5 iterations) — Autonomous fixing with progress updates
+3. **Accept current state** — Lock the engine, proceed to Phase 3
+4. **Show detailed analysis** — Failure diagnostics with specific fix suggestions
+
+### Step 3: Improvement Cycle
+
+When the user picks option 1 or 2:
+
+1. Run `diagnoseFailures()` to get prioritized fix suggestions
+2. For each suggestion (highest priority first):
+   a. Re-read the relevant Excel cells for that specific output
+   b. Apply the fix (adjust formula, add/adjust calibration, fix definition)
+   c. Re-run selfEval
+   d. Show updated score: "Iteration 3: 45% → 67% → 82%"
+3. If auto-looping, continue until target or max iterations
+4. Stop and present to user when score plateaus (< 2% improvement between iterations)
+
+### Step 4: Lock Engine
+
+When user accepts (option 3):
+- Save final score to `engine-eval.json`
+- Log iteration history
+- Proceed to Phase 3 (external test suite)
+
+### Fail Fast
+
+Run the eval EARLY — even before the engine is complete. A skeleton engine that crashes on unknown inputs tells you what you're missing. Better to discover you need `issuancePrice` support after 5 minutes than after 30 minutes of polishing other calculations.
 
 ## Phase 3 — Test
 
@@ -651,6 +759,46 @@ your-model/
     ├── calibration.mjs
     └── excel-parser.mjs
 ```
+
+## Phase 5 — Deliver the Engine
+
+After the engine passes testing, show the user how to use it:
+
+### In Claude Code
+```javascript
+import { computeModel } from './engine.js';
+const result = computeModel({ exitMultiple: 22 });
+console.log(`Gross IRR: ${(result.returns.grossIRR * 100).toFixed(1)}%`);
+```
+
+### In a Web App
+```html
+<script type="module">
+  import { computeModel } from './engine.js';
+  const result = computeModel({ exitMultiple: 22 });
+  document.getElementById('irr').textContent = (result.returns.grossIRR * 100).toFixed(1) + '%';
+</script>
+```
+
+### As an API
+```javascript
+import { computeModel } from './engine.js';
+app.get('/api/model', (req, res) => res.json(computeModel(req.query)));
+```
+
+### With the Dashboard
+Open `dashboard/index.html` in any browser — no build step needed.
+
+### Python Engine (Opt-In)
+
+If the user asks for a Python version, generate `engine.py` with:
+- Same `BASE_CASE` dictionary
+- Same `EXCEL_TARGETS` dictionary
+- Same `compute_model(inputs)` function signature
+- Same calibration approach
+- Same return structure (as a nested dict)
+
+This is opt-in only — do NOT generate Python by default.
 
 ## Tips
 

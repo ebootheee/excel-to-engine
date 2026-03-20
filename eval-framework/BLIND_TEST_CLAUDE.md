@@ -6,7 +6,7 @@ Build JavaScript engines from the Excel models in this directory. Score them aga
 
 ## Rules
 
-- **DO NOT read** `eval-framework/control-baseline.json`, `outpost-model/`, or `outpost-mip/`
+- **DO NOT read** `eval-framework/control-baseline.json`, `reference-model/`, or `reference-mip/`
 - **DO read** the Excel files, `excel-to-engine/` skill, and `eval-framework/compare-outputs.mjs`
 
 ## Build

@@ -242,14 +242,14 @@ Your job:
 1. Read the current skill at ${SKILL_DIR}/skill/SKILL.md
 2. Identify what guidance is missing or unclear that caused these failures
 3. Update the skill with better instructions, but keep them MODEL-AGNOSTIC
-   - Do NOT add Outpost-specific constants or formulas
+   - Do NOT add model-specific constants or formulas
    - DO add better general guidance on calibration, waterfall detection, etc.
 4. If needed, update lib/ files (irr.mjs, waterfall.mjs, calibration.mjs, excel-parser.mjs)
 5. If needed, update templates/ (engine-template.js, eval-template.mjs)
 6. Log your changes to ${SKILL_DIR}/CHANGELOG.md
 
 IMPORTANT: All improvements must help with ANY financial model, not just this one.
-The Outpost model is our training set, not the target.`;
+The reference model is our training set, not the target.`;
 }
 
 // ─── Main Loop ─────────────────────────────────────────────────────────────

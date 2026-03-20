@@ -1,10 +1,12 @@
 # excel-to-engine
 
-Convert complex financial Excel models into JavaScript computation engines with auto-generated test suites and interactive dashboards.
+> Turn a complex financial Excel model into a live, testable JavaScript computation engine — in one Claude Code session.
+
+[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## What It Does
 
-Takes a `.xlsx` financial model (PE fund models, real estate waterfalls, DCF analyses) and produces:
+A Claude Code skill + reusable library set that takes a `.xlsx` financial model (PE fund models, real estate waterfalls, DCF analyses, corporate M&A) and produces:
 
 1. **`engine.js`** — A pure JavaScript computation engine that replicates the model's calculations, calibrated to match Excel at base case
 2. **`tests/eval.mjs`** — An automated test suite that validates accuracy against the original Excel
@@ -193,6 +195,79 @@ Financial models in Excel use hundreds of intermediate formulas. Replicating eve
 5. Applies factors to all subsequent computations
 
 This means the engine is exact at base case and approximately correct for nearby inputs. The eval suite validates that deviations stay within tolerance across the input range.
+
+## Eval Framework
+
+The project includes tools for validating engine accuracy:
+
+### Self-Eval (during development)
+
+```javascript
+import { selfEval, printComparisonTable, diagnoseFailures } from './lib/self-eval.mjs';
+
+const result = selfEval(computeModel, BASE_CASE, EXCEL_TARGETS);
+printComparisonTable(result);
+// Shows: Metric | Engine | Excel | Status
+//        Gross MOIC | 2.50x | 2.35x | ⚠️ 6.4%
+
+const fixes = diagnoseFailures(result.results.filter(r => !r.pass));
+// Returns: [{ priority: 1, category: 'waterfall', fix: 'lpTotal should be netProceeds - gpCarry' }]
+```
+
+### Control Baseline (for blind testing)
+
+```bash
+# Generate a control baseline from a reference engine
+node eval-framework/generate-control.mjs ./reference/engine.js
+
+# Score a candidate engine against the baseline
+node eval-framework/compare-outputs.mjs ./candidate/
+```
+
+### Interactive Improvement Loop
+
+The skill supports an interactive eval cycle — build the engine, see where it's off, fix, repeat:
+
+1. **Run 1 improvement cycle** — fix worst failures, re-eval
+2. **Auto-loop until >95%** — autonomous fixing (max 5 iterations)
+3. **Accept current state** — lock the engine and proceed
+4. **Show detailed analysis** — failure diagnostics with fix suggestions
+
+## Using Your Engine
+
+After the engine is built and locked, you can use it anywhere:
+
+### In Claude Code or Claude Chat
+```
+Upload engine.js to a Claude Project as knowledge.
+Ask: "Run the model with exit multiple 22x and tell me the IRR."
+```
+
+### In a Web App
+```html
+<script type="module">
+  import { computeModel } from './engine.js';
+  const result = computeModel({ exitMultiple: 22 });
+  document.getElementById('irr').textContent =
+    (result.returns.grossIRR * 100).toFixed(1) + '%';
+</script>
+```
+
+### As an API
+```javascript
+import { computeModel } from './engine.js';
+app.get('/api/model', (req, res) => {
+  const result = computeModel(req.query);
+  res.json(result);
+});
+```
+
+### With the Dashboard
+```bash
+# Open the interactive dashboard
+npx serve dashboard/
+# or just open dashboard/index.html in any browser
+```
 
 ## Contributing
 
