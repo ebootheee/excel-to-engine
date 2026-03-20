@@ -408,6 +408,90 @@ export function computeModel(inputs = {}) {
 
 **At base case, calibrated outputs will EXACTLY match Excel.** At non-base-case inputs, they'll be close (within 2-5%) because the calibration scale factors are multiplicative.
 
+### CRITICAL: LP Total Definition
+
+`waterfall.lpTotal` is the TOTAL amount LPs receive after the GP takes their carry:
+
+```
+lpTotal = netProceeds - gpCarry
+```
+
+This is NOT the sum of LP distributions from individual waterfall tiers. It's the residual.
+Verify: `lpTotal + gpCarry === netProceeds` (must balance exactly).
+
+Both blind testers got this wrong — they summed tier-level LP distributions instead of computing `netProceeds - gpCarry`. The tier distributions are intermediate calculations; `lpTotal` is the final LP take-home.
+
+### CRITICAL: Exit Value Must Scale with Exit Year
+
+The exit valuation MUST change when `exitYear` changes. A model exiting in 2028 has lower asset values than one exiting in 2031 because:
+- NOI/EBITDA grows over time (rent escalations, lease-up, new acquisitions)
+- More future acquisitions have been completed in later years
+- Debt may be different (amortization, refinancing)
+
+**How to implement**: The Excel has year-by-year projections. Read the exit value components (NOI, revenue, etc.) for EACH possible exit year, not just the base case. Store these as lookup arrays:
+
+```javascript
+// NOI by exit year (read from Excel for each year)
+const NOI_BY_YEAR = {
+  2028: 58_000_000,
+  2029: 71_997_341,   // base case
+  2030: 85_000_000,
+  2031: 95_000_000,
+};
+
+// In computeModel:
+const noi = NOI_BY_YEAR[exitYear] || interpolate(exitYear, NOI_BY_YEAR);
+const grossExit = noi * ownedExitMultiple + otherSegments;
+```
+
+If you use a single base-case exit value for all years, your engine will produce identical outputs regardless of exit year — which is wrong and causes ~60% of scenarios to fail.
+
+### CRITICAL: MIP Formula
+
+The MIP (Management Incentive Plan) payment formula is:
+
+```
+mipPayment = dilutionRate × max(0, lpTotal - mipHurdle × equityBasis)
+```
+
+Where:
+- `dilutionRate` = typically 10-15% (read from Excel — look for "Class B %", "MIP %", "dilution")
+- `lpTotal` = LP total AFTER carry (from waterfall)
+- `mipHurdle` = typically 1.40x (MOIC threshold — look for "hurdle", "return threshold")
+- `equityBasis` = the equity basis used in MOIC calculation
+
+**Common mistakes:**
+1. Using `(grossMOIC - hurdle) × equityBasis × rate` — this is wrong because grossMOIC already includes carry
+2. Using `netProceeds` instead of `lpTotal` — MIP comes from LP excess, not total proceeds
+3. Not gating on `lpTotal > hurdle × equityBasis` — MIP should be zero when returns are below hurdle
+
+The `mip.valuePerShare` is simply `mipPayment / totalMIPShares` where `totalMIPShares` is a fixed number from the Excel (the incentive pool size).
+
+### CRITICAL: Multi-Series — issuancePrice Must Affect Outputs
+
+For models with multiple investment series (A-1, A-2, etc.), the `issuancePrice` input determines how many shares are issued:
+
+```
+totalShares = totalCommitment / issuancePrice
+```
+
+This affects:
+- `perShare.gross` = grossPerShareValue = netProceeds / totalShares
+- `perShare.net` = netPerShareValue = lpTotal / totalShares
+- `mip.valuePerShare` = mipPayment / mipPoolShares (where mipPoolShares may also depend on issuancePrice)
+
+If issuancePrice doesn't affect your outputs, your A-2 engine will produce identical results for all issuance prices — which fails 33% of A-2 scenarios.
+
+### CRITICAL: Calibrate ALL Outputs, Not Just MOIC/IRR
+
+Both blind testers calibrated MOIC and IRR but forgot to calibrate:
+- `waterfall.lpTotal` — must match Excel's LP total
+- `waterfall.gpCarry` — must match Excel's total carry
+- `mip.payment` — must match Excel's MIP payment
+- `exitValuation.netProceeds` — must match Excel's net proceeds
+
+Calibrate every output that has a known Excel target value. The more targets you calibrate, the higher your score.
+
 ## Phase 3 — Test
 
 Generate `tests/eval.mjs` that validates the engine against Excel.
