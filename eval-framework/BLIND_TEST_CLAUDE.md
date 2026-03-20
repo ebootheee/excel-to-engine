@@ -48,6 +48,10 @@ Save these files:
 - `candidate/blind-test-log.md` — brief log:
   - Final score and pass/fail counts
   - What you found hardest
-  - What iterations you did (if any)
+  - Key decisions you made (equity basis, waterfall tiers, etc.)
 
-Also paste the full comparator output at the end of your session so the evaluator can see it.
+Paste the full comparator output at the end of your session.
+
+## IMPORTANT: Stop After Scoring
+
+**Do NOT iterate or try to fix failures.** Run the comparator once, report your score, save your files, and stop. The evaluator will analyze failures and improve the skill separately. Your job is a single clean build attempt following the skill instructions.
