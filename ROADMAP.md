@@ -2,6 +2,11 @@
 
 ## Near-Term (Next)
 
+### Incremental Re-extraction
+- Store extraction metadata (which cells were read, what values were found) alongside model-map.json
+- On re-extraction, diff against previous values and only update changed fields
+- Generate a "model changes" report showing what moved between versions (e.g., Q3 → Q4 model update)
+
 ### Automated Test Harness
 - CI-friendly wrapper that runs `generate-control.mjs` then `compare-outputs.mjs` in sequence
 - Configurable tolerance per output key (tighter for returns, looser for intermediates)
@@ -12,7 +17,7 @@
 - Tests for `lib/irr.mjs` with known IRR cases (simple, multi-year, edge cases)
 - Tests for `lib/waterfall.mjs` with standard American and European structures
 - Tests for `lib/calibration.mjs` convergence and edge cases
-- Tests for `lib/excel-parser.mjs` with a synthetic test workbook
+- Tests for `lib/excel-parser.mjs` fingerprinting, year detection, classification with a synthetic test workbook
 
 ### Synthetic Example Project
 - Create a dummy PE fund model in Excel (no real data)
@@ -67,6 +72,16 @@
 - Custom chart types for the dashboard
 
 ## Done
+
+### Sheet Fingerprinting & Multi-Year Extraction (2026-03-21)
+- `fingerprintSheet()` / `fingerprintWorkbook()` — auto-detect row-to-field mappings across identical sheets using fuzzy label matching
+- `matchLabel()` — fuzzy matcher with 50+ financial term aliases (revenue, EBITDA/EBITDAR/NOI, rent, IRR, MOIC, etc.)
+- `detectYearRow()` — auto-detect year row and map columns to calendar years
+- `extractMultiYear()` / `extractByYear()` — extract field values across years or for a specific reference year
+- `detectEscalation()` — detect growth/escalation rates between adjacent years (catches rent escalation)
+- `classifyAsset()` — auto-classify assets as leased/managed based on rent presence, labels, and metadata signals
+- SKILL.md updated with fingerprinting workflow, reference year guidance, cross-sheet validation, and asset classification
+- Model map schema updated to v1.1.0 with `referenceYear`, `sheetGroups`, `yearColumns`, and `assets` fields
 
 ### Eval Framework (2026-03-19)
 - `eval-framework/generate-control.mjs` — reads BASE_CASE from engine, generates test matrix

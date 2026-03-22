@@ -152,13 +152,58 @@ Read the Excel workbook and produce a `model-map.json` that describes the model 
 
 Before diving into detailed sheets, search for tabs named "Summary", "Cheat Sheet", "Overview", "Dashboard", or "Key Metrics". These often contain the base case inputs and outputs in a condensed format, saving significant analysis time. Extract base case values from these tabs first, then cross-reference with detail sheets only as needed.
 
+### Sheet Structure Fingerprinting
+
+For workbooks with many identically-structured sheets (e.g., per-asset P&Ls), use the fingerprinter to auto-detect row mappings instead of manually inspecting each sheet:
+
+```javascript
+import {
+  loadWorkbook, buildModelMap, fingerprintWorkbook,
+  detectYearRow, extractMultiYear, extractByYear,
+  detectEscalation, classifyAsset, matchLabel,
+} from './lib/excel-parser.mjs';
+
+const wb = loadWorkbook('/path/to/model.xlsx');
+
+// 1. Fingerprint all sheets — finds common row patterns across similar sheets
+const { sheetMaps, commonPattern, commonSheets, sheetGroups } = fingerprintWorkbook(wb);
+// commonPattern: { revenue: { row: 48, label: "Total Revenue" }, ebitda: { row: 67 }, ... }
+// commonSheets: ["Asset 1", "Asset 2", ..., "Asset 37"]
+
+// 2. Detect year columns on any sheet in the group
+const yearInfo = detectYearRow(wb, commonSheets[0]);
+// { yearRow: 39, columnMap: { E: 2023, F: 2023, G: 2024, H: 2025, I: 2026 }, years: [2023, 2024, ...] }
+
+// 3. Extract all fields for a specific reference year
+const data = extractByYear(wb, 'Asset 1', 2026, { fieldMap: commonPattern, yearInfo });
+// { fields: { revenue: { value: 1500000 }, ebitda: { value: 850000 } }, yearColumn: 'I' }
+
+// 4. Extract multi-year time series for a field
+const rentByYear = extractMultiYear(wb, 'Asset 1', commonPattern.rent.row, yearInfo.columnMap);
+// { 2023: 500000, 2024: 515000, 2025: 530450, 2026: 546364 }
+
+// 5. Detect escalation rates (catches rent escalation, revenue growth)
+const escalation = detectEscalation(rentByYear);
+// { rates: { "2023-2024": 0.03, "2024-2025": 0.03 }, avgRate: 0.03, isEscalating: true }
+
+// 6. Auto-classify asset type (leased vs managed)
+const classification = classifyAsset(data.fields);
+// { classification: 'leased', confidence: 0.85, signals: ['has positive rent → leased', ...] }
+```
+
+**Why this matters**: The hardest part of building engines from multi-asset models is figuring out which rows contain which data across dozens of identical sheets. The fingerprinter automates this by fuzzy-matching row labels to canonical financial terms, then confirming the pattern is consistent across sheets.
+
+### Reference Year Selection
+
+Always specify a reference year when extracting data. The default should be the first full stabilized projection year (typically current year + 1). This avoids pulling stale closing-date values that miss years of escalation.
+
+**Common pitfall**: Pulling rent values from the acquisition date column instead of the projection year column. A 3% annual escalation over 3-4 years means rents are 10-15% higher at the reference date. The `detectEscalation()` function helps flag fields where the starting value differs significantly from the projected value.
+
 ### Steps
 
 1. **Load the workbook** using the excel-parser library:
 
 ```javascript
-import { loadWorkbook, buildModelMap } from './lib/excel-parser.mjs';
-
 const wb = loadWorkbook('/path/to/model.xlsx');
 const modelMap = buildModelMap(wb, {
   inputSheets: ['Assumptions', 'Inputs'],   // Adjust to actual sheet names
@@ -166,27 +211,61 @@ const modelMap = buildModelMap(wb, {
 });
 ```
 
-2. **Review detected inputs and outputs.** The parser identifies:
+2. **Fingerprint the workbook** to find identical sheet structures:
+
+```javascript
+const { commonPattern, commonSheets, sheetGroups } = fingerprintWorkbook(wb);
+// If sheetGroups shows N sheets with the same pattern, these are per-asset sheets
+```
+
+3. **Review detected inputs and outputs.** The parser identifies:
    - **Input cells**: Numeric values with no formula that are referenced by formulas elsewhere
    - **Output cells**: Formula cells that are NOT referenced by other formulas (end of chain)
    - **Intermediates**: Formula cells that ARE referenced by other formulas
 
-3. **Detect financial patterns** — The parser looks for:
+4. **Detect financial patterns** — The parser looks for:
    - IRR/XIRR formulas
    - NPV/XNPV formulas (DCF)
    - Waterfall/distribution sheets
    - Sensitivity/scenario tables
    - Cash flow timelines
 
-4. **Produce `model-map.json`** with this structure:
+5. **Detect year columns and extract by reference year** — Don't default to the first data column:
+
+```javascript
+const yearInfo = detectYearRow(wb, commonSheets[0]);
+// Pick the first full stabilized projection year
+const referenceYear = Math.max(...yearInfo.years.filter(y => y <= new Date().getFullYear() + 1));
+```
+
+6. **Classify assets** if the model has mixed types (leased vs managed, operated vs third-party):
+
+```javascript
+for (const sheetName of commonSheets) {
+  const data = extractByYear(wb, sheetName, referenceYear, { fieldMap: commonPattern, yearInfo });
+  const type = classifyAsset(data.fields);
+  console.log(`${sheetName}: ${type.classification} (${type.confidence})`);
+}
+```
+
+7. **Produce `model-map.json`** with this structure:
 
 ```json
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "modelName": "Example Fund Model",
   "generatedAt": "2025-01-15T10:30:00Z",
   "excelFile": "model.xlsx",
+  "referenceYear": 2026,
   "sheets": ["Assumptions", "Cash Flows", "Waterfall", "Summary"],
+  "sheetGroups": [
+    {
+      "sheets": ["Asset 1", "Asset 2", "Asset 3"],
+      "pattern": { "revenue": { "row": 48 }, "ebitda": { "row": 67 } },
+      "count": 3
+    }
+  ],
+  "yearColumns": { "E": 2023, "F": 2024, "G": 2025, "H": 2026 },
   "inputs": [
     {
       "name": "Acquisition Price",
@@ -210,6 +289,14 @@ const modelMap = buildModelMap(wb, {
       "baseCase": 2.15
     }
   ],
+  "assets": [
+    {
+      "sheet": "Asset 1",
+      "classification": "leased",
+      "classificationConfidence": 0.85,
+      "fields": { "revenue": 1500000, "rent": 546364, "rentCover": 1.56 }
+    }
+  ],
   "intermediateCount": 234,
   "patterns": {
     "hasIRR": true,
@@ -220,7 +307,7 @@ const modelMap = buildModelMap(wb, {
 }
 ```
 
-5. **Ask the user to confirm/adjust the model map.** Show them:
+8. **Ask the user to confirm/adjust the model map.** Show them:
    - The detected inputs (name, base case value, inferred range)
    - The detected outputs (name, base case value)
    - Detected patterns
@@ -232,6 +319,18 @@ const modelMap = buildModelMap(wb, {
 - Add human-readable `format` hints: "currency", "percent", "multiple", "integer", "years"
 - Add `key` to outputs mapping to the engine return structure (e.g., "returns.grossMOIC")
 - The `range` for each input should be a reasonable sensitivity range (50%-200% of base case for most; tighter for percentages)
+
+### Cross-Sheet Validation
+
+After extracting data, auto-generate a comparator that reads back from the Excel and validates. This catches errors before they propagate into the engine:
+
+1. For each extracted field per asset sheet, read the cell value from Excel at the reference year column
+2. Compare against the value stored in the model map
+3. Use field-type-specific tolerances: tighter for inputs (rent: 0.1%), looser for calculated fields (IRR: 2%)
+4. Output a structured report: `{ totalChecks, passed, failed, warnings }`
+5. Any failure should block engine generation until resolved
+
+This should run as part of Phase 1, not as a separate step. The eval in Phase 3 tests the *engine*; cross-sheet validation tests the *extraction*.
 
 ## Phase 2 — Generate
 

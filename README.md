@@ -14,36 +14,7 @@ A Claude Code skill + reusable library set that takes a `.xlsx` financial model 
 
 ## Architecture
 
-```
-Excel File (.xlsx)
-       │
-       ▼
-┌─────────────────┐
-│  Phase 1: Parse │  excel-parser.mjs reads cells, detects inputs/outputs,
-│  & Analyze      │  identifies financial patterns (IRR, waterfall, DCF)
-└────────┬────────┘
-         │  model-map.json
-         ▼
-┌─────────────────┐
-│  Phase 2:       │  Translates Excel logic into JS using engine-template.js
-│  Generate       │  Auto-calibrates against Excel base case values
-│  Engine         │  Uses lib/irr.mjs + lib/waterfall.mjs
-└────────┬────────┘
-         │  engine.js
-         ▼
-┌─────────────────┐
-│  Phase 3:       │  Reads expected values from Excel, compares with engine
-│  Generate       │  Tests: base case accuracy, monotonicity, consistency
-│  Tests          │  Outputs eval-results.json
-└────────┬────────┘
-         │  tests/eval.mjs
-         ▼
-┌─────────────────┐
-│  Phase 4:       │  Copies dashboard template, wires up engine + model map
-│  Generate       │  Sliders, charts, heatmaps — no build step
-│  Dashboard      │  Open index.html in any browser
-└─────────────────┘
-```
+![excel-to-engine pipeline: 4 phases from Excel file through Parse & Analyze, Generate Engine, Generate Tests, to Generate Dashboard](docs/architecture.png)
 
 ## Prerequisites
 
@@ -171,17 +142,32 @@ const { factors, converged } = calibrate(
 );
 ```
 
-### `lib/excel-parser.mjs` — Excel Reader
+### `lib/excel-parser.mjs` — Excel Reader + Sheet Fingerprinting
 
-Reads cells, detects model structure, builds model maps.
+Reads cells, detects model structure, builds model maps. Includes automated sheet fingerprinting, fuzzy label matching, year detection, multi-year extraction, escalation detection, and asset classification.
 
 ```javascript
-import { loadWorkbook, readCell, detectInputCells, buildModelMap } from './lib/excel-parser.mjs';
+import {
+  loadWorkbook, readCell, detectInputCells, buildModelMap,
+  fingerprintWorkbook, detectYearRow, extractByYear,
+  extractMultiYear, detectEscalation, classifyAsset,
+} from './lib/excel-parser.mjs';
 
 const wb = loadWorkbook('model.xlsx');
-const cell = readCell(wb, 'Summary', 'B12');
-const inputs = detectInputCells(wb);
-const map = buildModelMap(wb);
+
+// Auto-detect row mappings across identically-structured sheets
+const { commonPattern, commonSheets } = fingerprintWorkbook(wb);
+
+// Detect year columns and extract data for a reference year
+const yearInfo = detectYearRow(wb, commonSheets[0]);
+const data = extractByYear(wb, commonSheets[0], 2026, { fieldMap: commonPattern, yearInfo });
+
+// Detect rent escalation rates
+const rentByYear = extractMultiYear(wb, commonSheets[0], commonPattern.rent.row, yearInfo.columnMap);
+const escalation = detectEscalation(rentByYear);
+
+// Auto-classify asset type
+const type = classifyAsset(data.fields);
 ```
 
 ## How Calibration Works

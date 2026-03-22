@@ -1,5 +1,38 @@
 # excel-to-engine — Changelog
 
+## 2026-03-21
+
+### Sheet Fingerprinting, Multi-Year Extraction & Build Log Improvements
+
+Incorporated learnings from the Chariot NCP build (37-asset UK car park model) into the core toolkit.
+
+**lib/excel-parser.mjs — New Features:**
+- `matchLabel()` — Fuzzy label matcher with 50+ financial term aliases mapping to canonical field names (revenue, EBITDA/EBITDAR/NOI, rent, IRR, MOIC, capex, cash flow, etc.)
+- `fingerprintSheet()` / `fingerprintWorkbook()` — Scans label columns across all sheets, matches to canonical fields, groups sheets by identical row patterns. Solves the #1 pain point: figuring out which rows contain which data across dozens of identical per-asset sheets
+- `detectYearRow()` — Auto-detects rows with sequential year values (2023, 2024, 2025...) and maps columns to calendar years
+- `extractMultiYear()` — Extracts a time series for any field across all year columns
+- `extractByYear()` — Extracts all fields for a specific reference year (combines fingerprint + year detection)
+- `detectEscalation()` — Computes year-over-year growth rates for any field, flags escalating values (catches rent escalation that caused 10-15% errors in the Chariot build)
+- `classifyAsset()` — Auto-classifies assets as leased/managed/mixed based on rent presence, coverage ratios, and label text signals
+
+**skill/SKILL.md — Phase 1 Improvements:**
+- Added Sheet Structure Fingerprinting section with full usage examples
+- Added Reference Year Selection guidance (default to first full stabilized projection year, not closing date)
+- Added Cross-Sheet Validation section (validate extraction before engine generation)
+- Added Asset Classification step for mixed-type portfolios
+- Updated model-map.json schema to v1.1.0 with `referenceYear`, `sheetGroups`, `yearColumns`, `assets` fields
+- Renumbered Phase 1 steps (1-8) to include new fingerprinting, year detection, and classification steps
+
+**README.md:**
+- Replaced ASCII architecture diagram with image (`docs/architecture.png`)
+- Updated excel-parser library docs to show new fingerprinting, year detection, and classification APIs
+
+**ROADMAP.md:**
+- Added Incremental Re-extraction to Near-Term (diff model versions, generate changes report)
+- Moved completed fingerprinting/classification work to Done section
+
+---
+
 ## 2026-03-19 (evening)
 
 ### Skill Improvements from Blind Testing Feedback

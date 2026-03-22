@@ -1,6 +1,6 @@
 # excel-to-engine — Plan
 
-## Status: Phase 1 Complete — Core Libraries + Templates Built
+## Status: Phase 1.5 — Core Libraries + Sheet Intelligence Built
 
 ## Objective
 
@@ -34,6 +34,15 @@ excel-to-engine/
 - [x] `templates/dashboard/` — 2-tab HTML dashboard (explorer + eval)
 - [x] `skill/SKILL.md` — Claude Code skill for 4-phase pipeline
 - [x] Project documentation (README, CLAUDE.md, PLAN, CHANGELOG, ROADMAP)
+
+### Phase 1.5 — Sheet Intelligence (DONE)
+- [x] Sheet fingerprinting — auto-detect row-to-field mappings with fuzzy label matching
+- [x] Year detection — auto-detect year rows and column-to-year mapping
+- [x] Multi-year extraction — extract time series per field across years
+- [x] Reference year extraction — extract all fields for a target projection year
+- [x] Escalation detection — compute year-over-year growth rates
+- [x] Asset classification — auto-classify leased/managed from metadata signals
+- [x] SKILL.md updated with fingerprinting workflow, cross-sheet validation, reference year guidance
 
 ### Phase 2 — Testing + Validation (Next)
 - [ ] Unit tests for lib/irr.mjs (known IRR cases)
