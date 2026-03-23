@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>excel-to-engine — Pipeline Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --blue: #3b82f6;
+    --purple: #a855f7;
+    --accent: #6366f1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+  }
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  header h1 { font-size: 15px; font-weight: 600; color: var(--text); letter-spacing: 0.5px; }
+  .badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 9999px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  .badge-idle    { background: #1e2433; color: var(--muted); }
+  .badge-running { background: #1e3a5f; color: var(--blue); }
+  .badge-done    { background: #14291f; color: var(--green); }
+  .badge-error   { background: #2d1414; color: var(--red); }
+
+  main { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: auto auto auto; gap: 16px; padding: 16px; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .panel-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .panel-body { padding: 16px; }
+
+  /* Upload zone */
+  .upload-zone {
+    grid-column: 1 / -1;
+    border: 2px dashed var(--border);
+    border-radius: 8px;
+    padding: 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  .upload-zone:hover, .upload-zone.drag-over {
+    border-color: var(--accent);
+    background: rgba(99, 102, 241, 0.05);
+  }
+  .upload-zone .hint { color: var(--muted); margin-top: 8px; font-size: 12px; }
+  .upload-zone input { display: none; }
+  .upload-zone .upload-icon { font-size: 32px; margin-bottom: 8px; }
+  .upload-zone .file-label { color: var(--text); font-weight: 600; }
+  .upload-zone.has-file { border-style: solid; border-color: var(--accent); }
+
+  /* Phase pipeline */
+  .phases { display: flex; gap: 8px; align-items: center; }
+  .phase-item {
+    flex: 1;
+    text-align: center;
+    padding: 10px 8px;
+    border-radius: 6px;
+    background: #1e2433;
+    border: 1px solid var(--border);
+    transition: background 0.3s, border-color 0.3s;
+  }
+  .phase-item.running { background: #1e3a5f; border-color: var(--blue); animation: pulse 1.5s infinite; }
+  .phase-item.done { background: #14291f; border-color: var(--green); }
+  .phase-item.error { background: #2d1414; border-color: var(--red); }
+  .phase-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .phase-status { font-size: 11px; margin-top: 4px; font-weight: 600; }
+  .phase-timing { font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .phase-arrow { color: var(--border); font-size: 16px; flex-shrink: 0; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+  /* Stats bar */
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .stat-card { background: #1e2433; border-radius: 6px; padding: 12px; }
+  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+  .stat-value.green { color: var(--green); }
+  .stat-value.blue { color: var(--blue); }
+  .stat-value.yellow { color: var(--yellow); }
+  .stat-value.purple { color: var(--purple); }
+
+  /* Accuracy chart */
+  .chart-container { height: 180px; position: relative; }
+
+  /* Console log */
+  .log-panel { grid-column: 1 / -1; }
+  .log-output {
+    height: 200px;
+    overflow-y: auto;
+    background: #0a0c12;
+    border-radius: 6px;
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .log-line { color: var(--text); white-space: pre-wrap; word-break: break-all; }
+  .log-line.phase { color: var(--blue); }
+  .log-line.progress { color: var(--purple); }
+  .log-line.warn { color: var(--yellow); }
+  .log-line.error { color: var(--red); }
+  .log-line.success { color: var(--green); }
+
+  /* Stuck outputs */
+  .stuck-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .stuck-table th { color: var(--muted); text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stuck-table td { padding: 6px 8px; border-bottom: 1px solid #1e2433; }
+  .stuck-table tr:last-child td { border-bottom: none; }
+  .error-pct { font-weight: 600; }
+  .error-pct.high { color: var(--red); }
+  .error-pct.med { color: var(--yellow); }
+  .error-pct.low { color: var(--green); }
+
+  /* Circular clusters */
+  .cluster-badge {
+    display: inline-block;
+    background: rgba(168, 85, 247, 0.15);
+    border: 1px solid rgba(168, 85, 247, 0.3);
+    border-radius: 4px;
+    padding: 3px 8px;
+    margin: 3px 3px 3px 0;
+    font-size: 11px;
+    color: var(--purple);
+  }
+
+  /* Accuracy meter */
+  .accuracy-meter {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .meter-bar-bg { flex: 1; height: 8px; background: #1e2433; border-radius: 4px; overflow: hidden; }
+  .meter-bar { height: 100%; border-radius: 4px; transition: width 0.5s ease; background: var(--green); }
+  .meter-pct { font-size: 14px; font-weight: 700; min-width: 48px; text-align: right; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ excel-to-engine</h1>
+  <span class="badge badge-idle" id="status-badge">IDLE</span>
+  <span id="source-label" style="color:var(--muted);margin-left:8px;"></span>
+</header>
+
+<main>
+
+  <!-- Upload zone -->
+  <div class="upload-zone" id="drop-zone">
+    <label for="file-input" style="cursor:pointer;display:block;">
+      <div class="upload-icon">📊</div>
+      <div class="file-label" id="upload-label">Drop an .xlsx file here or click to upload</div>
+      <div class="hint">Pipeline will start automatically</div>
+    </label>
+    <input type="file" id="file-input" accept=".xlsx,.xls">
+  </div>
+
+  <!-- Phase pipeline -->
+  <div class="panel" style="grid-column: 1 / -1;">
+    <div class="panel-header">Pipeline phases</div>
+    <div class="panel-body">
+      <div class="phases">
+        <div class="phase-item" id="phase-parse">
+          <div class="phase-label">Parse</div>
+          <div class="phase-status" id="phase-parse-status">—</div>
+          <div class="phase-timing" id="phase-parse-timing"></div>
+        </div>
+        <div class="phase-arrow">→</div>
+        <div class="phase-item" id="phase-validate">
+          <div class="phase-label">Validate</div>
+          <div class="phase-status" id="phase-validate-status">—</div>
+          <div class="phase-timing" id="phase-validate-timing"></div>
+        </div>
+        <div class="phase-arrow">→</div>
+        <div class="phase-item" id="phase-eval">
+          <div class="phase-label">Eval Loop</div>
+          <div class="phase-status" id="phase-eval-status">—</div>
+          <div class="phase-timing" id="phase-eval-timing"></div>
+        </div>
+        <div class="phase-arrow">→</div>
+        <div class="phase-item" id="phase-output">
+          <div class="phase-label">Output</div>
+          <div class="phase-status" id="phase-output-status">—</div>
+          <div class="phase-timing" id="phase-output-timing"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  <div class="panel">
+    <div class="panel-header">Model stats</div>
+    <div class="panel-body">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Sheets</div>
+          <div class="stat-value blue" id="stat-sheets">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Cells</div>
+          <div class="stat-value blue" id="stat-cells">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Formulas</div>
+          <div class="stat-value purple" id="stat-formulas">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Circular</div>
+          <div class="stat-value yellow" id="stat-cycles">—</div>
+        </div>
+      </div>
+      <div style="margin-top:16px;">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Circular clusters</div>
+        <div id="cluster-list" style="color:var(--muted);font-size:12px;">None detected</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Accuracy -->
+  <div class="panel">
+    <div class="panel-header">
+      Eval accuracy
+      <span id="iteration-label" style="font-weight:normal;text-transform:none;letter-spacing:0;"></span>
+    </div>
+    <div class="panel-body">
+      <div class="accuracy-meter">
+        <div class="meter-bar-bg"><div class="meter-bar" id="accuracy-bar" style="width:0%"></div></div>
+        <div class="meter-pct" id="accuracy-pct">—</div>
+      </div>
+      <div class="chart-container" style="margin-top:16px;">
+        <canvas id="accuracy-chart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stuck outputs -->
+  <div class="panel" style="grid-column: 1 / -1;">
+    <div class="panel-header">Stuck outputs (need manual fix)</div>
+    <div class="panel-body">
+      <div id="stuck-panel" style="color:var(--muted);font-size:12px;">No stuck outputs — run a pipeline to see results.</div>
+    </div>
+  </div>
+
+  <!-- Console log -->
+  <div class="panel log-panel">
+    <div class="panel-header">
+      Console
+      <button onclick="clearLog()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:11px;">clear</button>
+    </div>
+    <div class="panel-body" style="padding:0;">
+      <div class="log-output" id="log-output"></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+// ── WebSocket connection ──────────────────────────────────────────────────────
+let ws;
+let chartInstance;
+const iterScores = [];
+let reconnectTimer;
+
+function connect() {
+  ws = new WebSocket(`ws://${location.host}`);
+
+  ws.onopen = () => {
+    appendLog('Connected to monitor server', 'success');
+    clearTimeout(reconnectTimer);
+  };
+
+  ws.onclose = () => {
+    appendLog('Disconnected — reconnecting...', 'warn');
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+
+  ws.onmessage = (e) => {
+    try {
+      const msg = JSON.parse(e.data);
+      handleEvent(msg);
+    } catch {}
+  };
+}
+
+// ── Event handlers ────────────────────────────────────────────────────────────
+function handleEvent({ type, payload }) {
+  switch (type) {
+    case 'connected':
+      if (payload?.running) setStatus('running');
+      break;
+
+    case 'pipeline_start':
+      resetUI();
+      setStatus('running');
+      document.getElementById('source-label').textContent = payload.file?.split('/').pop() || '';
+      iterScores.length = 0;
+      updateChart();
+      break;
+
+    case 'phase':
+      updatePhase(payload.name, payload.status, payload.timing);
+      break;
+
+    case 'progress':
+      updateAccuracy(payload.score, payload.iteration);
+      iterScores.push({ x: payload.iteration, y: +(payload.score * 100).toFixed(1) });
+      updateChart();
+      break;
+
+    case 'log': {
+      const lower = (payload || '').toLowerCase();
+      const cls = lower.includes('error') ? 'error'
+        : lower.includes('warn') ? 'warn'
+        : lower.includes('converged') || lower.includes('100%') ? 'success'
+        : '';
+      appendLog(payload, cls);
+      // Parse stats from log lines
+      const statsMatch = payload.match(/Parsed (\d+) sheets, (\d+) cells, (\d+) formula/);
+      if (statsMatch) {
+        document.getElementById('stat-sheets').textContent = statsMatch[1];
+        document.getElementById('stat-cells').textContent = statsMatch[2];
+        document.getElementById('stat-formulas').textContent = statsMatch[3];
+      }
+      const cycleMatch = payload.match(/(\d+) cycles/);
+      if (cycleMatch) {
+        document.getElementById('stat-cycles').textContent = cycleMatch[1];
+      }
+      break;
+    }
+
+    case 'diagnostics':
+      applyDiagnostics(payload);
+      break;
+
+    case 'complete':
+      applyDiagnostics(payload);
+      setStatus(payload.finalScore >= 0.95 ? 'done' : 'warn');
+      break;
+
+    case 'pipeline_end':
+      if (payload.code === 0) {
+        setStatus('done');
+      } else {
+        setStatus('error');
+        appendLog(`Pipeline exited with code ${payload.code}`, 'error');
+      }
+      break;
+  }
+}
+
+// ── UI helpers ────────────────────────────────────────────────────────────────
+function resetUI() {
+  ['parse', 'validate', 'eval', 'output'].forEach(p => {
+    const el = document.getElementById(`phase-${p}`);
+    el.className = 'phase-item';
+    document.getElementById(`phase-${p}-status`).textContent = '—';
+    document.getElementById(`phase-${p}-timing`).textContent = '';
+  });
+  document.getElementById('stat-sheets').textContent = '—';
+  document.getElementById('stat-cells').textContent = '—';
+  document.getElementById('stat-formulas').textContent = '—';
+  document.getElementById('stat-cycles').textContent = '—';
+  document.getElementById('cluster-list').innerHTML = 'None detected';
+  document.getElementById('stuck-panel').innerHTML = '<span style="color:var(--muted)">Running...</span>';
+  updateAccuracy(null);
+}
+
+function setStatus(state) {
+  const badge = document.getElementById('status-badge');
+  badge.className = `badge badge-${state === 'done' ? 'done' : state === 'running' ? 'running' : state === 'warn' ? '' : state === 'error' ? 'error' : 'idle'}`;
+  badge.textContent = { running: 'RUNNING', done: 'COMPLETE', error: 'ERROR', warn: 'PARTIAL', idle: 'IDLE' }[state] || state.toUpperCase();
+  if (state === 'warn') { badge.style.background = '#2d2200'; badge.style.color = 'var(--yellow)'; }
+}
+
+function updatePhase(name, status, timing) {
+  const el = document.getElementById(`phase-${name}`);
+  if (!el) return;
+  el.className = `phase-item ${status}`;
+  const statusEl = document.getElementById(`phase-${name}-status`);
+  statusEl.textContent = { running: '⟳ running', done: '✓ done', error: '✗ error' }[status] || status;
+  statusEl.style.color = { running: 'var(--blue)', done: 'var(--green)', error: 'var(--red)' }[status] || '';
+  if (timing) {
+    document.getElementById(`phase-${name}-timing`).textContent = `${timing}ms`;
+  }
+}
+
+function updateAccuracy(score, iteration) {
+  const bar = document.getElementById('accuracy-bar');
+  const pct = document.getElementById('accuracy-pct');
+  const iterLabel = document.getElementById('iteration-label');
+  if (score === null || score === undefined) {
+    bar.style.width = '0%';
+    pct.textContent = '—';
+    bar.style.background = 'var(--muted)';
+    if (iterLabel) iterLabel.textContent = '';
+    return;
+  }
+  const p = (score * 100).toFixed(1);
+  bar.style.width = `${p}%`;
+  pct.textContent = `${p}%`;
+  bar.style.background = score >= 0.95 ? 'var(--green)' : score >= 0.7 ? 'var(--yellow)' : 'var(--red)';
+  if (iterLabel && iteration !== undefined) iterLabel.textContent = `iter ${iteration}`;
+}
+
+function applyDiagnostics(diag) {
+  if (!diag) return;
+
+  // Final score
+  if (diag.finalScore !== null && diag.finalScore !== undefined) {
+    updateAccuracy(diag.finalScore, diag.iterations);
+  }
+
+  // Circular clusters
+  if (diag.convergenceClusters?.length > 0) {
+    document.getElementById('stat-cycles').textContent = diag.convergenceClusters.length;
+    const html = diag.convergenceClusters.map(c =>
+      `<div class="cluster-badge" title="Cluster ${c.id}">${c.cells.join(' ↔ ')}</div>`
+    ).join('');
+    document.getElementById('cluster-list').innerHTML = html;
+  }
+
+  // Stuck outputs
+  if (diag.stuckOutputs?.length > 0) {
+    const rows = diag.stuckOutputs.slice(0, 10).map(s => {
+      const ep = (s.error * 100).toFixed(1);
+      const cls = s.error > 0.5 ? 'high' : s.error > 0.1 ? 'med' : 'low';
+      return `<tr>
+        <td>${s.key}</td>
+        <td class="error-pct ${cls}">${ep}%</td>
+        <td>${fmt(s.excelValue)}</td>
+        <td>${fmt(s.engineValue)}</td>
+        <td style="color:var(--muted)">${s.suggestion || ''}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('stuck-panel').innerHTML = `
+      <table class="stuck-table">
+        <thead><tr><th>Cell</th><th>Error</th><th>Excel</th><th>Engine</th><th>Diagnosis</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } else if (diag.finalScore !== null && diag.finalScore !== undefined) {
+    const msg = diag.finalScore >= 0.95
+      ? '✓ All outputs within tolerance — no manual fixes needed.'
+      : `${Math.round((1 - diag.finalScore) * (diag.iterations || 0))} outputs still outside tolerance.`;
+    document.getElementById('stuck-panel').innerHTML = `<span style="color:${diag.finalScore >= 0.95 ? 'var(--green)' : 'var(--yellow)'}">${msg}</span>`;
+  }
+}
+
+function fmt(n) {
+  if (n === null || n === undefined) return '—';
+  if (typeof n === 'string') return n;
+  return Math.abs(n) > 999 ? n.toLocaleString(undefined, { maximumFractionDigits: 0 }) : n.toFixed(4);
+}
+
+// ── Chart ─────────────────────────────────────────────────────────────────────
+function updateChart() {
+  const ctx = document.getElementById('accuracy-chart');
+  if (!ctx) return;
+
+  if (chartInstance) {
+    chartInstance.data.datasets[0].data = iterScores.map(p => p.y);
+    chartInstance.data.labels = iterScores.map(p => `Iter ${p.x}`);
+    chartInstance.update('none');
+    return;
+  }
+
+  chartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: iterScores.map(p => `Iter ${p.x}`),
+      datasets: [{
+        label: 'Accuracy %',
+        data: iterScores.map(p => p.y),
+        borderColor: '#6366f1',
+        backgroundColor: 'rgba(99,102,241,0.1)',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 4,
+        pointBackgroundColor: '#6366f1',
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      scales: {
+        y: { min: 0, max: 100, ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e2433' } },
+        x: { ticks: { color: '#64748b', font: { size: 10 } }, grid: { color: '#1e2433' } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: ctx => `${ctx.raw}%` } },
+      },
+    },
+  });
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────────
+function appendLog(msg, cls = '') {
+  const log = document.getElementById('log-output');
+  const line = document.createElement('div');
+  line.className = `log-line ${cls}`;
+  line.textContent = msg;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+  // Keep last 500 lines
+  while (log.children.length > 500) log.removeChild(log.firstChild);
+}
+
+function clearLog() {
+  document.getElementById('log-output').innerHTML = '';
+}
+
+// ── File upload ───────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const fileInput = document.getElementById('file-input');
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+});
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const file = e.dataTransfer?.files?.[0];
+  if (file && file.name.match(/\.(xlsx?|ods)$/i)) uploadFile(file);
+});
+
+function uploadFile(file) {
+  document.getElementById('upload-label').textContent = `📎 ${file.name}`;
+  dropZone.classList.add('has-file');
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  fetch('/run', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) appendLog(`Upload error: ${data.error}`, 'error');
+    })
+    .catch(err => appendLog(`Upload failed: ${err.message}`, 'error'));
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+connect();
+updateChart();
+</script>
+</body>
+</html>

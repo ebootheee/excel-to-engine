@@ -4,7 +4,7 @@
 # Stage 2: Node.js runtime with the compiled binary + JS pipeline
 
 # ─── Stage 1: Rust build ───────────────────────────────────────────────────
-FROM rust:1.76-slim-bookworm AS rust-builder
+FROM rust:1.82-slim-bookworm AS rust-builder
 
 WORKDIR /build/rust-parser
 

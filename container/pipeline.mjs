@@ -17,14 +17,13 @@
  *   WS_PORT          — WebSocket port for monitor dashboard (default: 3001, 0 = disabled)
  */
 
-import { execFile, spawn } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { readFile, writeFile, mkdir, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import { join, dirname, basename } from 'path';
+import { join, resolve, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
 
 const execFileAsync = promisify(execFile);
 const __dir = dirname(fileURLToPath(import.meta.url));
@@ -34,6 +33,11 @@ const RUST_PARSER = process.env.RUST_PARSER_BIN || 'rust-parser';
 const MAX_ITERATIONS = parseInt(process.env.MAX_ITERATIONS || '20');
 const TARGET_ACCURACY = parseFloat(process.env.TARGET_ACCURACY || '0.95');
 const WS_PORT = parseInt(process.env.WS_PORT || '3001');
+
+// Lib path: absolute path to the js lib/ directory (for imports in raw-engine.js)
+// Resolved relative to this file: container/ → ../lib/
+const LIB_PATH = process.env.LIB_PATH
+  || resolve(dirname(fileURLToPath(import.meta.url)), '../lib') + '/';
 
 // ── WebSocket event bus ──────────────────────────────────────────────────────
 let wss = null;
@@ -100,6 +104,18 @@ async function main() {
     console.error(`Parse failed: ${err.message}`);
     if (err.stderr) console.error(err.stderr);
     process.exit(1);
+  }
+
+  // Patch lib import paths in raw-engine.js to use absolute paths
+  const rawEnginePath = join(outputDir, 'raw-engine.js');
+  if (existsSync(rawEnginePath)) {
+    let engineCode = await readFile(rawEnginePath, 'utf8');
+    // Replace any relative lib path with the absolute one
+    engineCode = engineCode.replace(
+      /from ['"]([^'"]*\/)?lib\//g,
+      `from '${LIB_PATH}`
+    );
+    await writeFile(rawEnginePath, engineCode);
   }
 
   const parseTiming = Date.now() - t0;
@@ -346,6 +362,15 @@ function guessDiagnosis(failure) {
 
 // ── WebSocket monitor server ───────────────────────────────────────────────
 async function startMonitorServer() {
+  // Dynamically import ws so the pipeline works without it installed
+  let WebSocketServer;
+  try {
+    ({ WebSocketServer } = await import('ws'));
+  } catch {
+    log(`[warn] ws package not available — monitor disabled`);
+    return;
+  }
+
   const server = createServer();
   wss = new WebSocketServer({ server });
 
@@ -358,7 +383,10 @@ async function startMonitorServer() {
       log(`Monitor WebSocket listening on ws://localhost:${WS_PORT}`);
       resolve();
     });
-    server.on('error', reject);
+    server.on('error', (err) => {
+      log(`[warn] Could not start monitor WS server: ${err.message}`);
+      resolve(); // non-fatal
+    });
   });
 }
 

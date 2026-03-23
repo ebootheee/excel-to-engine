@@ -1,113 +1,164 @@
 /**
- * Create a synthetic test workbook for rust-parser end-to-end testing.
+ * Synthetic PE financial model workbook for rust-parser end-to-end testing.
  *
- * The workbook has two sheets:
- *   - Inputs: raw numeric inputs (revenue, costs, rate, etc.)
- *   - Model:  formulas referencing Inputs and each other, including:
- *             - Simple arithmetic
- *             - SUM, IF, MIN, MAX
- *             - Cross-sheet references
- *             - A circular reference pair (interest ↔ debtBalance)
+ * Three sheets:
+ *   Assumptions  — Col A: label, Col B: value (raw inputs)
+ *   Cashflows    — Col A: label, Col B: formula value
+ *   Summary      — Col A: label, Col B: formula value
  *
- * Run: node create-test-workbook.mjs
- * Output: test-model.xlsx
+ * Circular reference in Cashflows:
+ *   B6 = B9 * Assumptions!B5          (Interest = DebtBalance * Rate)
+ *   B7 = B5 - B6                      (CashFlow = EBITDA - Interest)
+ *   B9 = B8 - B7 * Assumptions!B9    (DebtBalance = InitialDebt - CashFlow * RepayRate)
+ *
+ * All formula cells include pre-computed values (v:) so calamine
+ * has ground truth for eval accuracy testing.
  */
 
 import XLSX from 'xlsx';
-import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { writeFileSync } from 'fs';
+import { fileURLToPath } from 'url';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 
-// ── Inputs sheet ──────────────────────────────────────────────────────────────
-const inputsData = [
-  ['Key',           'Value'],
-  ['Revenue',       1000000],
-  ['COGS',          400000],
-  ['OpEx',          150000],
-  ['InterestRate',  0.06],
-  ['InitialDebt',   500000],
-  ['TaxRate',       0.25],
-  ['ExitMultiple',  12],
-  ['EBITDA',        '',     '=B3-B4-B5'],   // formula: Revenue - COGS - OpEx
-];
+// ── Solve circular analytically ───────────────────────────────────────────────
+// B6 = B9 * r,  B7 = EBITDA - B6,  B9 = D0 - B7 * rp
+// B9 = D0 - (EBITDA - B9*r) * rp = D0 - EBITDA*rp + B9*r*rp
+// B9*(1 - r*rp) = D0 - EBITDA*rp
+const R = 0.06;          // InterestRate
+const D0 = 500000;       // InitialDebt
+const RP = 0.2;          // RepayRate
+const REV = 1000000;     // Revenue
+const COGS = 400000;
+const OPEX = 150000;
+const TAX_RATE = 0.25;
+const EXIT_MULT = 12;
 
-// ── Model sheet ───────────────────────────────────────────────────────────────
-// Uses cross-sheet refs to Inputs!Bx
-// Also has a circular: interest = debtBalance * rate;  debtBalance = InitialDebt - cashFlow * 0.2
-const modelData = [
-  ['Metric',              'Value',         'Notes'],
-  ['Revenue',             '',              '=Inputs!B2'],
-  ['COGS',                '',              '=Inputs!B3'],
-  ['OpEx',                '',              '=Inputs!B4'],
-  ['GrossProfit',         '',              '=B2-B3'],       // Revenue - COGS
-  ['EBITDA',              '',              '=B5-B4'],       // GrossProfit - OpEx  (simplified)
-  ['InterestRate',        '',              '=Inputs!B5'],
-  ['InitialDebt',         '',              '=Inputs!B6'],
-  // Circular: Interest (B9) <-> DebtBalance (B11)
-  // B9  = B11 * B7   (Interest = DebtBalance * Rate)
-  // B11 = B8 - B10*0.2  (DebtBalance = InitialDebt - CashFlow * repayRate)
-  // B10 = B6 - B9    (CashFlow = EBITDA - Interest)
-  // This creates the cycle: B9 -> B11 -> B10 -> B9
-  ['Interest',            '',              '=B11*B7'],      // Interest = DebtBalance * Rate
-  ['CashFlow',            '',              '=B6-B9'],       // CashFlow = EBITDA - Interest
-  ['DebtBalance',         '',              '=B8-B10*0.2'],  // DebtBalance = InitialDebt - CashFlow * repayRate
-  // More formulas
-  ['TaxRate',             '',              '=Inputs!B7'],
-  ['EBT',                 '',              '=B6-B9'],       // EBITDA - Interest
-  ['Tax',                 '',              '=MAX(0,B13*B12)'],
-  ['NetIncome',           '',              '=B13-B14'],
-  ['ExitMultiple',        '',              '=Inputs!B8'],
-  ['ExitValue',           '',              '=B6*B16'],      // EBITDA * ExitMultiple
-  ['ReturnOnEquity',      '',              '=IF(B8>0,(B17-B8)/B8,0)'],  // (ExitValue - InitialDebt) / InitialDebt
-  ['IRRProxy',            '',              '=SQRT(MAX(0,B18))'],         // Synthetic — not real IRR
-  ['SumCheck',            '',              '=SUM(B2:B6)'],
-  ['MinValue',            '',              '=MIN(B2,B3,B4)'],
-  ['MaxValue',            '',              '=MAX(B2,B3,B4)'],
-];
+const EBITDA = REV - COGS - OPEX;                    // 450000
+const B9 = (D0 - EBITDA * RP) / (1 - R * RP);       // DebtBalance
+const B6 = B9 * R;                                    // Interest
+const B7 = EBITDA - B6;                               // CashFlow
+const B11 = EBITDA - B6;                              // EBT
+const B12 = Math.max(0, B11 * TAX_RATE);             // Tax
+const B13 = B11 - B12;                               // NetIncome
+const B15 = EBITDA * EXIT_MULT;                       // ExitValue
+const B16 = D0 > 0 ? (B15 - D0) / D0 : 0;           // ROE
 
-function createWorkbook() {
-  const wb = XLSX.utils.book_new();
+// ── fv helper ─────────────────────────────────────────────────────────────────
+const fv = (formula, value) => ({ f: formula, v: value });
 
-  // Inputs sheet: plain values in column A (key) and B (value),
-  // but for EBITDA row we want a formula in C
-  // XLSX.utils.aoa_to_sheet handles formulas via {f: ...} cells
-  const inputsAoa = inputsData.map(row => row.map((cell, ci) => {
-    if (ci === 2 && typeof cell === 'string' && cell.startsWith('=')) {
-      return { f: cell.slice(1) };
-    }
-    return cell;
-  }));
-  const wsInputs = XLSX.utils.aoa_to_sheet(inputsAoa);
-  XLSX.utils.book_append_sheet(wb, wsInputs, 'Inputs');
-
-  // Model sheet: column C holds formulas, column B is the computed value slot
-  // We'll put formulas in column B directly
-  const modelAoa = modelData.map(row => row.map((cell, ci) => {
-    if (ci === 2 && typeof cell === 'string' && cell.startsWith('=')) {
-      // This is the formula — put it in col B
-      return { f: cell.slice(1) };
-    }
-    return cell;
-  }));
-
-  // Remap: col C formula → col B formula (since col B is where calamine reads the result)
-  // Actually let's just build a clean sheet with formula in col B
-  const cleanModel = modelData.map(([label, _placeholder, formula]) => {
-    if (formula && formula.startsWith('=')) {
-      return [label, { f: formula.slice(1) }];
-    }
-    return [label, _placeholder ?? ''];
+// ── Assumptions sheet ─────────────────────────────────────────────────────────
+function buildAssumptionsSheet() {
+  const ws = {};
+  const data = [
+    ['Parameter',    'Value'],
+    ['Revenue',      REV],
+    ['COGS',         COGS],
+    ['OpEx',         OPEX],
+    ['InterestRate', R],
+    ['InitialDebt',  D0],
+    ['TaxRate',      TAX_RATE],
+    ['ExitMultiple', EXIT_MULT],
+    ['RepayRate',    RP],
+    ['YearsToExit',  5],
+  ];
+  data.forEach((row, ri) => {
+    row.forEach((val, ci) => {
+      ws[`${String.fromCharCode(65 + ci)}${ri + 1}`] = { v: val };
+    });
   });
-
-  const wsModel = XLSX.utils.aoa_to_sheet(cleanModel);
-  XLSX.utils.book_append_sheet(wb, wsModel, 'Model');
-
-  const outPath = join(__dir, 'test-model.xlsx');
-  XLSX.writeFile(wb, outPath);
-  console.log(`Written: ${outPath}`);
-  return outPath;
+  ws['!ref'] = `A1:B${data.length}`;
+  return ws;
 }
 
-createWorkbook();
+// ── Cashflows sheet ───────────────────────────────────────────────────────────
+// All formula cells are in column B (rows 2-17).
+// Formulas reference other B cells or Assumptions!B cells.
+function buildCashflowsSheet() {
+  const rows = [
+    // [label,  { f: formula, v: computedValue }]
+    ['Metric',       'Value'],
+    ['Revenue',      fv('Assumptions!B2',          REV)],
+    ['COGS',         fv('Assumptions!B3',          COGS)],
+    ['OpEx',         fv('Assumptions!B4',          OPEX)],
+    ['EBITDA',       fv('B2-B3-B4',               EBITDA)],
+    ['Interest',     fv('B9*Assumptions!B5',       B6)],   // ← depends on B9 (circular)
+    ['CashFlow',     fv('B5-B6',                  B7)],    // ← depends on B6 (circular)
+    ['InitialDebt',  fv('Assumptions!B6',          D0)],
+    ['DebtBalance',  fv('B8-B7*Assumptions!B9',    B9)],   // ← depends on B7 (circular)
+    ['TaxRate',      fv('Assumptions!B7',          TAX_RATE)],
+    ['EBT',          fv('B5-B6',                  B11)],
+    ['Tax',          fv('MAX(0,B11*B10)',          B12)],
+    ['NetIncome',    fv('B11-B12',                B13)],
+    ['ExitMultiple', fv('Assumptions!B8',          EXIT_MULT)],
+    ['ExitValue',    fv('B5*B14',                 B15)],
+    ['ROE',          fv('IF(B8>0,(B15-B8)/B8,0)', B16)],
+    ['SqrtROE',      fv('SQRT(MAX(0,B16))',        Math.sqrt(Math.max(0, B16)))],
+  ];
+
+  const ws = {};
+  rows.forEach((row, ri) => {
+    row.forEach((cell, ci) => {
+      const addr = `${String.fromCharCode(65 + ci)}${ri + 1}`;
+      if (typeof cell === 'object' && cell !== null && 'f' in cell) {
+        ws[addr] = cell;
+      } else {
+        ws[addr] = { v: cell };
+      }
+    });
+  });
+  ws['!ref'] = `A1:B${rows.length}`;
+  return ws;
+}
+
+// ── Summary sheet ─────────────────────────────────────────────────────────────
+function buildSummarySheet() {
+  const rows = [
+    ['KPI',               'Value'],
+    ['Revenue',           fv('Cashflows!B2',          REV)],
+    ['EBITDA',            fv('Cashflows!B5',          EBITDA)],
+    ['CashFlowPostDebt',  fv('Cashflows!B7',          B7)],
+    ['ExitValue',         fv('Cashflows!B15',         B15)],
+    ['ROE',               fv('Cashflows!B16',         B16)],
+    ['MinKPI',            fv('MIN(Cashflows!B2,Cashflows!B5,Cashflows!B13)', Math.min(REV, EBITDA, B13))],
+    ['MaxKPI',            fv('MAX(Cashflows!B2,Cashflows!B5,Cashflows!B13)', Math.max(REV, EBITDA, B13))],
+    ['SumKey',            fv('SUM(Cashflows!B2,Cashflows!B5,Cashflows!B7)', REV + EBITDA + B7)],
+    ['RatingText',        fv('IF(Cashflows!B16>1,"Strong",IF(Cashflows!B16>0,"Moderate","Weak"))', B16 > 1 ? 'Strong' : B16 > 0 ? 'Moderate' : 'Weak')],
+    ['NetMargin',         fv('IF(Cashflows!B5>0,Cashflows!B13/Cashflows!B5,0)', EBITDA > 0 ? B13 / EBITDA : 0)],
+    ['LeverageRatio',     fv('IF(Cashflows!B8>0,Cashflows!B9/Cashflows!B8,0)', D0 > 0 ? B9 / D0 : 0)],
+  ];
+
+  const ws = {};
+  rows.forEach((row, ri) => {
+    row.forEach((cell, ci) => {
+      const addr = `${String.fromCharCode(65 + ci)}${ri + 1}`;
+      if (typeof cell === 'object' && cell !== null && 'f' in cell) {
+        ws[addr] = cell;
+      } else {
+        ws[addr] = { v: cell };
+      }
+    });
+  });
+  ws['!ref'] = `A1:B${rows.length}`;
+  return ws;
+}
+
+// ── Write workbook ─────────────────────────────────────────────────────────────
+const wb = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(wb, buildAssumptionsSheet(), 'Assumptions');
+XLSX.utils.book_append_sheet(wb, buildCashflowsSheet(), 'Cashflows');
+XLSX.utils.book_append_sheet(wb, buildSummarySheet(), 'Summary');
+
+const outPath = join(__dir, 'test-model.xlsx');
+XLSX.writeFile(wb, outPath);
+
+console.log(`Written: ${outPath}`);
+console.log(`\nExpected ground truth:`);
+console.log(`  Cashflows!B5  EBITDA        = ${EBITDA.toLocaleString()}`);
+console.log(`  Cashflows!B6  Interest      = ${B6.toFixed(2)}`);
+console.log(`  Cashflows!B7  CashFlow      = ${B7.toFixed(2)}`);
+console.log(`  Cashflows!B9  DebtBalance   = ${B9.toFixed(2)}`);
+console.log(`  Cashflows!B13 NetIncome     = ${B13.toFixed(2)}`);
+console.log(`  Cashflows!B15 ExitValue     = ${B15.toLocaleString()}`);
+console.log(`  Cashflows!B16 ROE           = ${B16.toFixed(4)}`);
+console.log(`  Summary!B10   RatingText    = ${B16 > 1 ? 'Strong' : 'Moderate'}`);

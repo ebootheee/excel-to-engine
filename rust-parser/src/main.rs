@@ -130,8 +130,35 @@ fn main() {
     );
 
     // Phase 5: Generate raw-engine.js
+    // Lib path: prefer env var, then sibling lib/ relative to binary, then relative ../lib/
+    let lib_path = std::env::var("LIB_PATH").unwrap_or_else(|_| {
+        // Try to find lib/ relative to the binary's location
+        let exe = std::env::current_exe().unwrap_or_default();
+        let candidate = exe.parent().unwrap_or(std::path::Path::new("."))
+            .join("lib/");
+        if candidate.exists() {
+            format!("{}/", candidate.display())
+        } else {
+            // Fallback: absolute path from output_dir up to project lib/
+            // (works when output is inside the project tree)
+            let abs_output = output_dir.canonicalize()
+                .unwrap_or_else(|_| output_dir.to_path_buf());
+            // Walk up until we find a lib/ dir
+            let mut search = abs_output.as_path();
+            loop {
+                let candidate = search.join("lib/irr.mjs");
+                if candidate.exists() {
+                    break format!("{}/", search.join("lib").display());
+                }
+                match search.parent() {
+                    Some(p) if p != search => search = p,
+                    _ => break "../lib/".to_string(),
+                }
+            }
+        }
+    });
     let t4 = Instant::now();
-    let engine_js = generate_raw_engine(&workbook, &dep_graph, &formula_entries);
+    let engine_js = generate_raw_engine(&workbook, &dep_graph, &formula_entries, &lib_path);
     let engine_path = output_dir.join("raw-engine.js");
     fs::write(&engine_path, &engine_js).expect("Failed to write raw-engine.js");
     println!(
