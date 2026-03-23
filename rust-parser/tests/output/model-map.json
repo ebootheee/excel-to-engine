@@ -1,0 +1,432 @@
+{
+  "version": "1.1.0",
+  "source": "test-model.xlsx",
+  "sheets": [
+    {
+      "name": "Inputs",
+      "row_count": 9,
+      "col_count": 2,
+      "cell_count": 18,
+      "formula_count": 1,
+      "numeric_cells": [
+        {
+          "address": "B2",
+          "row": 1,
+          "col": 1,
+          "value": 1000000.0
+        },
+        {
+          "address": "B3",
+          "row": 2,
+          "col": 1,
+          "value": 400000.0
+        },
+        {
+          "address": "B4",
+          "row": 3,
+          "col": 1,
+          "value": 150000.0
+        },
+        {
+          "address": "B5",
+          "row": 4,
+          "col": 1,
+          "value": 0.06
+        },
+        {
+          "address": "B6",
+          "row": 5,
+          "col": 1,
+          "value": 500000.0
+        },
+        {
+          "address": "B7",
+          "row": 6,
+          "col": 1,
+          "value": 0.25
+        },
+        {
+          "address": "B8",
+          "row": 7,
+          "col": 1,
+          "value": 12.0
+        }
+      ],
+      "text_cells": [
+        {
+          "address": "A1",
+          "row": 0,
+          "col": 0,
+          "value": "Key"
+        },
+        {
+          "address": "B1",
+          "row": 0,
+          "col": 1,
+          "value": "Value"
+        },
+        {
+          "address": "A2",
+          "row": 1,
+          "col": 0,
+          "value": "Revenue"
+        },
+        {
+          "address": "A3",
+          "row": 2,
+          "col": 0,
+          "value": "COGS"
+        },
+        {
+          "address": "A4",
+          "row": 3,
+          "col": 0,
+          "value": "OpEx"
+        },
+        {
+          "address": "A5",
+          "row": 4,
+          "col": 0,
+          "value": "InterestRate"
+        },
+        {
+          "address": "A6",
+          "row": 5,
+          "col": 0,
+          "value": "InitialDebt"
+        },
+        {
+          "address": "A7",
+          "row": 6,
+          "col": 0,
+          "value": "TaxRate"
+        },
+        {
+          "address": "A8",
+          "row": 7,
+          "col": 0,
+          "value": "ExitMultiple"
+        },
+        {
+          "address": "A9",
+          "row": 8,
+          "col": 0,
+          "value": "EBITDA"
+        }
+      ],
+      "formula_cells": [
+        {
+          "address": "C9",
+          "row": 8,
+          "col": 2,
+          "formula": "B3-B4-B5",
+          "result": null
+        }
+      ]
+    },
+    {
+      "name": "Model",
+      "row_count": 22,
+      "col_count": 2,
+      "cell_count": 44,
+      "formula_count": 21,
+      "numeric_cells": [],
+      "text_cells": [
+        {
+          "address": "A1",
+          "row": 0,
+          "col": 0,
+          "value": "Metric"
+        },
+        {
+          "address": "B1",
+          "row": 0,
+          "col": 1,
+          "value": "Value"
+        },
+        {
+          "address": "A2",
+          "row": 1,
+          "col": 0,
+          "value": "Revenue"
+        },
+        {
+          "address": "A3",
+          "row": 2,
+          "col": 0,
+          "value": "COGS"
+        },
+        {
+          "address": "A4",
+          "row": 3,
+          "col": 0,
+          "value": "OpEx"
+        },
+        {
+          "address": "A5",
+          "row": 4,
+          "col": 0,
+          "value": "GrossProfit"
+        },
+        {
+          "address": "A6",
+          "row": 5,
+          "col": 0,
+          "value": "EBITDA"
+        },
+        {
+          "address": "A7",
+          "row": 6,
+          "col": 0,
+          "value": "InterestRate"
+        },
+        {
+          "address": "A8",
+          "row": 7,
+          "col": 0,
+          "value": "InitialDebt"
+        },
+        {
+          "address": "A9",
+          "row": 8,
+          "col": 0,
+          "value": "Interest"
+        },
+        {
+          "address": "A10",
+          "row": 9,
+          "col": 0,
+          "value": "CashFlow"
+        },
+        {
+          "address": "A11",
+          "row": 10,
+          "col": 0,
+          "value": "DebtBalance"
+        },
+        {
+          "address": "A12",
+          "row": 11,
+          "col": 0,
+          "value": "TaxRate"
+        },
+        {
+          "address": "A13",
+          "row": 12,
+          "col": 0,
+          "value": "EBT"
+        },
+        {
+          "address": "A14",
+          "row": 13,
+          "col": 0,
+          "value": "Tax"
+        },
+        {
+          "address": "A15",
+          "row": 14,
+          "col": 0,
+          "value": "NetIncome"
+        },
+        {
+          "address": "A16",
+          "row": 15,
+          "col": 0,
+          "value": "ExitMultiple"
+        },
+        {
+          "address": "A17",
+          "row": 16,
+          "col": 0,
+          "value": "ExitValue"
+        },
+        {
+          "address": "A18",
+          "row": 17,
+          "col": 0,
+          "value": "ReturnOnEquity"
+        },
+        {
+          "address": "A19",
+          "row": 18,
+          "col": 0,
+          "value": "IRRProxy"
+        },
+        {
+          "address": "A20",
+          "row": 19,
+          "col": 0,
+          "value": "SumCheck"
+        },
+        {
+          "address": "A21",
+          "row": 20,
+          "col": 0,
+          "value": "MinValue"
+        },
+        {
+          "address": "A22",
+          "row": 21,
+          "col": 0,
+          "value": "MaxValue"
+        }
+      ],
+      "formula_cells": [
+        {
+          "address": "B2",
+          "row": 1,
+          "col": 1,
+          "formula": "Inputs!B2",
+          "result": null
+        },
+        {
+          "address": "B3",
+          "row": 2,
+          "col": 1,
+          "formula": "Inputs!B3",
+          "result": null
+        },
+        {
+          "address": "B4",
+          "row": 3,
+          "col": 1,
+          "formula": "Inputs!B4",
+          "result": null
+        },
+        {
+          "address": "B5",
+          "row": 4,
+          "col": 1,
+          "formula": "B2-B3",
+          "result": null
+        },
+        {
+          "address": "B6",
+          "row": 5,
+          "col": 1,
+          "formula": "B5-B4",
+          "result": null
+        },
+        {
+          "address": "B7",
+          "row": 6,
+          "col": 1,
+          "formula": "Inputs!B5",
+          "result": null
+        },
+        {
+          "address": "B8",
+          "row": 7,
+          "col": 1,
+          "formula": "Inputs!B6",
+          "result": null
+        },
+        {
+          "address": "B9",
+          "row": 8,
+          "col": 1,
+          "formula": "B11*B7",
+          "result": null
+        },
+        {
+          "address": "B10",
+          "row": 9,
+          "col": 1,
+          "formula": "B6-B9",
+          "result": null
+        },
+        {
+          "address": "B11",
+          "row": 10,
+          "col": 1,
+          "formula": "B8-B10*0.2",
+          "result": null
+        },
+        {
+          "address": "B12",
+          "row": 11,
+          "col": 1,
+          "formula": "Inputs!B7",
+          "result": null
+        },
+        {
+          "address": "B13",
+          "row": 12,
+          "col": 1,
+          "formula": "B6-B9",
+          "result": null
+        },
+        {
+          "address": "B14",
+          "row": 13,
+          "col": 1,
+          "formula": "MAX(0,B13*B12)",
+          "result": null
+        },
+        {
+          "address": "B15",
+          "row": 14,
+          "col": 1,
+          "formula": "B13-B14",
+          "result": null
+        },
+        {
+          "address": "B16",
+          "row": 15,
+          "col": 1,
+          "formula": "Inputs!B8",
+          "result": null
+        },
+        {
+          "address": "B17",
+          "row": 16,
+          "col": 1,
+          "formula": "B6*B16",
+          "result": null
+        },
+        {
+          "address": "B18",
+          "row": 17,
+          "col": 1,
+          "formula": "IF(B8>0,(B17-B8)/B8,0)",
+          "result": null
+        },
+        {
+          "address": "B19",
+          "row": 18,
+          "col": 1,
+          "formula": "SQRT(MAX(0,B18))",
+          "result": null
+        },
+        {
+          "address": "B20",
+          "row": 19,
+          "col": 1,
+          "formula": "SUM(B2:B6)",
+          "result": null
+        },
+        {
+          "address": "B21",
+          "row": 20,
+          "col": 1,
+          "formula": "MIN(B2,B3,B4)",
+          "result": null
+        },
+        {
+          "address": "B22",
+          "row": 21,
+          "col": 1,
+          "formula": "MAX(B2,B3,B4)",
+          "result": null
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "total_sheets": 2,
+    "total_cells": 40,
+    "total_formula_cells": 22,
+    "total_numeric_cells": 7,
+    "total_text_cells": 33
+  }
+}

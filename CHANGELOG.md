@@ -1,6 +1,66 @@
 # excel-to-engine — Changelog
 
-## 2026-03-23
+## 2026-03-23 — Rust Engine Pipeline (Phase 1 + 2 + Docker skeleton)
+
+### rust-parser/ — New Rust Crate
+
+Full Excel → JS transpiler in Rust (calamine + serde_json). Parses workbooks in <2ms (release build).
+
+**src/parser.rs**
+- Parses `.xlsx` with calamine — all sheets, all cells (values + computed formula results)
+- Separate pass for formula strings via `worksheet_formula`
+- Outputs `model-map.json` matching v1.1.0 schema (sheets, numeric/text/formula cells, stats)
+
+**src/dependency.rs**
+- Builds cell dependency graph from extracted formula references
+- Lightweight regex-free ref extractor handles simple refs, cross-sheet refs (Sheet1!A1, 'Sheet Name'!A1), and ranges (A1:B10)
+- Tarjan's SCC algorithm for cycle detection
+- Self-referential cells (cell depends on itself) also detected as convergence candidates
+- Condensation + Kahn's topological sort (fixed: dependencies before dependents)
+- Outputs `dependency-graph.json` with nodes, edges, cycles, topo_order, convergence_clusters
+
+**src/formula_ast.rs**
+- Full Excel formula tokenizer: numbers, strings, booleans, errors, cell refs, ranges, operators, functions
+- Handles quoted sheet names ('Sheet Name'!A1), absolute refs ($A$1), percent postfix
+- Recursive descent parser → Expr AST
+- Handles all operator precedences: comparison, concat, add/sub, mul/div, exponentiation (right-assoc), unary, percent
+
+**src/transpiler.rs**
+- AST → JavaScript code generation
+- Cell refs → `s_SheetName_A1` flat variable names (configurable)
+- Range expansion → `[s_Sheet_A1, s_Sheet_A2, ...]` inline arrays
+- ~60 Excel functions transpiled: SUM, IF, MIN/MAX, ABS/ROUND, IRR/XIRR/NPV, VLOOKUP/HLOOKUP/INDEX/MATCH, AND/OR/NOT, IFERROR, text functions, date functions, financial (PMT/PV/FV/RATE)
+- Unknown functions → `_fn('NAME', [...args])` placeholder
+
+**src/circular.rs**
+- Generates convergence loop JS for circular reference clusters
+- Template: `for (let _ci_N = 0; _ci_N < 100; _ci_N++) { assignments; convergence check; }`
+
+**src/model_map.rs**
+- `build_formulas_json()` — all formula cells with formula string, transpiled JS, Excel result, parse errors
+- `generate_raw_engine.js()` — complete JS module with runtime helpers, input declarations, dependency-ordered formula assignments, convergence loops, and `computeModel(inputs)` export
+
+**src/main.rs**
+- CLI: `rust-parser <input.xlsx> [output_dir]`
+- Four output files: model-map.json, formulas.json, dependency-graph.json, raw-engine.js
+- Timing per phase (parse, model-map, transpile, dep-graph, engine gen)
+
+**Test Results**
+- Synthetic 2-sheet workbook (22 formula cells, 1 circular cluster {B9, B10, B11})
+- Circular Interest ↔ CashFlow ↔ DebtBalance correctly wrapped in convergence loop
+- Topo order correct: inputs first, convergence cluster after prerequisites, outputs last
+- Release binary parse time: **1ms** for test workbook (40 cells, 22 formulas)
+
+### container/ — Docker Pipeline Skeleton
+
+**container/Dockerfile** — Multi-stage: Rust build → Node.js 20 runtime
+**container/pipeline.mjs** — Orchestrates parse → validate → eval-loop → output with WebSocket event streaming
+**container/eval-loop.mjs** — Automated calibration loop: eval accuracy → detect scale mismatches → apply corrections → re-eval
+**container/validate-extraction.mjs** — Cross-sheet ref validation, parse error rates, ground truth coverage
+
+---
+
+## 2026-03-23 — (previous entry)
 
 ### Sensitivity Surface Validation & Multi-Point Calibration
 

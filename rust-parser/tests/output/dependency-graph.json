@@ -1,0 +1,272 @@
+{
+  "nodes": [
+    "Inputs!C9",
+    "Model!B2",
+    "Model!B3",
+    "Model!B4",
+    "Model!B5",
+    "Model!B6",
+    "Model!B7",
+    "Model!B8",
+    "Model!B9",
+    "Model!B10",
+    "Model!B11",
+    "Model!B12",
+    "Model!B13",
+    "Model!B14",
+    "Model!B15",
+    "Model!B16",
+    "Model!B17",
+    "Model!B18",
+    "Model!B19",
+    "Model!B20",
+    "Model!B21",
+    "Model!B22"
+  ],
+  "edges": {
+    "Model!B13": [
+      "Model!B6",
+      "Model!B9"
+    ],
+    "Model!B18": [
+      "Model!B8",
+      "Model!B17"
+    ],
+    "Inputs!C9": [
+      "Inputs!B3",
+      "Inputs!B4",
+      "Inputs!B5"
+    ],
+    "Model!B2": [
+      "Inputs!B2"
+    ],
+    "Model!B6": [
+      "Model!B5",
+      "Model!B4"
+    ],
+    "Model!B5": [
+      "Model!B2",
+      "Model!B3"
+    ],
+    "Model!B7": [
+      "Inputs!B5"
+    ],
+    "Model!B22": [
+      "Model!B2",
+      "Model!B3",
+      "Model!B4"
+    ],
+    "Model!B10": [
+      "Model!B6",
+      "Model!B9"
+    ],
+    "Model!B4": [
+      "Inputs!B4"
+    ],
+    "Model!B16": [
+      "Inputs!B8"
+    ],
+    "Model!B9": [
+      "Model!B11",
+      "Model!B7"
+    ],
+    "Model!B17": [
+      "Model!B6",
+      "Model!B16"
+    ],
+    "Model!B15": [
+      "Model!B13",
+      "Model!B14"
+    ],
+    "Model!B11": [
+      "Model!B8",
+      "Model!B10"
+    ],
+    "Model!B14": [
+      "Model!B13",
+      "Model!B12"
+    ],
+    "Model!B3": [
+      "Inputs!B3"
+    ],
+    "Model!B8": [
+      "Inputs!B6"
+    ],
+    "Model!B19": [
+      "Model!B18"
+    ],
+    "Model!B21": [
+      "Model!B2",
+      "Model!B3",
+      "Model!B4"
+    ],
+    "Model!B12": [
+      "Inputs!B7"
+    ],
+    "Model!B20": [
+      "Model!B6"
+    ]
+  },
+  "cycles": [
+    [
+      "Inputs!C9"
+    ],
+    [
+      "Model!B2"
+    ],
+    [
+      "Model!B3"
+    ],
+    [
+      "Model!B4"
+    ],
+    [
+      "Model!B5"
+    ],
+    [
+      "Model!B6"
+    ],
+    [
+      "Model!B7"
+    ],
+    [
+      "Model!B8"
+    ],
+    [
+      "Model!B10",
+      "Model!B11",
+      "Model!B9"
+    ],
+    [
+      "Model!B12"
+    ],
+    [
+      "Model!B13"
+    ],
+    [
+      "Model!B14"
+    ],
+    [
+      "Model!B15"
+    ],
+    [
+      "Model!B16"
+    ],
+    [
+      "Model!B17"
+    ],
+    [
+      "Model!B18"
+    ],
+    [
+      "Model!B19"
+    ],
+    [
+      "Model!B20"
+    ],
+    [
+      "Model!B21"
+    ],
+    [
+      "Model!B22"
+    ]
+  ],
+  "topo_order": [
+    {
+      "kind": "Single",
+      "address": "Inputs!C9"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B2"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B3"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B4"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B7"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B8"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B12"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B16"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B5"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B22"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B21"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B6"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B20"
+    },
+    {
+      "kind": "Cluster",
+      "id": 8,
+      "cells": [
+        "Model!B10",
+        "Model!B11",
+        "Model!B9"
+      ]
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B17"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B13"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B18"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B14"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B19"
+    },
+    {
+      "kind": "Single",
+      "address": "Model!B15"
+    }
+  ],
+  "convergence_clusters": [
+    {
+      "id": 8,
+      "cells": [
+        "Model!B10",
+        "Model!B11",
+        "Model!B9"
+      ],
+      "loop_var": "_cluster8"
+    }
+  ]
+}

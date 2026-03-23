@@ -1,0 +1,10 @@
+{
+  "name": "excel-to-engine-pipeline",
+  "version": "0.1.0",
+  "description": "Containerized Excel → JS engine pipeline",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  }
+}

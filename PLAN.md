@@ -1,6 +1,6 @@
 # excel-to-engine — Plan
 
-## Status: Phase 1.5 — Core Libraries + Sheet Intelligence Built
+## Status: Phase 3 — Rust Pipeline (Phase 1+2 complete, Docker skeleton done)
 
 ## Objective
 

@@ -1,0 +1,200 @@
+[
+  {
+    "qualified_address": "Inputs!C9",
+    "sheet": "Inputs",
+    "address": "C9",
+    "formula": "B3-B4-B5",
+    "js_expr": "((s_Inputs_B3 - s_Inputs_B4) - s_Inputs_B5)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B2",
+    "sheet": "Model",
+    "address": "B2",
+    "formula": "Inputs!B2",
+    "js_expr": "s_Inputs_B2",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B3",
+    "sheet": "Model",
+    "address": "B3",
+    "formula": "Inputs!B3",
+    "js_expr": "s_Inputs_B3",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B4",
+    "sheet": "Model",
+    "address": "B4",
+    "formula": "Inputs!B4",
+    "js_expr": "s_Inputs_B4",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B5",
+    "sheet": "Model",
+    "address": "B5",
+    "formula": "B2-B3",
+    "js_expr": "(s_Model_B2 - s_Model_B3)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B6",
+    "sheet": "Model",
+    "address": "B6",
+    "formula": "B5-B4",
+    "js_expr": "(s_Model_B5 - s_Model_B4)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B7",
+    "sheet": "Model",
+    "address": "B7",
+    "formula": "Inputs!B5",
+    "js_expr": "s_Inputs_B5",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B8",
+    "sheet": "Model",
+    "address": "B8",
+    "formula": "Inputs!B6",
+    "js_expr": "s_Inputs_B6",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B9",
+    "sheet": "Model",
+    "address": "B9",
+    "formula": "B11*B7",
+    "js_expr": "(s_Model_B11 * s_Model_B7)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B10",
+    "sheet": "Model",
+    "address": "B10",
+    "formula": "B6-B9",
+    "js_expr": "(s_Model_B6 - s_Model_B9)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B11",
+    "sheet": "Model",
+    "address": "B11",
+    "formula": "B8-B10*0.2",
+    "js_expr": "(s_Model_B8 - (s_Model_B10 * 0.2))",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B12",
+    "sheet": "Model",
+    "address": "B12",
+    "formula": "Inputs!B7",
+    "js_expr": "s_Inputs_B7",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B13",
+    "sheet": "Model",
+    "address": "B13",
+    "formula": "B6-B9",
+    "js_expr": "(s_Model_B6 - s_Model_B9)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B14",
+    "sheet": "Model",
+    "address": "B14",
+    "formula": "MAX(0,B13*B12)",
+    "js_expr": "Math.max(0,(s_Model_B13 * s_Model_B12))",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B15",
+    "sheet": "Model",
+    "address": "B15",
+    "formula": "B13-B14",
+    "js_expr": "(s_Model_B13 - s_Model_B14)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B16",
+    "sheet": "Model",
+    "address": "B16",
+    "formula": "Inputs!B8",
+    "js_expr": "s_Inputs_B8",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B17",
+    "sheet": "Model",
+    "address": "B17",
+    "formula": "B6*B16",
+    "js_expr": "(s_Model_B6 * s_Model_B16)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B18",
+    "sheet": "Model",
+    "address": "B18",
+    "formula": "IF(B8>0,(B17-B8)/B8,0)",
+    "js_expr": "(((s_Model_B8 > 0)) ? (((s_Model_B17 - s_Model_B8) / s_Model_B8)) : (0))",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B19",
+    "sheet": "Model",
+    "address": "B19",
+    "formula": "SQRT(MAX(0,B18))",
+    "js_expr": "Math.sqrt(Math.max(0,s_Model_B18))",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B20",
+    "sheet": "Model",
+    "address": "B20",
+    "formula": "SUM(B2:B6)",
+    "js_expr": "[s_Model_B2].reduce((a,b)=>a+(+b||0),0)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B21",
+    "sheet": "Model",
+    "address": "B21",
+    "formula": "MIN(B2,B3,B4)",
+    "js_expr": "Math.min(s_Model_B2,s_Model_B3,s_Model_B4)",
+    "parse_error": null,
+    "excel_result": null
+  },
+  {
+    "qualified_address": "Model!B22",
+    "sheet": "Model",
+    "address": "B22",
+    "formula": "MAX(B2,B3,B4)",
+    "js_expr": "Math.max(s_Model_B2,s_Model_B3,s_Model_B4)",
+    "parse_error": null,
+    "excel_result": null
+  }
+]
