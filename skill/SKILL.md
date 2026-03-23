@@ -332,6 +332,52 @@ After extracting data, auto-generate a comparator that reads back from the Excel
 
 This should run as part of Phase 1, not as a separate step. The eval in Phase 3 tests the *engine*; cross-sheet validation tests the *extraction*.
 
+### Sensitivity Surface Extraction (CRITICAL)
+
+**Why this matters**: The #1 source of engine failures is not static accuracy — it's getting the *response curve* wrong when inputs change. Waterfall hurdles, MIP thresholds, and debt covenants create nonlinear breakpoints where a single-point calibration factor breaks down. An engine that matches perfectly at base case can be 50-80% wrong near a waterfall breakpoint.
+
+**After extracting base case values, also extract outputs at multiple input values:**
+
+```javascript
+import { extractSurface, compareSurfaces, detectBreakpoints } from './lib/sensitivity.mjs';
+
+// Define the key input range to test (e.g., exit multiple from 1.0x to 3.0x)
+const inputConfig = {
+  exitMultiple: { min: 14, max: 26, steps: 7 },  // or whatever the model's primary driver is
+};
+
+// If the Excel has a sensitivity/data table, read it directly into this format:
+const excelSurface = {
+  baseCaseInputs: BASE_CASE,
+  baseCaseOutputs: { 'returns.grossMOIC': 2.15, 'waterfall.gpCarry': 5200000, ... },
+  inputGrid: { exitMultiple: [14, 16, 18, 20, 22, 24, 26] },
+  points: [
+    { inputs: { ...BASE_CASE, exitMultiple: 14 }, outputs: { 'returns.grossMOIC': 1.52, ... } },
+    { inputs: { ...BASE_CASE, exitMultiple: 16 }, outputs: { 'returns.grossMOIC': 1.78, ... } },
+    // ... one point per grid value
+  ],
+};
+
+// If no data table exists, manually read Excel output cells at each input value
+// (change the input cell in Excel, read the output cells, record the values)
+```
+
+**How to read sensitivity data from Excel:**
+1. Look for sheets named "Sensitivity", "Data Table", "Scenario Analysis", or similar
+2. If found, read the table directly — it already has outputs at multiple input values
+3. If not found, identify the 1-2 most important inputs (usually exit multiple and hold period) and read outputs at 5-7 values across the expected range
+4. Store the surface as `sensitivity-surface.json` alongside `model-map.json`
+
+**Detect breakpoints early:**
+
+```javascript
+const breakpoints = detectBreakpoints(excelSurface, 'waterfall.gpCarry');
+// Tells you where the waterfall hurdle crossing is, where MIP triggers, etc.
+// Use these to set up the waterfall tiers correctly in Phase 2
+```
+
+This surface data will be used in Phase 2 for multi-point calibration instead of single-point calibration.
+
 ## Phase 2 — Generate
 
 Create `engine.js` as an ES module. Use `templates/engine-template.js` as the starting skeleton.
@@ -526,6 +572,36 @@ export function computeModel(inputs = {}) {
 ```
 
 **At base case, calibrated outputs will EXACTLY match Excel.** At non-base-case inputs, they'll be close (within 2-5%) because the calibration scale factors are multiplicative.
+
+### PREFERRED: Multi-Point Calibration (when Excel surface data is available)
+
+Single-point calibration (above) assumes the error is constant across the input range. This fails at waterfall breakpoints, MIP thresholds, and other nonlinearities — the engine can be 50%+ wrong near hurdle crossings even though it's exact at base case.
+
+If you extracted a sensitivity surface in Phase 1 (see "Sensitivity Surface Extraction"), use multi-point calibration instead:
+
+```javascript
+import { multiPointCalibrate, extractSurface, compareSurfaces, printSensitivityReport } from './lib/sensitivity.mjs';
+
+// excelSurface was built in Phase 1 from Excel data tables or manual extraction
+const { corrections, apply } = multiPointCalibrate(
+  computeModel,        // your engine's raw compute function
+  BASE_CASE,
+  excelSurface,        // the Excel response surface
+  { primaryInput: 'exitMultiple' }  // which input drives the key breakpoints
+);
+
+// In computeModel(), apply piecewise corrections instead of flat scale factors:
+export function computeModel(inputs = {}) {
+  const raw = _computeRaw({ ...BASE_CASE, ...inputs });
+  return apply(raw, inputs);  // applies segment-specific corrections
+}
+```
+
+This fits piecewise-linear corrections that adapt across the input range, with segment boundaries at detected breakpoints. In testing, this improves accuracy from ~40% to ~100% across the full input range.
+
+**When to use which:**
+- **Single-point** (lib/calibration.mjs): When you only have base case Excel values. Fast, good enough for simple models.
+- **Multi-point** (lib/sensitivity.mjs): When you have Excel values at multiple input points. Required for models with waterfall hurdles, MIP thresholds, or other nonlinearities.
 
 ### CRITICAL: LP Total Definition
 
@@ -762,6 +838,34 @@ async function runEval() {
 ```
 
 3. **Run with:** `node tests/eval.mjs`
+
+### Sensitivity Surface Validation (if Excel surface data available)
+
+If you extracted a sensitivity surface in Phase 1, add sensitivity validation to the test suite:
+
+```javascript
+import { extractSurface, compareSurfaces, printSensitivityReport } from '../lib/sensitivity.mjs';
+
+// Load the Excel surface (saved in Phase 1)
+const excelSurface = JSON.parse(fs.readFileSync('sensitivity-surface.json', 'utf8'));
+
+// Extract engine surface with the same grid
+const engineSurface = extractSurface(computeModel, BASE_CASE, {
+  exitMultiple: { min: 14, max: 26, steps: 7 },
+});
+
+// Compare — checks levels AND slopes
+const comparison = compareSurfaces(engineSurface, excelSurface);
+printSensitivityReport(comparison);
+
+// Fail if slope errors are too high (this catches dynamics errors, not just levels)
+const slopeFails = comparison.summary.slopeFailCount;
+if (slopeFails > 0) {
+  console.log(`⚠️  ${slopeFails} slope checks failed — engine responds differently than Excel to input changes`);
+}
+```
+
+This is the key test that catches the class of bug where the engine matches at base case but diverges when inputs change. Slope errors > 15% typically indicate a waterfall tier is wrong, a hurdle is at the wrong level, or a nonlinear relationship was linearized.
 
 ### Monotonicity Invariants to Check
 

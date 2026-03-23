@@ -44,11 +44,18 @@ excel-to-engine/
 - [x] Asset classification — auto-classify leased/managed from metadata signals
 - [x] SKILL.md updated with fingerprinting workflow, cross-sheet validation, reference year guidance
 
+### Phase 1.75 — Sensitivity Surface Validation (DONE)
+- [x] `lib/sensitivity.mjs` — surface extraction, comparison, elasticity, breakpoint detection
+- [x] Multi-point calibration with piecewise-linear corrections
+- [x] Synthetic PE model test (`tests/synthetic-pe-model/`) proving 40% → 100% accuracy improvement
+- [x] SKILL.md updated with sensitivity extraction, multi-point calibration, and slope validation guidance
+- [x] Exported `getNestedValue`/`setNestedValue` from calibration.mjs
+
 ### Phase 2 — Testing + Validation (Next)
 - [ ] Unit tests for lib/irr.mjs (known IRR cases)
 - [ ] Unit tests for lib/waterfall.mjs (standard structures)
 - [ ] Unit tests for lib/calibration.mjs (convergence)
-- [ ] Integration test with a synthetic Excel model
+- [x] Integration test with a synthetic PE model (sensitivity surface validation)
 - [ ] CI pipeline
 
 ### Phase 3 — Polish + Publish

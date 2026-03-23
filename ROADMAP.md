@@ -73,6 +73,11 @@
 
 ## Done
 
+### Sensitivity Surface Validation & Multi-Point Calibration (2026-03-23)
+- `lib/sensitivity.mjs` — full sensitivity analysis library: surface extraction, comparison, elasticity, breakpoint detection, multi-point calibration
+- Synthetic PE model test proving multi-point calibration improves accuracy from 40% → 100% at breakpoints
+- SKILL.md updated with sensitivity extraction (Phase 1), multi-point calibration (Phase 2), and slope validation (Phase 3)
+
 ### Sheet Fingerprinting & Multi-Year Extraction (2026-03-21)
 - `fingerprintSheet()` / `fingerprintWorkbook()` — auto-detect row-to-field mappings across identical sheets using fuzzy label matching
 - `matchLabel()` — fuzzy matcher with 50+ financial term aliases (revenue, EBITDA/EBITDAR/NOI, rent, IRR, MOIC, etc.)

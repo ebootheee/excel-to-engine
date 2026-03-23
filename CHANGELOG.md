@@ -1,5 +1,38 @@
 # excel-to-engine — Changelog
 
+## 2026-03-23
+
+### Sensitivity Surface Validation & Multi-Point Calibration
+
+Addresses the core failure mode: engines match at base case but get the response curve wrong when inputs change. Waterfall hurdles, MIP thresholds, and other nonlinearities break single-point calibration.
+
+**lib/sensitivity.mjs — New Library:**
+- `extractSurface()` — Run engine across input grid, produce response surface with level and slope data
+- `compareSurfaces()` — Compare engine vs Excel surfaces: level errors, slope errors, breakpoint mismatches
+- `computeElasticity()` — % change in output / % change in input at each grid point
+- `detectBreakpoints()` — Find where response curve changes slope sharply (waterfall hurdle crossings, MIP triggers)
+- `multiPointCalibrate()` — Fit piecewise-linear corrections across multiple known points instead of single scale factor
+- `applyPiecewiseCorrection()` — Apply segment-specific corrections at runtime
+- `printSensitivityReport()` — Console report with level/slope accuracy, worst errors, breakpoint detection
+
+**lib/calibration.mjs — Export Helpers:**
+- Exported `getNestedValue()` and `setNestedValue()` for reuse by sensitivity.mjs
+
+**tests/synthetic-pe-model/ — Proof of Concept:**
+- `engine.js` — Deliberately buggy PE model (simple interest pref hurdle instead of compound)
+- `excel-surface.mjs` — Ground truth using correct compound interest
+- `test-sensitivity.mjs` — Demonstrates the full workflow:
+  - Before multi-point calibration: 40% level accuracy, 69% slope accuracy
+  - After multi-point calibration: 100% level accuracy, 100% slope accuracy
+  - GP carry error at 1.6x exit: 87% → <1%
+
+**skill/SKILL.md — Sensitivity Guidance:**
+- Added "Sensitivity Surface Extraction" section to Phase 1 (extract outputs at multiple input values, not just base case)
+- Added "Multi-Point Calibration" section to Phase 2 (use piecewise corrections when Excel surface data available)
+- Added "Sensitivity Surface Validation" section to Phase 3 (validate slopes, not just levels)
+
+---
+
 ## 2026-03-21
 
 ### Sheet Fingerprinting, Multi-Year Extraction & Build Log Improvements

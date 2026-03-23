@@ -73,13 +73,23 @@ excel-to-engine/
 │   ├── irr.mjs            # Newton-Raphson IRR solver (+ XIRR)
 │   ├── waterfall.mjs       # PE distribution waterfall calculator
 │   ├── calibration.mjs     # Auto-calibration framework
-│   └── excel-parser.mjs    # Excel reader + cell detection
+│   ├── sensitivity.mjs     # Sensitivity surface validation + multi-point calibration
+│   ├── self-eval.mjs       # Interactive self-eval with diagnostics
+│   └── excel-parser.mjs    # Excel reader + sheet fingerprinting
 ├── templates/
 │   ├── engine-template.js  # Engine skeleton with calibration system
 │   └── dashboard/
 │       ├── index.html      # 2-tab dashboard template
 │       ├── styles.css      # Styling (works with Tailwind CDN)
 │       └── app.js          # Dashboard logic (reads engine + model map)
+├── eval-framework/         # Blind testing framework
+│   ├── generate-control.mjs
+│   └── compare-outputs.mjs
+├── tests/
+│   └── synthetic-pe-model/ # Sensitivity validation test
+│       ├── engine.js       # Buggy engine (simple interest pref)
+│       ├── excel-surface.mjs # Ground truth (compound interest)
+│       └── test-sensitivity.mjs
 ├── skill/
 │   └── SKILL.md            # Claude Code skill definition
 ├── package.json
@@ -128,7 +138,7 @@ const result = computeWaterfall(200e6, 100e6, tiers, { holdPeriodYears: 5 });
 
 ### `lib/calibration.mjs` — Calibration Framework
 
-Computes scale factors to match engine outputs to known Excel values.
+Computes scale factors to match engine outputs to known Excel values at base case.
 
 ```javascript
 import { calibrate, applyCalibration, validateOutputs } from './lib/calibration.mjs';
@@ -140,6 +150,31 @@ const { factors, converged } = calibrate(
     { key: 'returns.netIRR', excelValue: 0.1847 },
   ]
 );
+```
+
+### `lib/sensitivity.mjs` — Sensitivity Surface Validation
+
+Captures how outputs *respond to input changes*, not just their static values. Detects breakpoints (waterfall hurdles, MIP thresholds), compares slopes between engine and Excel, and provides multi-point calibration that works across the full input range.
+
+```javascript
+import {
+  extractSurface, compareSurfaces, computeElasticity,
+  detectBreakpoints, multiPointCalibrate, printSensitivityReport,
+} from './lib/sensitivity.mjs';
+
+// Extract how the engine responds to exit multiple changes
+const engineSurface = extractSurface(computeModel, BASE_CASE, {
+  exitMultiple: { min: 14, max: 26, steps: 7 },
+});
+
+// Compare against Excel's response surface
+const comparison = compareSurfaces(engineSurface, excelSurface);
+printSensitivityReport(comparison);
+// Shows: level errors, slope errors, breakpoint mismatches
+
+// Multi-point calibration: piecewise corrections instead of flat scale factors
+const { corrections, apply } = multiPointCalibrate(computeModel, BASE_CASE, excelSurface);
+const correctedOutput = apply(rawOutput, inputs);
 ```
 
 ### `lib/excel-parser.mjs` — Excel Reader + Sheet Fingerprinting
