@@ -65,8 +65,7 @@ async function main() {
   }
 
   if (!API_KEY) {
-    console.error('Error: ANTHROPIC_API_KEY environment variable is required');
-    process.exit(1);
+    log('Warning: ANTHROPIC_API_KEY not set — will run parse+eval only (no improvement loop)');
   }
 
   // Resolve model path
@@ -89,7 +88,7 @@ async function main() {
   const outputDir = process.env.OUTPUT_DIR || join('/data/output', modelName);
   await mkdir(outputDir, { recursive: true });
 
-  const anthropic = new Anthropic({ apiKey: API_KEY });
+  const anthropic = API_KEY ? new Anthropic({ apiKey: API_KEY }) : null;
 
   logSection(`Auto-Iterate: ${basename(modelPath)}`);
   log(`Model: ${modelPath}`);
@@ -114,6 +113,12 @@ async function main() {
   // ── Iteration loop ──────────────────────────────────────────────────────
   let bestAccuracy = accuracy;
   let staleCount = 0;
+
+  if (!anthropic) {
+    log('No API key — skipping improvement loop. Set ANTHROPIC_API_KEY to enable.');
+    await saveLog(outputDir);
+    process.exit(accuracy >= TARGET_ACCURACY ? 0 : 1);
+  }
 
   for (let iter = 1; iter <= MAX_ITERATIONS; iter++) {
     logSection(`Iteration ${iter}/${MAX_ITERATIONS} (current: ${(bestAccuracy * 100).toFixed(1)}%)`);
