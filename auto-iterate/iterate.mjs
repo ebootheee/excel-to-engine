@@ -311,8 +311,8 @@ process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top30 
     const tmpScript = join(outputDir, '_eval_tmp.mjs');
     await writeFile(tmpScript, evalScript);
 
-    const { stdout: evalOut } = await execAsync('node', [tmpScript], {
-      timeout: 300000, // 5 min for large models
+    const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=8192', tmpScript], {
+      timeout: 600000, // 10 min for large models
       maxBuffer: 100 * 1024 * 1024,
     });
 

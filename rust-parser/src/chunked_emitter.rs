@@ -210,7 +210,7 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
     lines.push(String::new());
 
     // Runtime helpers for Excel functions — import from shared module
-    lines.push("import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset } from './_helpers.mjs';".to_string());
+    lines.push("import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER } from './_helpers.mjs';".to_string());
     lines.push(String::new());
 
     // compute(ctx) function
