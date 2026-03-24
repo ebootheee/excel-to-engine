@@ -12,7 +12,7 @@
  *   ANTHROPIC_API_KEY  — Required
  *   TARGET_ACCURACY    — Stop when reached (default: 0.85)
  *   MAX_ITERATIONS     — Max improvement loops (default: 30)
- *   MODEL_NAME         — Claude model to use (default: claude-sonnet-4-20250514)
+ *   MODEL_NAME         — Claude model to use (default: claude-sonnet-4-6-20260220)
  *   RUST_PARSER_BIN    — Path to rust-parser binary (default: /usr/local/bin/rust-parser)
  *   RUST_SRC_DIR       — Path to rust-parser source (default: /app/rust-parser)
  *   OUTPUT_DIR         — Where to write results (default: /data/output/<model-name>)
@@ -32,7 +32,7 @@ const execShell = promisify(exec);
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const TARGET_ACCURACY = parseFloat(process.env.TARGET_ACCURACY || '0.85');
 const MAX_ITERATIONS = parseInt(process.env.MAX_ITERATIONS || '30');
-const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4-20250514';
+const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4-6-20260220';
 const RUST_PARSER_BIN = process.env.RUST_PARSER_BIN || '/usr/local/bin/rust-parser';
 const RUST_SRC_DIR = process.env.RUST_SRC_DIR || '/app/rust-parser';
 const MODELS_DIR = process.env.MODELS_DIR || '/data/models';
@@ -265,35 +265,47 @@ async function parseAndEval(modelPath, outputDir) {
     const totalKnown = Object.keys(groundTruth).length;
     log(`  Ground truth: ${totalKnown} cells`);
 
-    // Run eval in subprocess
+    // Run eval in subprocess — read ground truth from file (not inline) to handle large models
     const evalScript = `
+import { readFile } from 'fs/promises';
 import { run } from '${resolve(enginePath).replace(/\\/g, '/')}';
-const result = run();
-const gt = JSON.parse(await import('fs').then(m => m.promises.readFile('${resolve(gtPath).replace(/\\/g, '/')}', 'utf8')));
+
+const gt = JSON.parse(await readFile('${resolve(gtPath).replace(/\\/g, '/')}', 'utf8'));
+let result;
+try {
+  result = run();
+} catch (e) {
+  process.stdout.write(JSON.stringify({ accuracy: 0, correct: 0, total: 0, failures: [{ address: 'ENGINE_ERROR', expected: 0, actual: e.message, relError: 1.0 }] }));
+  process.exit(0);
+}
+
 let correct = 0, total = 0;
 const failures = [];
 for (const [addr, expected] of Object.entries(gt)) {
   const actual = result.values[addr];
   if (actual === undefined || actual === null) {
-    failures.push({ address: addr, expected, actual: null, relError: 1.0 });
+    // Only sample missing values to keep output manageable
+    if (failures.length < 30) {
+      failures.push({ address: addr, expected, actual: null, relError: 1.0 });
+    }
     total++;
     continue;
   }
   total++;
   if (typeof expected === 'string' || typeof actual === 'string') {
     if (String(actual) === String(expected)) { correct++; }
-    else { failures.push({ address: addr, expected, actual, relError: 1.0 }); }
+    else if (failures.length < 30) { failures.push({ address: addr, expected, actual, relError: 1.0 }); }
     continue;
   }
   const relError = Math.abs(expected) < 1e-9
     ? Math.abs(actual)
     : Math.abs((actual - expected) / expected);
   if (relError < 0.01) { correct++; }
-  else { failures.push({ address: addr, expected, actual, relError }); }
+  else if (failures.length < 200) { failures.push({ address: addr, expected, actual, relError }); }
 }
 const accuracy = total > 0 ? correct / total : 0;
-const top20 = failures.sort((a, b) => Math.abs(b.relError) - Math.abs(a.relError)).slice(0, 30);
-process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top20 }));
+const top30 = failures.sort((a, b) => Math.abs(b.relError) - Math.abs(a.relError)).slice(0, 30);
+process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top30 }));
 `;
 
     const tmpScript = join(outputDir, '_eval_tmp.mjs');
@@ -317,6 +329,12 @@ process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top20 
   } catch (err) {
     log(`  Parse/eval error: ${err.message}`);
     if (err.stderr) log(`  stderr: ${err.stderr.slice(0, 500)}`);
+
+    // Write a zero-result eval file so the iteration loop can still read it
+    await writeFile(
+      join(outputDir, 'eval-results.json'),
+      JSON.stringify({ accuracy: 0, correct: 0, total: 0, failures: [] }, null, 2)
+    );
     return 0;
   }
 }

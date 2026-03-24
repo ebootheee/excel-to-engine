@@ -16,7 +16,7 @@
 #   ANTHROPIC_API_KEY   — Required (or in .env file)
 #   TARGET_ACCURACY     — Stop threshold (default: 0.85)
 #   MAX_ITERATIONS      — Max improvement loops (default: 30)
-#   MODEL_NAME          — Claude model (default: claude-sonnet-4-20250514)
+#   MODEL_NAME          — Claude model (default: claude-sonnet-4-6-20260220)
 
 set -euo pipefail
 
@@ -98,7 +98,7 @@ for MODEL in "${MODELS[@]}"; do
     -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
     -e TARGET_ACCURACY="${TARGET_ACCURACY:-0.90}" \
     -e MAX_ITERATIONS="${MAX_ITERATIONS:-30}" \
-    -e MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-20250514}" \
+    -e MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-6-20260220}" \
     "$IMAGE_NAME" \
     "/data/models/${MODEL_FILE}" \
     2>&1 | tee "${OUTPUT_DIR}/${MODEL_FILE%.xlsx}-console.log"
