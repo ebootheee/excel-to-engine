@@ -265,12 +265,22 @@ async function parseAndEval(modelPath, outputDir) {
     const totalKnown = Object.keys(groundTruth).length;
     log(`  Ground truth: ${totalKnown} cells`);
 
-    // Run eval in subprocess — read ground truth from file (not inline) to handle large models
+    // For large models, eval per-sheet to avoid OOM.
+    // Each sheet module is loaded independently with pre-seeded context from ground truth.
+    const gtSize = (await stat(gtPath)).size;
+    const isLargeModel = gtSize > 10 * 1024 * 1024; // >10MB ground truth
+
+    if (isLargeModel) {
+      log(`  Large model (${(gtSize / 1024 / 1024).toFixed(0)}MB ground truth) — using per-sheet eval`);
+      return await evalPerSheet(outputDir, chunkedDir, gtPath, totalKnown);
+    }
+
     const evalScript = `
 import { readFile } from 'fs/promises';
 import { run } from '${resolve(enginePath).replace(/\\/g, '/')}';
 
 const gt = JSON.parse(await readFile('${resolve(gtPath).replace(/\\/g, '/')}', 'utf8'));
+
 let result;
 try {
   result = run();
@@ -337,6 +347,153 @@ process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top30 
     );
     return 0;
   }
+}
+
+// ── Per-sheet eval for large models ──────────────────────────────────────────
+async function evalPerSheet(outputDir, chunkedDir, gtPath, totalKnown) {
+  // Load graph to get sheet list
+  const graph = JSON.parse(await readFile(join(chunkedDir, '_graph.json'), 'utf8'));
+  const sheetNames = graph.topoOrder || graph.sheets?.map(s => s.name) || [];
+
+  // Load full ground truth once
+  const allGt = JSON.parse(await readFile(gtPath, 'utf8'));
+
+  // Group ground truth by sheet
+  const gtBySheet = {};
+  for (const [addr, val] of Object.entries(allGt)) {
+    const bang = addr.indexOf('!');
+    const sheet = bang > 0 ? addr.slice(0, bang) : 'Unknown';
+    if (!gtBySheet[sheet]) gtBySheet[sheet] = {};
+    gtBySheet[sheet][addr] = val;
+  }
+
+  let totalCorrect = 0, totalTested = 0;
+  const allFailures = [];
+  const sheetResults = [];
+
+  // Test up to 10 sheets (largest first by ground truth count)
+  const sheetsToTest = Object.entries(gtBySheet)
+    .sort((a, b) => Object.keys(b[1]).length - Object.keys(a[1]).length)
+    .slice(0, 10);
+
+  for (const [sheetName, sheetGt] of sheetsToTest) {
+    const gtCount = Object.keys(sheetGt).length;
+    // Sample if sheet has >5000 ground truth entries
+    let sampleGt = sheetGt;
+    if (gtCount > 5000) {
+      sampleGt = {};
+      const keys = Object.keys(sheetGt);
+      const step = Math.floor(keys.length / 2000);
+      for (let i = 0; i < keys.length && Object.keys(sampleGt).length < 2000; i += step) {
+        sampleGt[keys[i]] = sheetGt[keys[i]];
+      }
+    }
+
+    // Build a per-sheet eval script that imports just that sheet module
+    // and pre-seeds ctx with ground truth from upstream sheets
+    const sanitized = sheetName.replace(/[^a-zA-Z0-9]/g, '_');
+    const sheetModulePath = join(chunkedDir, 'sheets', `${sanitized}.mjs`);
+
+    if (!existsSync(sheetModulePath)) {
+      log(`    Sheet ${sheetName}: module not found, skipping`);
+      continue;
+    }
+
+    const evalScript = `
+import { readFile } from 'fs/promises';
+import { compute } from '${resolve(sheetModulePath).replace(/\\/g, '/')}';
+
+// Load all ground truth to seed context (upstream sheet values)
+const allGt = JSON.parse(await readFile('${resolve(gtPath).replace(/\\/g, '/')}', 'utf8'));
+
+// Create a minimal context
+const ctx = {
+  values: {},
+  get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
+  set(addr, value) { this.values[addr] = value; },
+  range(rangeStr) {
+    const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
+    if (!m) return [];
+    const [, sheet, c1, r1, c2, r2] = m;
+    const result = [];
+    const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
+    const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
+    for (let r = +r1; r <= +r2; r++)
+      for (let c = cn(c1); c <= cn(c2); c++)
+        result.push(this.get(sheet+'!'+nc(c)+r));
+    return result;
+  }
+};
+
+// Pre-seed context with ALL ground truth values (acts as upstream sheet results)
+for (const [addr, val] of Object.entries(allGt)) {
+  ctx.values[addr] = val;
+}
+
+// Now run this sheet's compute — it will overwrite its own cells
+try {
+  compute(ctx);
+} catch (e) {
+  process.stdout.write(JSON.stringify({ accuracy: 0, correct: 0, total: 0, failures: [{ address: 'SHEET_ERROR:${sheetName}', expected: 0, actual: e.message, relError: 1.0 }] }));
+  process.exit(0);
+}
+
+// Compare this sheet's cells against ground truth
+const sheetGt = ${JSON.stringify(sampleGt)};
+let correct = 0, total = 0;
+const failures = [];
+for (const [addr, expected] of Object.entries(sheetGt)) {
+  const actual = ctx.values[addr];
+  if (actual === undefined || actual === null) {
+    if (failures.length < 30) failures.push({ address: addr, expected, actual: null, relError: 1.0 });
+    total++;
+    continue;
+  }
+  total++;
+  if (typeof expected === 'string' || typeof actual === 'string') {
+    if (String(actual) === String(expected)) { correct++; }
+    else if (failures.length < 30) { failures.push({ address: addr, expected, actual, relError: 1.0 }); }
+    continue;
+  }
+  const relError = Math.abs(expected) < 1e-9 ? Math.abs(actual) : Math.abs((actual - expected) / expected);
+  if (relError < 0.01) { correct++; }
+  else if (failures.length < 30) { failures.push({ address: addr, expected, actual, relError }); }
+}
+process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, correct, total, failures }));
+`;
+
+    const tmpScript = join(outputDir, `_eval_sheet_${sanitized}.mjs`);
+    await writeFile(tmpScript, evalScript);
+
+    try {
+      const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=8192', tmpScript], {
+        timeout: 120000,
+        maxBuffer: 50 * 1024 * 1024,
+      });
+      const result = JSON.parse(evalOut);
+      totalCorrect += result.correct;
+      totalTested += result.total;
+      allFailures.push(...result.failures);
+
+      const pct = result.total > 0 ? (result.correct / result.total * 100).toFixed(1) : '0.0';
+      log(`    ${sheetName}: ${pct}% (${result.correct}/${result.total})`);
+      sheetResults.push({ sheet: sheetName, ...result });
+    } catch (err) {
+      log(`    ${sheetName}: eval error — ${err.message.slice(0, 100)}`);
+    }
+  }
+
+  const accuracy = totalTested > 0 ? totalCorrect / totalTested : 0;
+  log(`  Overall: ${(accuracy * 100).toFixed(1)}% (${totalCorrect}/${totalTested}) across ${sheetsToTest.length} sheets`);
+
+  // Save eval results
+  const top30 = allFailures.sort((a, b) => Math.abs(b.relError) - Math.abs(a.relError)).slice(0, 30);
+  await writeFile(
+    join(outputDir, 'eval-results.json'),
+    JSON.stringify({ accuracy, correct: totalCorrect, total: totalTested, failures: top30, sheetResults }, null, 2)
+  );
+
+  return accuracy;
 }
 
 // ── Failure categorization ──────────────────────────────────────────────────
