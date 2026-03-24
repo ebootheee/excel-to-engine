@@ -86,6 +86,16 @@ pub fn parse_workbook(path: &Path) -> Result<WorkbookData, Box<dyn std::error::E
     for sheet in &mut sheets {
         match workbook2.worksheet_formula(&sheet.name) {
             Ok(formula_range) => {
+                // Build index: address -> position in cells vec for O(1) lookup
+                let cell_index: HashMap<String, usize> = sheet
+                    .cells
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (c.address.clone(), i))
+                    .collect();
+                let formula_set: std::collections::HashSet<String> =
+                    sheet.formula_cells.iter().cloned().collect();
+
                 let (min_row, min_col) = formula_range.start().unwrap_or((0, 0));
                 for (row_idx, row) in formula_range.rows().enumerate() {
                     for (col_idx, formula_str) in row.iter().enumerate() {
@@ -96,9 +106,9 @@ pub fn parse_workbook(path: &Path) -> Result<WorkbookData, Box<dyn std::error::E
                         let abs_col = min_col + col_idx as u32;
                         let addr = cell_address(abs_row, abs_col);
 
-                        if let Some(c) = sheet.cells.iter_mut().find(|c| c.address == addr) {
-                            c.formula = Some(formula_str.clone());
-                            if !sheet.formula_cells.contains(&addr) {
+                        if let Some(&idx) = cell_index.get(&addr) {
+                            sheet.cells[idx].formula = Some(formula_str.clone());
+                            if !formula_set.contains(&addr) {
                                 sheet.formula_cells.push(addr);
                                 total_formula_cells += 1;
                             }
@@ -111,7 +121,7 @@ pub fn parse_workbook(path: &Path) -> Result<WorkbookData, Box<dyn std::error::E
                                 value: None,
                                 formula: Some(formula_str.clone()),
                             });
-                            if !sheet.formula_cells.contains(&addr) {
+                            if !formula_set.contains(&addr) {
                                 sheet.formula_cells.push(addr);
                                 total_formula_cells += 1;
                             }

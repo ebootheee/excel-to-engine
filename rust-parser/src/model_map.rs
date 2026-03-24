@@ -6,7 +6,7 @@ use crate::transpiler::{transpile, TranspileConfig, addr_to_var};
 use crate::circular::generate_cluster_loop;
 use crate::parser::WorkbookData;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // formulas.json schema
@@ -75,6 +75,7 @@ pub fn generate_raw_engine(
     dep_graph: &DependencyGraph,
     formula_entries: &[FormulaEntry],
     lib_path: &str,
+    referenced_cells: &Option<HashSet<String>>,
 ) -> String {
     let mut lines = Vec::new();
 
@@ -128,7 +129,10 @@ pub fn generate_raw_engine(
     lines.push("export function computeModel(inputs = {}) {".to_string());
     lines.push("  // ── Input cells (override with inputs object) ──────────────────────".to_string());
 
-    // Declare all non-formula cells as let vars
+    // Declare non-formula cells as let vars
+    // In compact mode, only declare cells that are actually referenced by formulas
+    let mut input_count = 0usize;
+    let mut skipped_count = 0usize;
     for sheet in &workbook.sheets {
         let config = TranspileConfig {
             default_sheet: sheet.name.clone(),
@@ -138,6 +142,14 @@ pub fn generate_raw_engine(
             if cell.formula.is_some() {
                 continue;
             }
+            let qualified = format!("{}!{}", sheet.name, cell.address);
+            // In compact mode, skip cells not referenced by any formula
+            if let Some(ref refs) = referenced_cells {
+                if !refs.contains(&qualified) {
+                    skipped_count += 1;
+                    continue;
+                }
+            }
             let var_name = addr_to_var(&sheet.name, &cell.address, &config);
             let default_val = match &cell.value {
                 Some(crate::parser::CellValue::Number(n)) => format!("{}", n),
@@ -145,12 +157,18 @@ pub fn generate_raw_engine(
                 Some(crate::parser::CellValue::Bool(b)) => b.to_string(),
                 _ => "null".to_string(),
             };
-            let input_key = format!("{}!{}", sheet.name, cell.address);
             lines.push(format!(
                 "  let {} = inputs['{}'] !== undefined ? inputs['{}'] : {};",
-                var_name, input_key, input_key, default_val
+                var_name, &qualified, &qualified, default_val
             ));
+            input_count += 1;
         }
+    }
+    if skipped_count > 0 {
+        lines.push(format!(
+            "  // [compact] {} input cells declared, {} unreferenced cells skipped",
+            input_count, skipped_count
+        ));
     }
 
     lines.push("".to_string());
@@ -282,10 +300,16 @@ pub fn generate_raw_engine(
             if cell.formula.is_some() {
                 continue;
             }
+            let qualified = format!("{}!{}", sheet.name, cell.address);
+            if let Some(ref refs) = referenced_cells {
+                if !refs.contains(&qualified) {
+                    continue;
+                }
+            }
             if let Some(crate::parser::CellValue::Number(n)) = &cell.value {
                 lines.push(format!(
-                    "  '{}!{}': {},",
-                    sheet.name, cell.address, n
+                    "  '{}': {},",
+                    qualified, n
                 ));
             }
         }

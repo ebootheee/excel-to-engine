@@ -127,9 +127,43 @@ async function main() {
   phase('validate', 'running');
   log(`[2/4] Validating extraction...`);
 
-  const modelMap = JSON.parse(await readFile(join(outputDir, 'model-map.json'), 'utf8'));
-  const formulas = JSON.parse(await readFile(join(outputDir, 'formulas.json'), 'utf8'));
-  const depGraph = JSON.parse(await readFile(join(outputDir, 'dependency-graph.json'), 'utf8'));
+  // Parse JSON files — check sizes first to avoid OOM on huge models
+  const mmPath = join(outputDir, 'model-map.json');
+  const fPath = join(outputDir, 'formulas.json');
+  const dgPath = join(outputDir, 'dependency-graph.json');
+
+  const { stat } = await import('fs/promises');
+  const mmSize = (await stat(mmPath)).size;
+  const fSize = (await stat(fPath)).size;
+  const dgSize = (await stat(dgPath)).size;
+  const totalJsonMB = (mmSize + fSize + dgSize) / (1024 * 1024);
+
+  if (totalJsonMB > 500) {
+    log(`  WARNING: JSON outputs total ${totalJsonMB.toFixed(0)}MB — consider using --compact flag`);
+    log(`  model-map.json: ${(mmSize / 1024 / 1024).toFixed(0)}MB`);
+    log(`  formulas.json: ${(fSize / 1024 / 1024).toFixed(0)}MB`);
+    log(`  dependency-graph.json: ${(dgSize / 1024 / 1024).toFixed(0)}MB`);
+  }
+
+  const modelMap = JSON.parse(await readFile(mmPath, 'utf8'));
+  const formulasRaw = JSON.parse(await readFile(fPath, 'utf8'));
+  const depGraph = JSON.parse(await readFile(dgPath, 'utf8'));
+
+  // Handle compact mode: ground-truth.json has {address: value} pairs directly
+  const gtPath = join(outputDir, 'ground-truth.json');
+  let formulas;
+  let groundTruthDirect = null;
+  if (formulasRaw._compact) {
+    log(`  Compact mode: ${formulasRaw._total_formulas} formulas, ${formulasRaw._ground_truth_count} with results`);
+    // In compact mode, formulas.json has no entries — ground truth is in ground-truth.json
+    formulas = [];
+    if (existsSync(gtPath)) {
+      groundTruthDirect = JSON.parse(await readFile(gtPath, 'utf8'));
+      log(`  Loaded ground-truth.json: ${Object.keys(groundTruthDirect).length} values`);
+    }
+  } else {
+    formulas = formulasRaw;
+  }
 
   const validationResult = validateExtraction(modelMap, formulas, depGraph);
   await writeFile(
@@ -151,7 +185,7 @@ async function main() {
   phase('eval', 'running');
   log(`[3/4] Starting eval loop (max ${MAX_ITERATIONS} iterations, target ${TARGET_ACCURACY * 100}%)...`);
 
-  const evalResult = await runEvalLoop(inputPath, outputDir, modelMap, formulas);
+  const evalResult = await runEvalLoop(inputPath, outputDir, modelMap, formulas, groundTruthDirect);
   diagnostics.finalScore = evalResult.finalScore;
   diagnostics.iterations = evalResult.iterations;
   diagnostics.stuckOutputs = evalResult.stuckOutputs;
