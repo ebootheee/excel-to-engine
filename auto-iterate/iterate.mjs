@@ -12,7 +12,7 @@
  *   ANTHROPIC_API_KEY  — Required
  *   TARGET_ACCURACY    — Stop when reached (default: 0.85)
  *   MAX_ITERATIONS     — Max improvement loops (default: 30)
- *   MODEL_NAME         — Claude model to use (default: claude-sonnet-4-6-20260220)
+ *   MODEL_NAME         — Claude model to use (default: claude-sonnet-4-6)
  *   RUST_PARSER_BIN    — Path to rust-parser binary (default: /usr/local/bin/rust-parser)
  *   RUST_SRC_DIR       — Path to rust-parser source (default: /app/rust-parser)
  *   OUTPUT_DIR         — Where to write results (default: /data/output/<model-name>)
@@ -32,7 +32,7 @@ const execShell = promisify(exec);
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const TARGET_ACCURACY = parseFloat(process.env.TARGET_ACCURACY || '0.85');
 const MAX_ITERATIONS = parseInt(process.env.MAX_ITERATIONS || '30');
-const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4-6-20260220';
+const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4-6';
 const RUST_PARSER_BIN = process.env.RUST_PARSER_BIN || '/usr/local/bin/rust-parser';
 const RUST_SRC_DIR = process.env.RUST_SRC_DIR || '/app/rust-parser';
 const MODELS_DIR = process.env.MODELS_DIR || '/data/models';

@@ -10,9 +10,13 @@ use crate::sheet_partition::{
     build_sheet_graph, extract_ground_truth, partition_sheets, SheetGraph, SheetPartition,
 };
 use crate::transpiler::{transpile, TranspileConfig};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -21,51 +25,150 @@ use std::path::Path;
 /// Generate all chunked output artifacts into `output_dir`.
 /// Returns a summary string of what was emitted.
 pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String, String> {
+    let t_start = Instant::now();
+
+    eprintln!("[chunked] Partitioning {} sheets...", workbook.sheets.len());
+    let t0 = Instant::now();
     let partitions = partition_sheets(workbook);
+    eprintln!("[chunked] Partitioned in {}ms", t0.elapsed().as_millis());
+
+    eprintln!("[chunked] Building sheet-level DAG...");
+    let t0 = Instant::now();
     let sheet_graph = build_sheet_graph(&partitions)?;
+    eprintln!(
+        "[chunked] DAG built in {}ms — {} sheets, topo order: [{}]",
+        t0.elapsed().as_millis(),
+        sheet_graph.sheets.len(),
+        if sheet_graph.topo_order.len() <= 10 {
+            sheet_graph.topo_order.join(", ")
+        } else {
+            format!(
+                "{}, ... ({} more)",
+                sheet_graph.topo_order[..5].join(", "),
+                sheet_graph.topo_order.len() - 5
+            )
+        }
+    );
 
     // Create sheets/ subdirectory
     let sheets_dir = output_dir.join("sheets");
     fs::create_dir_all(&sheets_dir)
         .map_err(|e| format!("Failed to create sheets/ directory: {}", e))?;
 
-    // 1. Emit per-sheet modules
+    // Write shared runtime helpers module (once, not per-sheet)
+    let helpers_code = generate_helpers_module();
+    fs::write(sheets_dir.join("_helpers.mjs"), &helpers_code)
+        .map_err(|e| format!("Failed to write _helpers.mjs: {}", e))?;
+    eprintln!("[chunked] _helpers.mjs written ({})", human_size(helpers_code.len()));
+
+    // 1. Emit per-sheet modules (parallel via rayon)
+    let total_sheets = partitions.len();
+    eprintln!("[chunked] Emitting {} sheet modules (parallel)...", total_sheets);
+    let t_emit = Instant::now();
+
+    let completed = AtomicUsize::new(0);
+
+    // Generate all modules in parallel
+    let sheet_results: Vec<(String, String, String, usize, usize, usize)> = partitions
+        .par_iter()
+        .map(|partition| {
+            let code = generate_sheet_module(partition, &workbook);
+            let safe_name = sanitize_sheet_name(&partition.name);
+            let file_name = format!("{}.mjs", safe_name);
+            let code_len = code.len();
+            let n_formulas = partition.formula_cells.len();
+            let n_inputs = partition.input_cells.len();
+
+            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+            if done % 5 == 0 || done == total_sheets {
+                eprint!(
+                    "\r[chunked]   [{}/{}] generating modules...",
+                    done, total_sheets
+                );
+                std::io::stderr().flush().ok();
+            }
+
+            (partition.name.clone(), file_name, code, n_formulas, n_inputs, code_len)
+        })
+        .collect();
+
+    eprintln!(); // newline after progress
+
+    // Write files sequentially (fast — just I/O)
     let mut sheet_files: Vec<String> = Vec::new();
-    for partition in &partitions {
-        let code = generate_sheet_module(partition, &workbook);
-        let safe_name = sanitize_sheet_name(&partition.name);
-        let file_name = format!("{}.mjs", safe_name);
-        let file_path = sheets_dir.join(&file_name);
-        fs::write(&file_path, &code)
+    let mut total_formulas_emitted: usize = 0;
+    let mut total_bytes_emitted: usize = 0;
+    for (sheet_name, file_name, code, n_formulas, n_inputs, code_len) in &sheet_results {
+        let file_path = sheets_dir.join(file_name);
+        fs::write(&file_path, code)
             .map_err(|e| format!("Failed to write {}: {}", file_name, e))?;
-        sheet_files.push(file_name);
+        sheet_files.push(file_name.clone());
+        total_formulas_emitted += n_formulas;
+        total_bytes_emitted += code_len;
     }
 
+    eprintln!(
+        "[chunked] All {} sheet modules emitted in {:.1}s ({} formulas, {})",
+        total_sheets,
+        t_emit.elapsed().as_secs_f64(),
+        total_formulas_emitted,
+        human_size(total_bytes_emitted)
+    );
+
     // 2. Emit _graph.json
+    eprint!("[chunked] Writing _graph.json...");
+    std::io::stderr().flush().ok();
     let graph_json = serde_json::to_string_pretty(&sheet_graph)
         .map_err(|e| format!("Failed to serialize graph: {}", e))?;
     fs::write(output_dir.join("_graph.json"), &graph_json)
         .map_err(|e| format!("Failed to write _graph.json: {}", e))?;
+    eprintln!(" done ({})", human_size(graph_json.len()));
 
     // 3. Emit _ground-truth.json
+    eprint!("[chunked] Extracting ground truth...");
+    std::io::stderr().flush().ok();
+    let t0 = Instant::now();
     let ground_truth = extract_ground_truth(workbook);
     let gt_json = serde_json::to_string_pretty(&ground_truth)
         .map_err(|e| format!("Failed to serialize ground truth: {}", e))?;
     fs::write(output_dir.join("_ground-truth.json"), &gt_json)
         .map_err(|e| format!("Failed to write _ground-truth.json: {}", e))?;
+    eprintln!(
+        " done — {} entries ({}) in {}ms",
+        ground_truth.len(),
+        human_size(gt_json.len()),
+        t0.elapsed().as_millis()
+    );
 
     // 4. Emit engine.js orchestrator
+    eprint!("[chunked] Writing engine.js orchestrator...");
+    std::io::stderr().flush().ok();
     let engine_js = generate_orchestrator(&sheet_graph, &partitions);
     fs::write(output_dir.join("engine.js"), &engine_js)
         .map_err(|e| format!("Failed to write engine.js: {}", e))?;
+    eprintln!(" done ({})", human_size(engine_js.len()));
+
+    eprintln!(
+        "[chunked] ✅ Complete in {:.1}s",
+        t_start.elapsed().as_secs_f64()
+    );
 
     // Summary
+    let cluster_info = if sheet_graph.sheet_clusters.is_empty() {
+        "no circular deps".to_string()
+    } else {
+        format!(
+            "{} convergence cluster(s) ({} sheets)",
+            sheet_graph.sheet_clusters.len(),
+            sheet_graph.sheet_clusters.iter().map(|c| c.len()).sum::<usize>()
+        )
+    };
     let summary = format!(
-        "Chunked output: {} sheet modules, _graph.json ({} sheets, topo: {:?}), \
+        "Chunked output: {} sheet modules, _graph.json ({} sheets, {}), \
          _ground-truth.json ({} entries), engine.js",
         sheet_files.len(),
         sheet_graph.sheets.len(),
-        sheet_graph.topo_order,
+        cluster_info,
         ground_truth.len()
     );
 
@@ -106,6 +209,10 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
     ));
     lines.push(String::new());
 
+    // Runtime helpers for Excel functions — import from shared module
+    lines.push("import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset } from './_helpers.mjs';".to_string());
+    lines.push(String::new());
+
     // compute(ctx) function
     lines.push("/**".to_string());
     lines.push(format!(
@@ -131,7 +238,8 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
     if !partition.formula_cells.is_empty() {
         let config = TranspileConfig {
             default_sheet: sheet_name.clone(),
-            use_flat_vars: true,
+            use_flat_vars: false,
+            use_ctx_get: true,
         };
 
         // Build per-cell transpiled expressions
@@ -140,10 +248,7 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
             if let Some(formula) = &cell.formula {
                 let qualified = format!("{}!{}", sheet_name, cell.address);
                 let js_expr = match parse_formula(formula) {
-                    Some(ast) => {
-                        let raw_js = transpile(&ast, &config);
-                        convert_vars_to_ctx_get(&raw_js, sheet_name)
-                    }
+                    Some(ast) => transpile(&ast, &config),
                     None => format!("/* parse error: {} */ 0", escape_js_string(formula)),
                 };
                 cell_exprs.push((qualified, js_expr));
@@ -396,6 +501,26 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
     lines.push("};".to_string());
     lines.push(String::new());
 
+    // Sheet clusters (circular dependency groups that need convergence loops)
+    if !graph.sheet_clusters.is_empty() {
+        lines.push("// Sheet clusters — groups of sheets with circular dependencies".to_string());
+        lines.push("// These are executed in convergence loops until values stabilize.".to_string());
+        lines.push("const SHEET_CLUSTERS = [".to_string());
+        for cluster in &graph.sheet_clusters {
+            let names: Vec<String> = cluster
+                .iter()
+                .map(|s| format!("\"{}\"", escape_js_string(s)))
+                .collect();
+            lines.push(format!("  [{}],", names.join(", ")));
+        }
+        lines.push("];".to_string());
+        lines.push(String::new());
+
+        // Build a set of all sheets that belong to a cluster
+        lines.push("const CLUSTER_SHEETS = new Set(SHEET_CLUSTERS.flat());".to_string());
+        lines.push(String::new());
+    }
+
     // run() function
     lines.push("/**".to_string());
     lines.push(" * Execute the full model.".to_string());
@@ -410,13 +535,56 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
     lines.push("    ctx.set(addr, val);".to_string());
     lines.push("  }".to_string());
     lines.push(String::new());
-    lines.push("  // Execute sheets in topological order".to_string());
-    lines.push("  for (const sheetName of TOPO_ORDER) {".to_string());
-    lines.push("    const computeFn = SHEET_COMPUTE[sheetName];".to_string());
-    lines.push("    if (computeFn) {".to_string());
-    lines.push("      computeFn(ctx);".to_string());
-    lines.push("    }".to_string());
-    lines.push("  }".to_string());
+
+    if graph.sheet_clusters.is_empty() {
+        // Simple case: no circular deps, just execute in topo order
+        lines.push("  // Execute sheets in topological order".to_string());
+        lines.push("  for (const sheetName of TOPO_ORDER) {".to_string());
+        lines.push("    const computeFn = SHEET_COMPUTE[sheetName];".to_string());
+        lines.push("    if (computeFn) computeFn(ctx);".to_string());
+        lines.push("  }".to_string());
+    } else {
+        // Complex case: execute with convergence loops for clusters
+        lines.push("  // Execute sheets in topological order with convergence loops for circular deps".to_string());
+        lines.push("  const MAX_ITER = 50;".to_string());
+        lines.push("  const TOL = 1e-6;".to_string());
+        lines.push("  const executed = new Set();".to_string());
+        lines.push(String::new());
+        lines.push("  for (const sheetName of TOPO_ORDER) {".to_string());
+        lines.push("    if (executed.has(sheetName)) continue;".to_string());
+        lines.push(String::new());
+        lines.push("    // Check if this sheet is part of a cluster".to_string());
+        lines.push("    if (CLUSTER_SHEETS.has(sheetName)) {".to_string());
+        lines.push("      const cluster = SHEET_CLUSTERS.find(c => c.includes(sheetName));".to_string());
+        lines.push("      if (cluster && !cluster.some(s => executed.has(s))) {".to_string());
+        lines.push("        // Run the entire cluster in a convergence loop".to_string());
+        lines.push("        for (let iter = 0; iter < MAX_ITER; iter++) {".to_string());
+        lines.push("          const snapshot = JSON.stringify(ctx.values);".to_string());
+        lines.push("          for (const s of cluster) {".to_string());
+        lines.push("            const fn = SHEET_COMPUTE[s];".to_string());
+        lines.push("            if (fn) fn(ctx);".to_string());
+        lines.push("          }".to_string());
+        lines.push("          // Check convergence".to_string());
+        lines.push("          const after = ctx.values;".to_string());
+        lines.push("          const before = JSON.parse(snapshot);".to_string());
+        lines.push("          let maxDelta = 0;".to_string());
+        lines.push("          for (const key in after) {".to_string());
+        lines.push("            if (typeof after[key] === 'number' && typeof before[key] === 'number') {".to_string());
+        lines.push("              maxDelta = Math.max(maxDelta, Math.abs(after[key] - before[key]));".to_string());
+        lines.push("            }".to_string());
+        lines.push("          }".to_string());
+        lines.push("          if (maxDelta < TOL) break;".to_string());
+        lines.push("        }".to_string());
+        lines.push("        for (const s of cluster) executed.add(s);".to_string());
+        lines.push("      }".to_string());
+        lines.push("    } else {".to_string());
+        lines.push("      const computeFn = SHEET_COMPUTE[sheetName];".to_string());
+        lines.push("      if (computeFn) computeFn(ctx);".to_string());
+        lines.push("      executed.add(sheetName);".to_string());
+        lines.push("    }".to_string());
+        lines.push("  }".to_string());
+    }
+
     lines.push(String::new());
     lines.push("  return {".to_string());
     lines.push("    values: { ...ctx.values },".to_string());
@@ -528,39 +696,83 @@ fn detect_intra_sheet_cycles(partition: &SheetPartition, sheet_name: &str) -> Ve
         }
     }
 
-    // Simple cycle detection: for each cell, do DFS and check if we can reach ourselves
+    // Tarjan's SCC — O(V+E) single-pass cycle detection
+    // Any SCC with size > 1 means those cells are in a cycle.
+    let nodes: Vec<String> = all_addrs.iter().cloned().collect();
+    let node_index: HashMap<&str, usize> = nodes.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+    let n = nodes.len();
+
+    let mut index_counter: usize = 0;
+    let mut stack: Vec<usize> = Vec::new();
+    let mut on_stack = vec![false; n];
+    let mut indices = vec![usize::MAX; n]; // usize::MAX = undefined
+    let mut lowlinks = vec![0usize; n];
     let mut in_cycle: HashSet<String> = HashSet::new();
 
-    for start in &all_addrs {
-        let mut visited: HashSet<String> = HashSet::new();
-        let mut stack: Vec<String> = vec![start.clone()];
+    // Iterative Tarjan's to avoid stack overflow on deep graphs
+    // Each frame: (node, edge_index, is_root_call)
+    let mut call_stack: Vec<(usize, usize, bool)> = Vec::new();
 
-        while let Some(node) = stack.pop() {
-            if !visited.insert(node.clone()) {
-                continue;
+    for start in 0..n {
+        if indices[start] != usize::MAX {
+            continue;
+        }
+        call_stack.push((start, 0, true));
+
+        while let Some((v, ei, is_init)) = call_stack.last_mut() {
+            let v = *v;
+            if *is_init {
+                indices[v] = index_counter;
+                lowlinks[v] = index_counter;
+                index_counter += 1;
+                stack.push(v);
+                on_stack[v] = true;
+                *is_init = false;
             }
-            if let Some(deps) = edges.get(&node) {
-                for dep in deps {
-                    if dep == start && visited.len() > 1 {
-                        // Found a cycle back to start
-                        in_cycle.insert(start.clone());
-                        in_cycle.insert(dep.clone());
-                        // Mark all nodes in the path
-                        for v in &visited {
-                            if all_addrs.contains(v) {
-                                if let Some(v_deps) = edges.get(v) {
-                                    for vd in v_deps {
-                                        if visited.contains(vd) || vd == start {
-                                            in_cycle.insert(v.clone());
-                                        }
-                                    }
-                                }
-                            }
+
+            let neighbors: Vec<usize> = edges
+                .get(&nodes[v])
+                .map(|deps| {
+                    deps.iter()
+                        .filter_map(|d| node_index.get(d.as_str()).copied())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let ei_val = *ei;
+            if ei_val < neighbors.len() {
+                let w = neighbors[ei_val];
+                *ei = ei_val + 1; // advance edge pointer
+                if indices[w] == usize::MAX {
+                    call_stack.push((w, 0, true));
+                    continue;
+                } else if on_stack[w] {
+                    lowlinks[v] = lowlinks[v].min(indices[w]);
+                }
+            } else {
+                // All neighbors processed — check if v is an SCC root
+                if lowlinks[v] == indices[v] {
+                    let mut scc: Vec<usize> = Vec::new();
+                    loop {
+                        let w = stack.pop().unwrap();
+                        on_stack[w] = false;
+                        scc.push(w);
+                        if w == v {
+                            break;
                         }
                     }
-                    if all_addrs.contains(dep) && !visited.contains(dep) {
-                        stack.push(dep.clone());
+                    if scc.len() > 1 {
+                        for &idx in &scc {
+                            in_cycle.insert(nodes[idx].clone());
+                        }
                     }
+                }
+                let finished_v = v;
+                let finished_low = lowlinks[v];
+                call_stack.pop();
+                // Update parent's lowlink
+                if let Some((parent, _, _)) = call_stack.last() {
+                    lowlinks[*parent] = lowlinks[*parent].min(finished_low);
                 }
             }
         }
@@ -575,6 +787,331 @@ fn detect_intra_sheet_cycles(partition: &SheetPartition, sheet_name: &str) -> Ve
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Generate runtime helper functions for Excel lookups and other functions
+/// that the transpiler emits as _fn() calls.
+fn generate_runtime_helpers() -> String {
+    r#"// ── Runtime helpers ──
+function _index(arr, rowNum, colNum) {
+  if (arr == null) return 0;
+  if (!Array.isArray(arr)) return arr;
+  const r = +rowNum || 0;
+  const c = +colNum || 0;
+  // If row=0, return entire column (as array) for use in MATCH etc.
+  if (r === 0) return arr;
+  const idx = r - 1;
+  if (idx < 0 || idx >= arr.length) return 0;
+  const row = arr[idx];
+  // 2D: if element is itself an array, use colNum
+  if (Array.isArray(row)) {
+    const ci = (c || 1) - 1;
+    return row[ci] ?? 0;
+  }
+  return row ?? 0;
+}
+
+function _match(val, arr, matchType) {
+  if (!Array.isArray(arr)) return 0;
+  const mt = matchType === undefined ? 1 : +matchType;
+  // Exact match (mt === 0)
+  if (mt === 0) {
+    for (let i = 0; i < arr.length; i++) {
+      if (arr[i] === val || (typeof arr[i] === 'number' && typeof val === 'number' && Math.abs(arr[i] - val) < 1e-10)) {
+        return i + 1;
+      }
+      // String wildcard / case-insensitive
+      if (typeof arr[i] === 'string' && typeof val === 'string' && arr[i].toLowerCase() === val.toLowerCase()) {
+        return i + 1;
+      }
+    }
+    return 0;
+  }
+  // Try exact match first for any match type
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] === val || (typeof arr[i] === 'number' && typeof val === 'number' && Math.abs(arr[i] - val) < 1e-10)) {
+      return i + 1;
+    }
+  }
+  // Approximate match: mt=1 (default) sorted ascending → largest <= val
+  if (mt === 1) {
+    let best = -1;
+    for (let i = 0; i < arr.length; i++) {
+      if (typeof arr[i] === 'number' && typeof val === 'number' && arr[i] <= val) {
+        best = i;
+      }
+    }
+    return best >= 0 ? best + 1 : 0;
+  }
+  // mt=-1: sorted descending → smallest >= val
+  if (mt === -1) {
+    let best = -1;
+    for (let i = 0; i < arr.length; i++) {
+      if (typeof arr[i] === 'number' && typeof val === 'number' && arr[i] >= val) {
+        best = i;
+      }
+    }
+    return best >= 0 ? best + 1 : 0;
+  }
+  return 0;
+}
+
+function _vlookup(val, table, colIdx, exact) {
+  if (!Array.isArray(table)) return 0;
+  for (const row of table) {
+    if (Array.isArray(row) && (row[0] === val || (!exact && typeof row[0] === 'number' && typeof val === 'number' && row[0] <= val))) {
+      return row[(+colIdx || 1) - 1] ?? 0;
+    }
+  }
+  return 0;
+}
+
+function _hlookup(val, table, rowIdx, exact) {
+  if (!Array.isArray(table) || table.length === 0) return 0;
+  const firstRow = table[0];
+  if (!Array.isArray(firstRow)) return 0;
+  for (let c = 0; c < firstRow.length; c++) {
+    if (firstRow[c] === val || (!exact && typeof firstRow[c] === 'number' && typeof val === 'number' && firstRow[c] <= val)) {
+      const ri = (+rowIdx || 1) - 1;
+      return table[ri]?.[c] ?? 0;
+    }
+  }
+  return 0;
+}
+
+function _large(arr, k) {
+  if (!Array.isArray(arr)) return 0;
+  const sorted = arr.filter(v => typeof v === 'number').sort((a, b) => b - a);
+  return sorted[(+k || 1) - 1] ?? 0;
+}
+
+function _small(arr, k) {
+  if (!Array.isArray(arr)) return 0;
+  const sorted = arr.filter(v => typeof v === 'number').sort((a, b) => a - b);
+  return sorted[(+k || 1) - 1] ?? 0;
+}
+
+function _rank(val, arr, order) {
+  if (!Array.isArray(arr)) return 0;
+  const nums = arr.filter(v => typeof v === 'number');
+  const sorted = order ? nums.sort((a, b) => a - b) : nums.sort((a, b) => b - a);
+  for (let i = 0; i < sorted.length; i++) {
+    if (Math.abs(sorted[i] - val) < 1e-10) return i + 1;
+  }
+  return 0;
+}
+
+function _fn(name, args) {
+  // Fallback for unsupported functions
+  return 0;
+}
+
+function _matchesCriteria(val, criteria) {
+  if (criteria === undefined || criteria === null) return false;
+  if (typeof criteria === 'number') return typeof val === 'number' && Math.abs(val - criteria) < 1e-10;
+  if (typeof criteria === 'boolean') return val === criteria;
+  const s = String(criteria);
+  if (s.startsWith('>=')) return typeof val === 'number' && val >= +s.slice(2);
+  if (s.startsWith('<=')) return typeof val === 'number' && val <= +s.slice(2);
+  if (s.startsWith('<>')) { const cv = +s.slice(2); return isNaN(cv) ? String(val) !== s.slice(2) : val !== cv; }
+  if (s.startsWith('>'))  return typeof val === 'number' && val > +s.slice(1);
+  if (s.startsWith('<'))  return typeof val === 'number' && val < +s.slice(1);
+  if (s.startsWith('='))  { const cv = +s.slice(1); return isNaN(cv) ? String(val) === s.slice(1) : typeof val === 'number' && Math.abs(val - cv) < 1e-10; }
+  const n = +s;
+  if (!isNaN(n)) return typeof val === 'number' && Math.abs(val - n) < 1e-10;
+  return String(val).toLowerCase() === s.toLowerCase();
+}
+
+function _sumif(range, criteria, sumRange) {
+  if (!Array.isArray(range)) return 0;
+  const sr = Array.isArray(sumRange) ? sumRange : range;
+  let total = 0;
+  for (let i = 0; i < range.length; i++) {
+    if (_matchesCriteria(range[i], criteria)) {
+      total += (+sr[i] || 0);
+    }
+  }
+  return total;
+}
+
+function _sumifs(sumRange, criteriaPairs) {
+  if (!Array.isArray(sumRange)) return 0;
+  let total = 0;
+  for (let i = 0; i < sumRange.length; i++) {
+    let allMatch = true;
+    for (const [cr, cv] of criteriaPairs) {
+      if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { allMatch = false; break; }
+    }
+    if (allMatch) total += (+sumRange[i] || 0);
+  }
+  return total;
+}
+
+function _countif(range, criteria) {
+  if (!Array.isArray(range)) return 0;
+  let count = 0;
+  for (let i = 0; i < range.length; i++) {
+    if (_matchesCriteria(range[i], criteria)) count++;
+  }
+  return count;
+}
+
+function _countifs(criteriaPairs) {
+  if (!Array.isArray(criteriaPairs) || criteriaPairs.length === 0) return 0;
+  const len = Array.isArray(criteriaPairs[0][0]) ? criteriaPairs[0][0].length : 0;
+  let count = 0;
+  for (let i = 0; i < len; i++) {
+    let allMatch = true;
+    for (const [cr, cv] of criteriaPairs) {
+      if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { allMatch = false; break; }
+    }
+    if (allMatch) count++;
+  }
+  return count;
+}
+
+function _colNum(col) {
+  let n = 0;
+  for (const ch of col) n = n * 26 + ch.charCodeAt(0) - 64;
+  return n;
+}
+
+function _numToCol(n) {
+  let s = '';
+  while (n > 0) { n--; s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26); }
+  return s;
+}
+
+function _offset(ctx, refAddr, rowOffset, colOffset, height, width) {
+  // refAddr is like "Sheet!A1"
+  if (typeof refAddr !== 'string') return 0;
+  const m = refAddr.match(/^(.+)!([A-Z]+)(\d+)$/);
+  if (!m) return 0;
+  const [, sheet, col, row] = m;
+  const newRow = parseInt(row) + (+rowOffset || 0);
+  const newCol = _colNum(col) + (+colOffset || 0);
+  const h = +height || 1;
+  const w = +width || 1;
+  if (h === 1 && w === 1) {
+    return ctx.get(`${sheet}!${_numToCol(newCol)}${newRow}`);
+  }
+  // Return array for multi-cell OFFSET
+  const result = [];
+  for (let r = 0; r < h; r++) {
+    for (let c = 0; c < w; c++) {
+      result.push(ctx.get(`${sheet}!${_numToCol(newCol + c)}${newRow + r}`));
+    }
+  }
+  return result;
+}
+
+// ── Financial functions ──
+function computeNPV(rate, cashflows) {
+  if (!Array.isArray(cashflows)) return 0;
+  return cashflows.reduce((acc, cf, i) => acc + (+cf || 0) / Math.pow(1 + rate, i + 1), 0);
+}
+
+function computeIRR(cashflows, guess) {
+  if (!Array.isArray(cashflows)) return 0;
+  const cfs = cashflows.map(v => +v || 0);
+  let r = guess !== undefined ? +guess : 0.1;
+  for (let i = 0; i < 200; i++) {
+    let npv = 0, dnpv = 0;
+    for (let t = 0; t < cfs.length; t++) {
+      const d = Math.pow(1 + r, t);
+      npv += cfs[t] / d;
+      dnpv -= t * cfs[t] / (d * (1 + r));
+    }
+    if (Math.abs(dnpv) < 1e-15) break;
+    const dr = npv / dnpv;
+    r -= dr;
+    if (Math.abs(dr) < 1e-10 && Math.abs(npv) < 1e-8) break;
+  }
+  return isFinite(r) ? r : 0;
+}
+
+function computeXIRR(cashflows, dates, guess) {
+  if (!Array.isArray(cashflows) || !Array.isArray(dates)) return 0;
+  const cfs = cashflows.map(v => +v || 0);
+  const ds = dates.map(d => typeof d === 'number' ? d : Date.parse(d) / 86400000 + 25569);
+  const d0 = ds[0];
+  let r = guess !== undefined ? +guess : 0.1;
+  for (let i = 0; i < 200; i++) {
+    let f = 0, df = 0;
+    for (let t = 0; t < cfs.length; t++) {
+      const years = (ds[t] - d0) / 365.25;
+      const disc = Math.pow(1 + r, years);
+      f += cfs[t] / disc;
+      df -= years * cfs[t] / (disc * (1 + r));
+    }
+    if (Math.abs(df) < 1e-15) break;
+    const dr = f / df;
+    r -= dr;
+    if (Math.abs(dr) < 1e-10 && Math.abs(f) < 1e-8) break;
+  }
+  return isFinite(r) ? r : 0;
+}
+
+function computePMT(rate, nper, pv) {
+  rate = +rate || 0; nper = +nper || 0; pv = +pv || 0;
+  if (rate === 0) return nper === 0 ? 0 : -pv / nper;
+  return -pv * rate * Math.pow(1 + rate, nper) / (Math.pow(1 + rate, nper) - 1);
+}
+
+function computePV(rate, nper, pmt) {
+  rate = +rate || 0; nper = +nper || 0; pmt = +pmt || 0;
+  if (rate === 0) return -pmt * nper;
+  return -pmt * (1 - Math.pow(1 + rate, -nper)) / rate;
+}
+
+function computeFV(rate, nper, pmt) {
+  rate = +rate || 0; nper = +nper || 0; pmt = +pmt || 0;
+  if (rate === 0) return -pmt * nper;
+  return -pmt * (Math.pow(1 + rate, nper) - 1) / rate;
+}
+
+function computeRATE(nper, pmt, pv) {
+  nper = +nper || 0; pmt = +pmt || 0; pv = +pv || 0;
+  let r = 0.1;
+  for (let i = 0; i < 100; i++) {
+    const f = pv * Math.pow(1+r, nper) + pmt * (Math.pow(1+r, nper) - 1) / r;
+    const df = nper * pv * Math.pow(1+r, nper-1) + pmt * (nper * Math.pow(1+r, nper-1) * r - Math.pow(1+r, nper) + 1) / (r * r);
+    if (Math.abs(df) < 1e-15) break;
+    const dr = -f / df;
+    r += dr;
+    if (Math.abs(dr) < 1e-10) break;
+  }
+  return isFinite(r) ? r : 0;
+}
+
+function computeNPER(rate, pmt, pv) {
+  rate = +rate || 0; pmt = +pmt || 0; pv = +pv || 0;
+  if (rate === 0) return pmt === 0 ? 0 : -pv / pmt;
+  return Math.log(-pmt / (pmt + pv * rate)) / Math.log(1 + rate);
+}"#
+    .to_string()
+}
+
+/// Generate the shared `_helpers.mjs` module with exported runtime helpers.
+fn generate_helpers_module() -> String {
+    // Re-use the same helper code but prefix each function with `export`
+    let raw = generate_runtime_helpers();
+    let mut out = String::with_capacity(raw.len() + 256);
+    out.push_str("// _helpers.mjs — Shared runtime helpers for chunked sheet modules\n");
+    out.push_str("// AUTO-GENERATED by rust-parser — do not edit manually.\n\n");
+    for line in raw.lines() {
+        if line.starts_with("function ") {
+            out.push_str("export ");
+            out.push_str(line);
+        } else if line.starts_with("// ── Runtime helpers") {
+            // Skip the old section header
+            continue;
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
+}
 
 fn cell_value_to_js(value: &Option<CellValue>) -> String {
     match value {
@@ -600,6 +1137,18 @@ fn sanitize_sheet_name(name: &str) -> String {
 
 fn escape_js_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn human_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
 }
 
 // ---------------------------------------------------------------------------

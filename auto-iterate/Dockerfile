@@ -59,7 +59,7 @@ VOLUME ["/data/models", "/data/output"]
 ENV ANTHROPIC_API_KEY=""
 ENV TARGET_ACCURACY="0.90"
 ENV MAX_ITERATIONS="30"
-ENV MODEL_NAME="claude-sonnet-4-6-20260220"
+ENV MODEL_NAME="claude-sonnet-4-6"
 ENV RUST_PARSER_BIN="/usr/local/bin/rust-parser"
 
 # Entry: pass the xlsx filename as the argument
