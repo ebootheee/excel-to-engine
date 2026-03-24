@@ -30,12 +30,17 @@ FROM node:20-slim AS runtime
 
 WORKDIR /app
 
-# Install cargo for rebuilds during iteration
+# Install build tools for Rust rebuilds during iteration
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl build-essential pkg-config libssl-dev && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    build-essential pkg-config libssl-dev && \
     rm -rf /var/lib/apt/lists/*
-ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Copy Rust toolchain from builder stage (avoids curl + rustup issues)
+COPY --from=rust-builder /usr/local/cargo /usr/local/cargo
+COPY --from=rust-builder /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME="/usr/local/rustup"
+ENV CARGO_HOME="/usr/local/cargo"
+ENV PATH="/usr/local/cargo/bin:${PATH}"
 
 # Copy the initial Rust binary
 COPY --from=rust-builder /build/rust-parser/target/release/rust-parser /usr/local/bin/rust-parser
