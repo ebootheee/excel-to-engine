@@ -96,7 +96,10 @@ async function main() {
   log(`[1/4] Parsing with rust-parser...`);
 
   try {
-    const { stdout, stderr } = await execFileAsync(RUST_PARSER, [inputPath, outputDir]);
+    // Always pass --chunked for per-sheet module compilation
+    const { stdout, stderr } = await execFileAsync(RUST_PARSER, [inputPath, outputDir, '--chunked'], {
+      maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large model stdout
+    });
     log(stdout.trim());
     if (stderr.trim()) log(`[stderr] ${stderr.trim()}`);
   } catch (err) {
@@ -185,7 +188,18 @@ async function main() {
   phase('eval', 'running');
   log(`[3/4] Starting eval loop (max ${MAX_ITERATIONS} iterations, target ${TARGET_ACCURACY * 100}%)...`);
 
-  const evalResult = await runEvalLoop(inputPath, outputDir, modelMap, formulas, groundTruthDirect);
+  // Detect chunked mode: if chunked/_ground-truth.json exists, use chunked eval path
+  const chunkedDir = join(outputDir, 'chunked');
+  const chunkedGtPath = join(chunkedDir, '_ground-truth.json');
+  const useChunked = existsSync(chunkedGtPath);
+
+  if (useChunked) {
+    log(`  Chunked mode detected — using per-sheet modules for eval`);
+  }
+
+  const evalResult = useChunked
+    ? await runChunkedEvalLoop(outputDir, chunkedDir)
+    : await runEvalLoop(inputPath, outputDir, modelMap, formulas, groundTruthDirect);
   diagnostics.finalScore = evalResult.finalScore;
   diagnostics.iterations = evalResult.iterations;
   diagnostics.stuckOutputs = evalResult.stuckOutputs;
@@ -392,6 +406,104 @@ function guessDiagnosis(failure) {
   if (failure.relError > 10) return 'formula_logic_error';
   if (failure.relError > 0.5) return 'large_deviation_check_formula';
   return 'small_calibration_offset';
+}
+
+// ── Chunked eval loop ───────────────────────────────────────────────────────
+async function runChunkedEvalLoop(outputDir, chunkedDir) {
+  const chunkedGtPath = join(chunkedDir, '_ground-truth.json');
+  const groundTruth = JSON.parse(await readFile(chunkedGtPath, 'utf8'));
+  const totalKnown = Object.keys(groundTruth).length;
+
+  if (totalKnown === 0) {
+    log('  Warning: No ground truth values in _ground-truth.json. Skipping eval.');
+    return { finalScore: 0, iterations: 0, stuckOutputs: [] };
+  }
+
+  log(`  Ground truth: ${totalKnown} cells from _ground-truth.json`);
+
+  const enginePath = resolve(join(chunkedDir, 'engine.js'));
+
+  // Single eval pass — chunked engine is deterministic (no calibration loop needed for initial eval)
+  const score = await evalChunkedEngine(enginePath, groundTruth);
+
+  log(`  Chunked eval: ${(score.accuracy * 100).toFixed(1)}% accuracy (${score.correct}/${score.total})`);
+  progress(0, score.accuracy, 0);
+
+  // Identify stuck outputs
+  const stuckOutputs = score.failures
+    .sort((a, b) => Math.abs(b.relError) - Math.abs(a.relError))
+    .slice(0, 20)
+    .map(f => ({
+      key: f.address,
+      error: Math.abs(f.relError),
+      excelValue: f.expected,
+      engineValue: f.actual,
+      suggestion: guessDiagnosis(f),
+    }));
+
+  await writeFile(
+    join(outputDir, 'eval-results.json'),
+    JSON.stringify({
+      mode: 'chunked',
+      finalScore: score.accuracy,
+      groundTruthCount: totalKnown,
+      passed: score.correct,
+      failed: score.failures.length,
+      failures: stuckOutputs,
+    }, null, 2)
+  );
+
+  return { finalScore: score.accuracy, iterations: 1, stuckOutputs };
+}
+
+async function evalChunkedEngine(enginePath, groundTruth) {
+  // Run the chunked engine in a child process
+  const evalScript = `
+import { run } from '${enginePath.replace(/\\/g, '/')}';
+const result = run();
+const gt = ${JSON.stringify(groundTruth)};
+let correct = 0, total = 0;
+const failures = [];
+for (const [addr, expected] of Object.entries(gt)) {
+  const actual = result.values[addr];
+  if (actual === undefined || actual === null) {
+    failures.push({ address: addr, expected, actual: null, relError: 1.0 });
+    total++;
+    continue;
+  }
+  total++;
+  // Handle text values: exact string match counts as correct
+  if (typeof expected === 'string' || typeof actual === 'string') {
+    if (String(actual) === String(expected)) { correct++; }
+    else { failures.push({ address: addr, expected, actual, relError: 1.0 }); }
+    continue;
+  }
+  const relError = Math.abs(expected) < 1e-9
+    ? Math.abs(actual)
+    : Math.abs((actual - expected) / expected);
+  if (relError < 0.01) {
+    correct++;
+  } else {
+    failures.push({ address: addr, expected, actual, relError });
+  }
+}
+process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, correct, total, failures }));
+`;
+
+  const tmpScript = join(dirname(enginePath), '_eval_chunked_tmp.mjs');
+  await writeFile(tmpScript, evalScript);
+
+  try {
+    const { stdout } = await execFileAsync('node', [tmpScript], {
+      timeout: 120000, // 2 min for large models
+      maxBuffer: 50 * 1024 * 1024,
+    });
+    return JSON.parse(stdout);
+  } catch (err) {
+    log(`  Chunked eval error: ${err.message}`);
+    if (err.stderr) log(`  stderr: ${err.stderr.slice(0, 500)}`);
+    return { accuracy: 0, correct: 0, total: 0, failures: [] };
+  }
 }
 
 // ── WebSocket monitor server ───────────────────────────────────────────────

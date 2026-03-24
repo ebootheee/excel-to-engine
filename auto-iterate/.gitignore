@@ -1,0 +1,12 @@
+# Model files — NEVER commit (proprietary financial data)
+models/
+*.xlsx
+
+# Output from iteration runs
+output/
+
+# API keys
+.env
+
+# Node modules
+node_modules/
