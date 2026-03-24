@@ -40,8 +40,9 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy the initial Rust binary
 COPY --from=rust-builder /build/rust-parser/target/release/rust-parser /usr/local/bin/rust-parser
 
-# Copy Rust source (for patching during iteration)
+# Copy Rust source AND the pre-built target dir (for fast rebuilds during iteration)
 COPY rust-parser/ /app/rust-parser/
+COPY --from=rust-builder /build/rust-parser/target /app/rust-parser/target
 
 # Install Node dependencies
 COPY auto-iterate/package.json ./
