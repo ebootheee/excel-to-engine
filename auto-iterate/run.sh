@@ -96,7 +96,7 @@ for MODEL in "${MODELS[@]}"; do
     -v "${MODEL_DIR}:/data/models:ro" \
     -v "${OUTPUT_DIR}:/data/output" \
     -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
-    -e TARGET_ACCURACY="${TARGET_ACCURACY:-0.85}" \
+    -e TARGET_ACCURACY="${TARGET_ACCURACY:-0.90}" \
     -e MAX_ITERATIONS="${MAX_ITERATIONS:-30}" \
     -e MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-20250514}" \
     "$IMAGE_NAME" \

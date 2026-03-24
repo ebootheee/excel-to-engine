@@ -57,7 +57,7 @@ VOLUME ["/data/models", "/data/output"]
 
 # Environment defaults
 ENV ANTHROPIC_API_KEY=""
-ENV TARGET_ACCURACY="0.85"
+ENV TARGET_ACCURACY="0.90"
 ENV MAX_ITERATIONS="30"
 ENV MODEL_NAME="claude-sonnet-4-20250514"
 ENV RUST_PARSER_BIN="/usr/local/bin/rust-parser"
