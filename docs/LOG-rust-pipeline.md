@@ -1,11 +1,14 @@
 # Rust Pipeline Execution Log
 
+> **Note**: Historical execution log. Crate moved to `pipelines/rust/` as of 2026-03-25.
+> References to `rust-parser/` below are from the original directory structure.
+
 ## 2026-03-23T16:20:00 Local — Session Start
 
 ### Context
 
 - Target architecture selected: **Option C (Chunked Compilation)**
-- Working directory: `excel-to-engine/rust-parser`
+- Working directory: `excel-to-engine/rust-parser` (now `pipelines/rust/`)
 - Goal: emit sheet-level JS modules + tiny DAG manifest + KPI ground truth + orchestrator
 
 ### Actions Taken

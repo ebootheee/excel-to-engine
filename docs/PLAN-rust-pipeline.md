@@ -1,5 +1,9 @@
 # Rust Engine Pipeline — Plan
 
+> **Note**: This is the original planning document from March 2026. Paths have since changed:
+> `rust-parser/` → `pipelines/rust/`, `container/` → `eval/`, `skill/` → `pipelines/js-reasoning/skill/`.
+> All phases below are **COMPLETE**. See `/PLAN.md` for current status.
+
 ## Vision
 
 Replace the slow, Claude-reasoning-heavy engine generation loop with a fast, containerized pipeline:

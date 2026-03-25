@@ -1,98 +1,104 @@
 # excel-to-engine — Roadmap
 
-## Near-Term (Next)
+## Now — Accuracy Improvement
 
-### Incremental Re-extraction
-- Store extraction metadata (which cells were read, what values were found) alongside model-map.json
-- On re-extraction, diff against previous values and only update changed fields
-- Generate a "model changes" report showing what moved between versions (e.g., Q3 → Q4 model update)
+### Transpiler Coverage
+- Implement INDIRECT function (dynamic cell references)
+- Fix 2D range handling edge cases for very large sheets
+- Handle array formulas / CSE (Ctrl+Shift+Enter) patterns
+- Improve SUBTOTAL dispatch (function_num variants beyond SUM)
 
-### Automated Test Harness
-- CI-friendly wrapper that runs `generate-control.mjs` then `compare-outputs.mjs` in sequence
-- Configurable tolerance per output key (tighter for returns, looser for intermediates)
-- HTML report generation from comparison-results.json
-- Regression detection: compare current baseline against previous baseline
+### Eval System
+- Increase blind eval question diversity (computed questions, cross-sheet aggregations)
+- Add time-period-aware questions ("What was X in Q3 2025?")
+- Profile and optimize per-sheet eval for sheets >150MB
+
+### Convergence Loop Accuracy
+- The 62-sheet circular cluster in the large model is the biggest accuracy blocker
+- Investigate running eval through the orchestrator (not per-sheet isolation) for circular sheets
+- Consider lazy subgraph evaluation (only compute transitive closure of target cells)
+
+## Near-Term
 
 ### Unit Test Suite
-- Tests for `lib/irr.mjs` with known IRR cases (simple, multi-year, edge cases)
-- Tests for `lib/waterfall.mjs` with standard American and European structures
+- Tests for `lib/irr.mjs` with known IRR cases
+- Tests for `lib/waterfall.mjs` with standard structures
 - Tests for `lib/calibration.mjs` convergence and edge cases
-- Tests for `lib/excel-parser.mjs` fingerprinting, year detection, classification with a synthetic test workbook
+- Tests for `lib/excel-parser.mjs` fingerprinting with synthetic workbooks
+
+### CI Pipeline
+- GitHub Actions: cargo build + smoke test + blind eval on synthetic model
+- Regression detection: compare accuracy against previous run
 
 ### Synthetic Example Project
 - Create a dummy PE fund model in Excel (no real data)
 - Run the full pipeline to produce engine + tests + dashboard
 - Include as `examples/synthetic-fund/` for reference
 
-### CLI Tool
-- `npx excel-to-engine analyze model.xlsx` — produce model-map.json
-- `npx excel-to-engine generate model-map.json` — produce engine.js skeleton
-- `npx excel-to-engine test engine.js model.xlsx` — run eval suite
-- `npx excel-to-engine dashboard` — generate dashboard from engine + model map
-
 ## Medium-Term
 
-### Enhanced Pattern Detection
-- Detect sensitivity tables (data tables in Excel)
-- Detect scenario switches (base/bull/bear toggles)
-- Detect debt schedule structures
-- Detect depreciation/amortization schedules
+### WASM Build
+- Compile Rust parser to WASM for browser-side Excel parsing
+- Upload .xlsx → get model-map instantly in browser
+- No server needed for the parse step
 
-### Multi-Sheet Engine Support
-- Generate engines with module-per-sheet architecture
-- Cross-sheet reference tracking in model map
-- Dependency graph visualization
+### Dashboard 2.0
+- Wire up the generated engine.js to an interactive dashboard
+- Scenario comparison mode (base vs bull vs bear)
+- Export to PDF
+- Dark mode
 
 ### TypeScript Support
 - Generate `engine.ts` with full type definitions
-- Type-safe model-map.json schema
 - Zod validation for inputs
 
-### Dashboard Enhancements
-- Scenario comparison mode (base vs bull vs bear)
-- Export to PDF
-- Shareable URL with encoded inputs
-- Dark mode
-
-## Long-Term
-
-### Excel Formula Transpiler
-- Direct Excel formula to JavaScript transpilation
-- Support common Excel functions (SUMPRODUCT, INDEX/MATCH, VLOOKUP, IF chains)
-- Reduce reliance on calibration for simple models
-
 ### Cloud Deployment
-- One-click deploy dashboard to Vercel/Netlify
-- API endpoint wrapping computeModel()
+- Deploy engine as API endpoint (Cloudflare Workers / Vercel Edge)
 - Webhook for re-running eval on model changes
-
-### Plugin System
-- Custom financial patterns (MIP, promote, clawback)
-- Custom output formatters
-- Custom chart types for the dashboard
 
 ## Done
 
-### Sensitivity Surface Validation & Multi-Point Calibration (2026-03-23)
-- `lib/sensitivity.mjs` — full sensitivity analysis library: surface extraction, comparison, elasticity, breakpoint detection, multi-point calibration
-- Synthetic PE model test proving multi-point calibration improves accuracy from 40% → 100% at breakpoints
-- SKILL.md updated with sensitivity extraction (Phase 1), multi-point calibration (Phase 2), and slope validation (Phase 3)
+### Repo Restructure (2026-03-25)
+- Two clean pipelines: `pipelines/rust/` and `pipelines/js-reasoning/`
+- Unified eval tools in `eval/`
+- All proprietary references scrubbed
+- Merged to main
 
-### Sheet Fingerprinting & Multi-Year Extraction (2026-03-21)
-- `fingerprintSheet()` / `fingerprintWorkbook()` — auto-detect row-to-field mappings across identical sheets using fuzzy label matching
-- `matchLabel()` — fuzzy matcher with 50+ financial term aliases (revenue, EBITDA/EBITDAR/NOI, rent, IRR, MOIC, etc.)
-- `detectYearRow()` — auto-detect year row and map columns to calendar years
-- `extractMultiYear()` / `extractByYear()` — extract field values across years or for a specific reference year
-- `detectEscalation()` — detect growth/escalation rates between adjacent years (catches rent escalation)
-- `classifyAsset()` — auto-classify assets as leased/managed based on rent presence, labels, and metadata signals
-- SKILL.md updated with fingerprinting workflow, reference year guidance, cross-sheet validation, and asset classification
-- Model map schema updated to v1.1.0 with `referenceYear`, `sheetGroups`, `yearColumns`, and `assets` fields
+### Blind Eval System (2026-03-25)
+- `eval/blind-eval.mjs` — Independent Claude API validation with tool_use
+- `eval/generate-questions.mjs` — Natural-language financial questions from ground truth
+- `eval/analyze-report.mjs` — Structured failure analysis with fix recommendations
+- 50/50 (100%) on mid-size 38-sheet model
 
-### Eval Framework (2026-03-19)
-- `eval-framework/generate-control.mjs` — reads BASE_CASE from engine, generates test matrix
-- `eval-framework/compare-outputs.mjs` — compares candidate vs control with input alias normalization
+### Auto-Iteration Container (2026-03-24)
+- Docker container: parse → eval → Claude API diagnose → patch → rebuild → re-eval → loop
+- Resource monitoring in terminal (CPU/mem/network)
+- Mac + Windows compatible
+- Handles 3 models sequentially
 
-### Skill: Terminology Mapping (2026-03-19)
-- Financial term aliases in SKILL.md (incentive structures, waterfall, returns, share economics)
-- Parallelization guidance across all 4 phases
-- Cheat sheet pattern for fast Excel analysis
+### Chunked Compilation (2026-03-24)
+- Per-sheet JS modules instead of monolithic engine
+- Sheet-level dependency DAG with convergence loops for circular references
+- 82 sheets compile and run without OOM
+- Compact mode auto-enables for workbooks >50K cells
+
+### Rust Parser + Transpiler (2026-03-23)
+- 8 Rust modules, ~5,000 lines
+- ~60 Excel functions transpiled
+- Rayon parallelization (3.8x speedup)
+- Iterative Tarjan SCC (handles 3M+ nodes)
+- 87.6% accuracy on 82-sheet model (2532/2890 cells)
+
+### Sensitivity Surface Validation (2026-03-23)
+- `lib/sensitivity.mjs` — surface extraction, comparison, multi-point calibration
+- Proves multi-point calibration improves accuracy from 40% → 100% at breakpoints
+
+### Sheet Intelligence (2026-03-21)
+- Sheet fingerprinting with 50+ financial term aliases
+- Year detection, multi-year extraction, escalation detection
+- Asset classification
+
+### Core Libraries + Skill (2026-03-19)
+- IRR, waterfall, calibration, Excel parser, self-eval libraries
+- Claude Code skill for 4-phase pipeline
+- Dashboard templates (Tailwind + Chart.js, zero build step)

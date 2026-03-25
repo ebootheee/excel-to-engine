@@ -1,65 +1,89 @@
 # excel-to-engine — Plan
 
-## Status: Phase 3 — Rust Pipeline (Phase 1+2 complete, Docker skeleton done)
+## Status: Rust Pipeline Complete, Eval Loop Validated, Improving Accuracy
 
 ## Objective
 
-Build an open-source toolkit that converts complex financial Excel models (.xlsx) into JavaScript computation engines with calibrated accuracy, automated test suites, and interactive dashboards.
+Build an open-source toolkit that converts complex financial Excel models (.xlsx) into JavaScript computation engines. Two pipeline options: a fast Rust transpiler for large models, and a Claude-reasoning approach for smaller ones. Unified blind eval validates both.
 
 ## Architecture
 
 ```
 excel-to-engine/
-├── lib/               # Reusable financial computation libraries
-│   ├── irr.mjs        # Newton-Raphson IRR solver
-│   ├── waterfall.mjs  # PE distribution waterfall
-│   ├── calibration.mjs # Auto-calibration framework
-│   └── excel-parser.mjs # Excel reader + model detection
-├── templates/         # Code generation templates
-│   ├── engine-template.js
-│   └── dashboard/     # HTML dashboard (Tailwind + Chart.js)
-├── skill/             # Claude Code skill definition
-│   └── SKILL.md
-└── tests/             # (generated per-model)
+├── pipelines/
+│   ├── rust/                    # Fast: Rust parser + formula transpiler + chunked compilation
+│   │   ├── src/ (8 modules)    # parser, transpiler, AST, dependency, chunked_emitter, etc.
+│   │   └── tests/              # Synthetic model smoke test (78/78 = 100%)
+│   └── js-reasoning/            # Original: Claude reads Excel → reasons → writes engine.js
+│       ├── skill/SKILL.md       # 4-phase pipeline skill
+│       ├── templates/           # Engine, eval, dashboard templates
+│       └── eval-framework/      # generate-control, compare-outputs
+├── eval/                        # Unified eval tools
+│   ├── blind-eval.mjs           # Blind Claude API eval (50/50 on mid-size model)
+│   ├── generate-questions.mjs   # Question generator from ground truth
+│   ├── analyze-report.mjs       # Failure analysis + fix recommendations
+│   ├── iterate.mjs              # Auto-iteration container loop
+│   ├── Dockerfile, run.sh       # Containerized overnight runs
+│   └── pipeline.mjs             # Pipeline orchestrator
+├── lib/                         # Shared JS libraries (irr, waterfall, calibration, etc.)
+└── tests/synthetic-pe-model/    # Integration test
 ```
 
-## Phases
+## Completed Phases
 
 ### Phase 1 — Core Libraries (DONE)
 - [x] `lib/irr.mjs` — Newton-Raphson IRR with bisection fallback + XIRR
-- [x] `lib/waterfall.mjs` — Generic PE waterfall (American + European)
+- [x] `lib/waterfall.mjs` — PE distribution waterfall (American + European)
 - [x] `lib/calibration.mjs` — Auto-calibration with ratio/offset modes
-- [x] `lib/excel-parser.mjs` — Cell reading, input/output detection, model map builder
-- [x] `templates/engine-template.js` — Engine skeleton with calibration system
-- [x] `templates/dashboard/` — 2-tab HTML dashboard (explorer + eval)
-- [x] `skill/SKILL.md` — Claude Code skill for 4-phase pipeline
-- [x] Project documentation (README, CLAUDE.md, PLAN, CHANGELOG, ROADMAP)
+- [x] `lib/sensitivity.mjs` — Surface extraction, slope comparison, multi-point calibration
+- [x] `lib/excel-parser.mjs` — Cell reading, sheet fingerprinting, year detection, field mapping
 
-### Phase 1.5 — Sheet Intelligence (DONE)
-- [x] Sheet fingerprinting — auto-detect row-to-field mappings with fuzzy label matching
-- [x] Year detection — auto-detect year rows and column-to-year mapping
-- [x] Multi-year extraction — extract time series per field across years
-- [x] Reference year extraction — extract all fields for a target projection year
-- [x] Escalation detection — compute year-over-year growth rates
-- [x] Asset classification — auto-classify leased/managed from metadata signals
-- [x] SKILL.md updated with fingerprinting workflow, cross-sheet validation, reference year guidance
+### Phase 2 — Sheet Intelligence (DONE)
+- [x] Sheet fingerprinting with 50+ financial term aliases
+- [x] Year detection, multi-year extraction, escalation detection
+- [x] Asset classification (leased/managed)
+- [x] Sensitivity surface validation (40% → 100% at breakpoints)
 
-### Phase 1.75 — Sensitivity Surface Validation (DONE)
-- [x] `lib/sensitivity.mjs` — surface extraction, comparison, elasticity, breakpoint detection
-- [x] Multi-point calibration with piecewise-linear corrections
-- [x] Synthetic PE model test (`tests/synthetic-pe-model/`) proving 40% → 100% accuracy improvement
-- [x] SKILL.md updated with sensitivity extraction, multi-point calibration, and slope validation guidance
-- [x] Exported `getNestedValue`/`setNestedValue` from calibration.mjs
+### Phase 3 — Rust Parser + Transpiler (DONE)
+- [x] 8 Rust modules: parser, formula_ast, transpiler, dependency, circular, model_map, sheet_partition, chunked_emitter
+- [x] ~60 Excel functions transpiled (SUM, IF, VLOOKUP, INDEX/MATCH, IRR, SUMIF, etc.)
+- [x] Tarjan SCC for circular reference detection + convergence loops
+- [x] Chunked compilation: per-sheet .mjs modules (solves OOM for large models)
+- [x] Rayon parallelization (3.8x speedup)
+- [x] Synthetic model: 78/78 (100%)
 
-### Phase 2 — Testing + Validation (Next)
-- [ ] Unit tests for lib/irr.mjs (known IRR cases)
-- [ ] Unit tests for lib/waterfall.mjs (standard structures)
-- [ ] Unit tests for lib/calibration.mjs (convergence)
-- [x] Integration test with a synthetic PE model (sensitivity surface validation)
-- [ ] CI pipeline
+### Phase 4 — Eval System (DONE)
+- [x] Blind eval with Claude API tool_use (50/50 = 100% on mid-size model)
+- [x] Question generator from ground truth
+- [x] Analysis reporter with fix recommendations
+- [x] Auto-iteration container (Docker, Mac + Windows compatible)
+- [x] Per-sheet eval for memory safety on large models
+- [x] Resource monitoring in terminal
 
-### Phase 3 — Polish + Publish
-- [ ] npm publish preparation
+### Phase 5 — Repo Restructure (DONE)
+- [x] Two clean pipelines: `pipelines/rust/` and `pipelines/js-reasoning/`
+- [x] Unified eval in `eval/`
+- [x] All proprietary references scrubbed
+- [x] Merged to main
+
+## Current Phase — Accuracy Improvement
+
+### Best Results So Far
+| Model | Per-Sheet Eval | Blind Eval |
+|-------|---------------|------------|
+| Synthetic (3 sheets) | 100% (78/78) | 100% (10/10) |
+| Mid-size (38 sheets) | 75.9% | 100% (50/50) |
+| Large (82 sheets) | 87.6% (2532/2890) | In progress |
+
+### Active Improvement Areas
+- [ ] Implement missing Excel functions (INDIRECT, array formulas)
+- [ ] Fix 2D range handling edge cases for large sheets
+- [ ] Improve convergence loop accuracy for 62-sheet circular cluster
+- [ ] Reduce per-sheet eval memory for sheets >150MB
+
+## Next Phase — Polish + Publish
+- [ ] Unit tests for all lib/ modules
 - [ ] GitHub Actions CI
+- [ ] npm publish preparation
 - [ ] Example project with synthetic data
 - [ ] Contributing guide

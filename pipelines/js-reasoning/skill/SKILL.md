@@ -380,7 +380,7 @@ This surface data will be used in Phase 2 for multi-point calibration instead of
 
 ## Phase 2 — Generate
 
-Create `engine.js` as an ES module. Use `templates/engine-template.js` as the starting skeleton.
+Create `engine.js` as an ES module. Use `pipelines/js-reasoning/templates/engine-template.js` as the starting skeleton.
 
 ### Steps
 
@@ -892,7 +892,7 @@ These are common financial invariants. Adapt to the specific model:
 
 ## Phase 4 — Dashboard
 
-Generate an interactive HTML dashboard from `templates/dashboard/`.
+Generate an interactive HTML dashboard from `pipelines/js-reasoning/templates/dashboard/`.
 
 ### Steps
 

@@ -1,8 +1,12 @@
 # Rust Engine Pipeline Plan (Chunked Compilation)
 
-Date: 2026-03-23  
-Owner: Active agent handoff plan  
-Status: In progress (Model-A UAT started, 59.3% accuracy on spot-check)
+> **Note**: Historical planning document. All milestones are **COMPLETE**.
+> Crate moved to `pipelines/rust/`. Final accuracy: 87.6% on 82-sheet model.
+> See `/PLAN.md` for current status.
+
+Date: 2026-03-23
+Owner: Active agent handoff plan
+Status: **COMPLETE** — All 7 milestones done, 87.6% accuracy on large model
 
 ## Objective
 
