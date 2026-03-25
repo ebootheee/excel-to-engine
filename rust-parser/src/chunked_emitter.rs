@@ -627,22 +627,47 @@ class ComputeContext {
   }
 
   /**
+   * Parse a range string into {sheet, c1, r1, c2, r2}.
+   * Returns null if the range doesn't match the expected pattern.
+   */
+  _parseRange(rangeStr) {
+    const match = rangeStr.match(/^(.+)!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+    if (!match) return null;
+    const [, sheet, col1, row1, col2, row2] = match;
+    return { sheet, c1: colToNum(col1), r1: parseInt(row1), c2: colToNum(col2), r2: parseInt(row2) };
+  }
+
+  /**
    * Get a range of values as a flat array.
    * @param {string} rangeStr - e.g. "Sheet1!A1:B3"
    */
   range(rangeStr) {
-    // Simple implementation: match all keys that fall in the range
-    const match = rangeStr.match(/^(.+)!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
-    if (!match) return [];
-    const [, sheet, col1, row1, col2, row2] = match;
-    const c1 = colToNum(col1), c2 = colToNum(col2);
-    const r1 = parseInt(row1), r2 = parseInt(row2);
+    const p = this._parseRange(rangeStr);
+    if (!p) return [];
     const result = [];
-    for (let r = r1; r <= r2; r++) {
-      for (let c = c1; c <= c2; c++) {
-        const addr = `${sheet}!${numToCol(c)}${r}`;
-        result.push(this.get(addr));
+    for (let r = p.r1; r <= p.r2; r++) {
+      for (let c = p.c1; c <= p.c2; c++) {
+        result.push(this.get(`${p.sheet}!${numToCol(c)}${r}`));
       }
+    }
+    return result;
+  }
+
+  /**
+   * Get a range as a 2D array (row-major). Required for INDEX(range, row, col).
+   * @param {string} rangeStr - e.g. "Sheet1!A1:C3"
+   * @returns {Array<Array<any>>} - [[r1c1, r1c2, ...], [r2c1, r2c2, ...], ...]
+   */
+  range2d(rangeStr) {
+    const p = this._parseRange(rangeStr);
+    if (!p) return [];
+    const result = [];
+    for (let r = p.r1; r <= p.r2; r++) {
+      const row = [];
+      for (let c = p.c1; c <= p.c2; c++) {
+        row.push(this.get(`${p.sheet}!${numToCol(c)}${r}`));
+      }
+      result.push(row);
     }
     return result;
   }
@@ -857,12 +882,20 @@ function _match(val, arr, matchType) {
 
 function _vlookup(val, table, colIdx, exact) {
   if (!Array.isArray(table)) return 0;
-  for (const row of table) {
-    if (Array.isArray(row) && (row[0] === val || (!exact && typeof row[0] === 'number' && typeof val === 'number' && row[0] <= val))) {
-      return row[(+colIdx || 1) - 1] ?? 0;
+  const ci = (+colIdx || 1) - 1;
+  if (exact) {
+    for (const row of table) {
+      if (Array.isArray(row) && row[0] === val) return row[ci] ?? 0;
     }
+    return 0;
   }
-  return 0;
+  // Approximate match: find last row where first col <= val (assumes sorted ascending)
+  let best = -1;
+  for (let i = 0; i < table.length; i++) {
+    const row = table[i];
+    if (Array.isArray(row) && typeof row[0] === 'number' && row[0] <= val) best = i;
+  }
+  return best >= 0 ? (table[best][ci] ?? 0) : 0;
 }
 
 function _hlookup(val, table, rowIdx, exact) {

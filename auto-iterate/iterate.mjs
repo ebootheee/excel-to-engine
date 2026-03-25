@@ -323,7 +323,7 @@ process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top30 
     const tmpScript = join(outputDir, '_eval_tmp.mjs');
     await writeFile(tmpScript, evalScript);
 
-    const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=16384', tmpScript], {
+    const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=28672', tmpScript], {
       timeout: 600000, // 10 min for large models
       maxBuffer: 100 * 1024 * 1024,
     });
@@ -452,20 +452,37 @@ import { compute } from '${resolve(sheetModulePath).replace(/\\/g, '/')}';
 const allGt = JSON.parse(await readFile('${resolve(gtTmpPath).replace(/\\/g, '/')}', 'utf8'));
 const sheetGt = JSON.parse(await readFile('${resolve(sheetGtPath).replace(/\\/g, '/')}', 'utf8'));
 
+const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
+const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
 const ctx = {
   values: {},
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
   set(addr, value) { this.values[addr] = value; },
-  range(rangeStr) {
+  _parseRange(rangeStr) {
     const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
-    if (!m) return [];
+    if (!m) return null;
     const [, sheet, c1, r1, c2, r2] = m;
+    return { sheet, c1: cn(c1), r1: +r1, c2: cn(c2), r2: +r2 };
+  },
+  range(rangeStr) {
+    const p = this._parseRange(rangeStr);
+    if (!p) return [];
     const result = [];
-    const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
-    const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
-    for (let r = +r1; r <= +r2; r++)
-      for (let c = cn(c1); c <= cn(c2); c++)
-        result.push(this.get(sheet+'!'+nc(c)+r));
+    for (let r = p.r1; r <= p.r2; r++)
+      for (let c = p.c1; c <= p.c2; c++)
+        result.push(this.get(p.sheet+'!'+nc(c)+r));
+    return result;
+  },
+  range2d(rangeStr) {
+    const p = this._parseRange(rangeStr);
+    if (!p) return [];
+    const result = [];
+    for (let r = p.r1; r <= p.r2; r++) {
+      const row = [];
+      for (let c = p.c1; c <= p.c2; c++)
+        row.push(this.get(p.sheet+'!'+nc(c)+r));
+      result.push(row);
+    }
     return result;
   }
 };
@@ -508,7 +525,7 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
     await writeFile(tmpScript, evalScript);
 
     try {
-      const { stdout: evalOut, stderr: evalErr } = await execAsync('node', ['--max-old-space-size=16384', tmpScript], {
+      const { stdout: evalOut, stderr: evalErr } = await execAsync('node', ['--max-old-space-size=28672', tmpScript], {
         timeout: 300000, // 5 min per sheet
         maxBuffer: 100 * 1024 * 1024,
       });
@@ -572,6 +589,31 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
   }
 
   const accuracy = totalTested > 0 ? totalCorrect / totalTested : 0;
+
+  // Enrich top failures with transpiled JS from sheet modules (for Claude diagnosis)
+  const enrichedFailures = [];
+  for (const f of allFailures.slice(0, 50)) {
+    const addr = f.address || '';
+    const bang = addr.indexOf('!');
+    if (bang > 0 && !addr.startsWith('SHEET_ERROR:') && !addr.startsWith('EVAL_CRASH:')) {
+      const sheet = addr.slice(0, bang);
+      const sanitized = sheet.replace(/[^a-zA-Z0-9]/g, '_');
+      const modulePath = join(chunkedDir, 'sheets', `${sanitized}.mjs`);
+      try {
+        const moduleContent = await readFile(modulePath, 'utf8');
+        // Find the ctx.set("addr", ...) line for this cell
+        const escapedAddr = addr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const match = moduleContent.match(new RegExp(`ctx\\.set\\("${escapedAddr}",\\s*(.{1,300})`));
+        if (match) {
+          f.transpiled = match[1].replace(/\);\s*$/, '');
+        }
+      } catch { /* module not readable, skip enrichment */ }
+    }
+    enrichedFailures.push(f);
+  }
+  // Replace allFailures with enriched version for Claude
+  allFailures.length = 0;
+  allFailures.push(...enrichedFailures);
 
   // Summary table
   log('');

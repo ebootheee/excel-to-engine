@@ -345,7 +345,19 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "VLOOKUP" => {
             // VLOOKUP(lookup_value, table_array, col_index, [range_lookup])
             let val = arg(0);
-            let arr = transpile(args.get(1).unwrap_or(&Expr::Number(0.0)), config);
+            // VLOOKUP table must be 2D for col_index to work
+            let arr = if config.use_ctx_get {
+                match args.get(1) {
+                    Some(Expr::Range(r1, r2)) => {
+                        let sheet = r1.sheet.as_deref().unwrap_or(r2.sheet.as_deref().unwrap_or(&config.default_sheet));
+                        let escaped = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+                        format!("ctx.range2d(\"{}!{}{}:{}{}\")", escaped, r1.col, r1.row, r2.col, r2.row)
+                    }
+                    _ => transpile(args.get(1).unwrap_or(&Expr::Number(0.0)), config),
+                }
+            } else {
+                transpile(args.get(1).unwrap_or(&Expr::Number(0.0)), config)
+            };
             let col_idx = arg(2);
             let exact = args.get(3)
                 .map(|a| match a { Expr::Bool(false) => "true", Expr::Number(n) if *n == 0.0 => "true", _ => "false" })
@@ -355,7 +367,19 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
 
         "HLOOKUP" => {
             let val = arg(0);
-            let arr = transpile(args.get(1).unwrap_or(&Expr::Number(0.0)), config);
+            // HLOOKUP table must be 2D for row_index to work
+            let arr = if config.use_ctx_get {
+                match args.get(1) {
+                    Some(Expr::Range(r1, r2)) => {
+                        let sheet = r1.sheet.as_deref().unwrap_or(r2.sheet.as_deref().unwrap_or(&config.default_sheet));
+                        let escaped = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+                        format!("ctx.range2d(\"{}!{}{}:{}{}\")", escaped, r1.col, r1.row, r2.col, r2.row)
+                    }
+                    _ => transpile(args.get(1).unwrap_or(&Expr::Number(0.0)), config),
+                }
+            } else {
+                transpile(args.get(1).unwrap_or(&Expr::Number(0.0)), config)
+            };
             let row_idx = arg(2);
             let exact = args.get(3)
                 .map(|a| match a { Expr::Bool(false) => "true", Expr::Number(n) if *n == 0.0 => "true", _ => "false" })
@@ -371,9 +395,23 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         }
 
         "INDEX" => {
-            let arr = arg(0);
             let row_num = arg(1);
             let col_num = if args.len() >= 3 { arg(2) } else { "1".to_string() };
+            // If the first arg is a Range and we have both row+col, use range2d for 2D lookup
+            let has_col = args.len() >= 3;
+            let arr = if config.use_ctx_get && has_col {
+                // Check if first arg is a Range — emit range2d instead of range
+                match args.first() {
+                    Some(Expr::Range(r1, r2)) => {
+                        let sheet = r1.sheet.as_deref().unwrap_or(r2.sheet.as_deref().unwrap_or(&config.default_sheet));
+                        let escaped = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+                        format!("ctx.range2d(\"{}!{}{}:{}{}\")", escaped, r1.col, r1.row, r2.col, r2.row)
+                    }
+                    _ => arg(0), // fallback to normal transpilation
+                }
+            } else {
+                arg(0)
+            };
             format!("_index({}, {}, {})", arr, row_num, col_num)
         }
 
