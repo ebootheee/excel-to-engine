@@ -7,6 +7,7 @@ use crate::circular::generate_cluster_loop;
 use crate::parser::WorkbookData;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::io::Write;
 
 // ---------------------------------------------------------------------------
 // formulas.json schema
@@ -26,9 +27,19 @@ pub struct FormulaEntry {
 /// Build formulas.json from all formula cells across all sheets.
 pub fn build_formulas_json(workbook: &WorkbookData) -> Vec<FormulaEntry> {
     let mut entries = Vec::new();
+    let total_sheets = workbook.sheets.len();
 
-    for sheet in &workbook.sheets {
-        let config = TranspileConfig {
+    for (si, sheet) in workbook.sheets.iter().enumerate() {
+        eprint!(
+            "\r[rust-parser]   Transpiling [{}/{}] {} ({} formulas)...",
+            si + 1,
+            total_sheets,
+            sheet.name,
+            sheet.formula_cells.len()
+        );
+        std::io::stderr().flush().ok();
+
+        let config = TranspileConfig { use_ctx_get: false,
             default_sheet: sheet.name.clone(),
             use_flat_vars: true,
         };
@@ -62,6 +73,7 @@ pub fn build_formulas_json(workbook: &WorkbookData) -> Vec<FormulaEntry> {
             }
         }
     }
+    eprintln!(); // newline after transpile progress
 
     entries
 }
@@ -134,7 +146,7 @@ pub fn generate_raw_engine(
     let mut input_count = 0usize;
     let mut skipped_count = 0usize;
     for sheet in &workbook.sheets {
-        let config = TranspileConfig {
+        let config = TranspileConfig { use_ctx_get: false,
             default_sheet: sheet.name.clone(),
             use_flat_vars: true,
         };
@@ -176,7 +188,7 @@ pub fn generate_raw_engine(
 
     // Declare all formula cells as let (initially undefined)
     for entry in formula_entries {
-        let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig {
+        let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig { use_ctx_get: false,
             default_sheet: entry.sheet.clone(),
             use_flat_vars: true,
         });
@@ -194,7 +206,7 @@ pub fn generate_raw_engine(
     // Helper closure: qualified_address → var_name
     let var_for = |addr: &str| -> String {
         if let Some((sheet, cell_addr)) = addr_meta.get(addr) {
-            addr_to_var(sheet, cell_addr, &TranspileConfig {
+            addr_to_var(sheet, cell_addr, &TranspileConfig { use_ctx_get: false,
                 default_sheet: sheet.clone(),
                 use_flat_vars: true,
             })
@@ -203,7 +215,7 @@ pub fn generate_raw_engine(
             if let Some(bang) = addr.find('!') {
                 let sheet = &addr[..bang];
                 let cell_addr = &addr[bang + 1..];
-                addr_to_var(sheet, cell_addr, &TranspileConfig {
+                addr_to_var(sheet, cell_addr, &TranspileConfig { use_ctx_get: false,
                     default_sheet: sheet.to_string(),
                     use_flat_vars: true,
                 })
@@ -263,7 +275,7 @@ pub fn generate_raw_engine(
 
     for entry in formula_entries {
         if !topo_seen.contains(&entry.qualified_address) {
-            let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig {
+            let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig { use_ctx_get: false,
                 default_sheet: entry.sheet.clone(),
                 use_flat_vars: true,
             });
@@ -277,7 +289,7 @@ pub fn generate_raw_engine(
 
     // Collect all computed vars into outputs
     for entry in formula_entries {
-        let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig {
+        let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig { use_ctx_get: false,
             default_sheet: entry.sheet.clone(),
             use_flat_vars: true,
         });

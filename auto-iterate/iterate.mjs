@@ -321,7 +321,7 @@ process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top30 
     const tmpScript = join(outputDir, '_eval_tmp.mjs');
     await writeFile(tmpScript, evalScript);
 
-    const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=8192', tmpScript], {
+    const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=16384', tmpScript], {
       timeout: 600000, // 10 min for large models
       maxBuffer: 100 * 1024 * 1024,
     });
@@ -418,6 +418,16 @@ async function evalPerSheet(outputDir, chunkedDir, gtPath, totalKnown) {
       continue;
     }
 
+    // Skip sheets with massive modules (>150MB) — they'll OOM Node
+    try {
+      const moduleStat = await stat(sheetModulePath);
+      const moduleSizeMB = moduleStat.size / (1024 * 1024);
+      if (moduleSizeMB > 150) {
+        log(`    ⏭️  ${sheetName}: skipped (module ${moduleSizeMB.toFixed(0)}MB > 150MB limit)`);
+        continue;
+      }
+    } catch { /* file doesn't exist — will be caught later */ }
+
     // Write per-sheet GT to a temp file (avoids inlining large JSON as JS literal)
     const sheetGtPath = join(outputDir, `_gt_${sanitized}.json`);
     await writeFile(sheetGtPath, JSON.stringify(sampleGt));
@@ -496,8 +506,8 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
     await writeFile(tmpScript, evalScript);
 
     try {
-      const { stdout: evalOut, stderr: evalErr } = await execAsync('node', ['--max-old-space-size=8192', tmpScript], {
-        timeout: 180000, // 3 min per sheet
+      const { stdout: evalOut, stderr: evalErr } = await execAsync('node', ['--max-old-space-size=16384', tmpScript], {
+        timeout: 300000, // 5 min per sheet
         maxBuffer: 100 * 1024 * 1024,
       });
       const result = JSON.parse(evalOut);

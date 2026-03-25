@@ -124,15 +124,40 @@ fn main() {
     );
 
     // Phase 3: Build formulas.json (parse + transpile all formulas)
+    // In --chunked mode, skip full transpilation — the chunked emitter does its own.
+    // We still need a quick stats-only pass for the formulas.json metadata.
     let t2 = Instant::now();
-    let formula_entries = build_formulas_json(&workbook);
-    let total_formulas = formula_entries.len();
-    let parse_errors = formula_entries
+    let total_formulas: usize;
+    let parse_errors: usize;
+    let formulas_path = output_dir.join("formulas.json");
+    let formulas_written_size: usize;
+    let formula_entries: Option<Vec<FormulaEntry>>;
+
+    if chunked_flag {
+        // Fast path: count formulas and write stats-only metadata (no transpilation)
+        total_formulas = workbook.total_formula_cells;
+        parse_errors = 0; // not computed in fast path
+        formula_entries = None;
+        let slim = serde_json::json!({
+            "_compact": true,
+            "_chunked_mode": true,
+            "_total_formulas": total_formulas,
+            "_note": "Full transpilation skipped — chunked emitter handles parse+transpile per-sheet"
+        });
+        let formulas_json = serde_json::to_string(&slim).expect("JSON serialization failed");
+        formulas_written_size = formulas_json.len();
+        fs::write(&formulas_path, &formulas_json).expect("Failed to write formulas.json");
+        println!(
+            "[rust-parser] formulas.json (chunked mode, stats only): {} formulas in {}ms",
+            total_formulas, t2.elapsed().as_millis()
+        );
+    } else {
+    let fe = build_formulas_json(&workbook);
+    total_formulas = fe.len();
+    parse_errors = fe
         .iter()
         .filter(|e| e.parse_error.is_some())
         .count();
-    let formulas_path = output_dir.join("formulas.json");
-    let formulas_written_size: usize;
     if compact && total_formulas > 50_000 {
         // For large models, write TWO files:
         // 1. ground-truth.json: just {address: value} pairs for the eval loop (~20-50MB vs 5GB)
@@ -140,7 +165,7 @@ fn main() {
 
         let mut gt_map = serde_json::Map::new();
         let mut gt_count = 0usize;
-        for e in &formula_entries {
+        for e in &fe {
             if let Some(val) = e.excel_result {
                 gt_map.insert(
                     e.qualified_address.clone(),
@@ -160,7 +185,7 @@ fn main() {
         );
 
         // Write a slim formulas.json with just stats + error sample
-        let error_sample: Vec<&FormulaEntry> = formula_entries
+        let error_sample: Vec<&FormulaEntry> = fe
             .iter()
             .filter(|e| e.parse_error.is_some())
             .take(50)
@@ -182,9 +207,9 @@ fn main() {
         );
     } else {
         let formulas_json = if compact {
-            serde_json::to_string(&formula_entries).expect("JSON serialization failed")
+            serde_json::to_string(&fe).expect("JSON serialization failed")
         } else {
-            serde_json::to_string_pretty(&formula_entries).expect("JSON serialization failed")
+            serde_json::to_string_pretty(&fe).expect("JSON serialization failed")
         };
         formulas_written_size = formulas_json.len();
         fs::write(&formulas_path, &formulas_json).expect("Failed to write formulas.json");
@@ -194,104 +219,121 @@ fn main() {
             human_size(formulas_written_size)
         );
     }
+    formula_entries = Some(fe);
+    } // end else (non-chunked Phase 3)
 
     // Phase 4: Build dependency graph + cycle detection
-    let t3 = Instant::now();
+    // Skip for --chunked mode: the chunked emitter uses its own sheet-level DAG
+    // and cell-level graph for 3M+ nodes is too memory-intensive (~6GB+)
+    let dep_graph;
+    let cycle_count;
+    if chunked_flag {
+        println!("[rust-parser] Skipping cell-level dependency graph (chunked mode uses sheet-level DAG)");
+        dep_graph = None;
+        cycle_count = 0;
+    } else {
+        let t3 = Instant::now();
 
-    let formula_triples: Vec<(String, String, String)> = workbook
-        .sheets
-        .iter()
-        .flat_map(|sheet| {
-            sheet.cells.iter().filter_map(move |cell| {
-                cell.formula.as_ref().map(|f| {
-                    (
-                        format!("{}!{}", sheet.name, cell.address),
-                        f.clone(),
-                        sheet.name.clone(),
-                    )
+        let formula_triples: Vec<(String, String, String)> = workbook
+            .sheets
+            .iter()
+            .flat_map(|sheet| {
+                sheet.cells.iter().filter_map(move |cell| {
+                    cell.formula.as_ref().map(|f| {
+                        (
+                            format!("{}!{}", sheet.name, cell.address),
+                            f.clone(),
+                            sheet.name.clone(),
+                        )
+                    })
                 })
             })
-        })
-        .collect();
+            .collect();
 
-    let dep_graph = build_graph(&formula_triples);
-    let cycle_count = dep_graph.cycles.iter().filter(|c| c.len() > 1).count();
-    let dep_json = if compact {
-        serde_json::to_string(&dep_graph).expect("JSON serialization failed")
-    } else {
-        serde_json::to_string_pretty(&dep_graph).expect("JSON serialization failed")
-    };
-    let dep_path = output_dir.join("dependency-graph.json");
-    fs::write(&dep_path, &dep_json).expect("Failed to write dependency-graph.json");
-    println!(
-        "[rust-parser] dependency-graph.json: {} nodes, {} cycles in {}ms ({})",
-        dep_graph.nodes.len(),
-        cycle_count,
-        t3.elapsed().as_millis(),
-        human_size(dep_json.len())
-    );
+        let graph = build_graph(&formula_triples);
+        let cc = graph.cycles.iter().filter(|c| c.len() > 1).count();
+        let dep_json = if compact {
+            serde_json::to_string(&graph).expect("JSON serialization failed")
+        } else {
+            serde_json::to_string_pretty(&graph).expect("JSON serialization failed")
+        };
+        let dep_path = output_dir.join("dependency-graph.json");
+        fs::write(&dep_path, &dep_json).expect("Failed to write dependency-graph.json");
+        println!(
+            "[rust-parser] dependency-graph.json: {} nodes, {} cycles in {}ms ({})",
+            graph.nodes.len(),
+            cc,
+            t3.elapsed().as_millis(),
+            human_size(dep_json.len())
+        );
+        cycle_count = cc;
+        dep_graph = Some(graph);
+    }
 
     // Phase 5: Generate raw-engine.js
-    // Lib path: prefer env var, then sibling lib/ relative to binary, then relative ../lib/
-    let lib_path = std::env::var("LIB_PATH").unwrap_or_else(|_| {
-        // Try to find lib/ relative to the binary's location
-        let exe = std::env::current_exe().unwrap_or_default();
-        let candidate = exe.parent().unwrap_or(std::path::Path::new("."))
-            .join("lib/");
-        if candidate.exists() {
-            format!("{}/", candidate.display())
-        } else {
-            // Fallback: absolute path from output_dir up to project lib/
-            // (works when output is inside the project tree)
-            let abs_output = output_dir.canonicalize()
-                .unwrap_or_else(|_| output_dir.to_path_buf());
-            // Walk up until we find a lib/ dir
-            let mut search = abs_output.as_path();
-            loop {
-                let candidate = search.join("lib/irr.mjs");
-                if candidate.exists() {
-                    break format!("{}/", search.join("lib").display());
-                }
-                match search.parent() {
-                    Some(p) if p != search => search = p,
-                    _ => break "../lib/".to_string(),
-                }
-            }
-        }
-    });
-    // In compact mode, compute the set of cells actually referenced by formulas
-    // so the engine only declares variables that are needed
-    let referenced_cells: Option<HashSet<String>> = if compact {
-        let mut refs: HashSet<String> = HashSet::new();
-        // Every node is a formula cell address
-        for node in &dep_graph.nodes {
-            refs.insert(node.clone());
-        }
-        // Every edge target is a cell referenced by a formula
-        for (_src, deps) in &dep_graph.edges {
-            for dep in deps {
-                refs.insert(dep.clone());
-            }
-        }
-        println!(
-            "[rust-parser] Compact mode: {} referenced cells (vs {} total)",
-            refs.len(),
-            workbook.total_cells
-        );
-        Some(refs)
+    // Skip for --chunked mode: chunked emitter produces its own engine.js
+    let engine_js_len;
+    if chunked_flag {
+        println!("[rust-parser] Skipping raw-engine.js generation (chunked mode)");
+        engine_js_len = 0;
     } else {
-        None
-    };
+        // Lib path: prefer env var, then sibling lib/ relative to binary, then relative ../lib/
+        let lib_path = std::env::var("LIB_PATH").unwrap_or_else(|_| {
+            let exe = std::env::current_exe().unwrap_or_default();
+            let candidate = exe.parent().unwrap_or(std::path::Path::new("."))
+                .join("lib/");
+            if candidate.exists() {
+                format!("{}/", candidate.display())
+            } else {
+                let abs_output = output_dir.canonicalize()
+                    .unwrap_or_else(|_| output_dir.to_path_buf());
+                let mut search = abs_output.as_path();
+                loop {
+                    let candidate = search.join("lib/irr.mjs");
+                    if candidate.exists() {
+                        break format!("{}/", search.join("lib").display());
+                    }
+                    match search.parent() {
+                        Some(p) if p != search => search = p,
+                        _ => break "../lib/".to_string(),
+                    }
+                }
+            }
+        });
+        let referenced_cells: Option<HashSet<String>> = if compact {
+            let graph = dep_graph.as_ref().unwrap();
+            let mut refs: HashSet<String> = HashSet::new();
+            for node in &graph.nodes {
+                refs.insert(node.clone());
+            }
+            for (_src, deps) in &graph.edges {
+                for dep in deps {
+                    refs.insert(dep.clone());
+                }
+            }
+            println!(
+                "[rust-parser] Compact mode: {} referenced cells (vs {} total)",
+                refs.len(),
+                workbook.total_cells
+            );
+            Some(refs)
+        } else {
+            None
+        };
 
-    let t4 = Instant::now();
-    let engine_js = generate_raw_engine(&workbook, &dep_graph, &formula_entries, &lib_path, &referenced_cells);
-    let engine_path = output_dir.join("raw-engine.js");
-    fs::write(&engine_path, &engine_js).expect("Failed to write raw-engine.js");
-    println!(
-        "[rust-parser] raw-engine.js written in {}ms ({})",
-        t4.elapsed().as_millis(),
-        human_size(engine_js.len())
-    );
+        let t4 = Instant::now();
+        let graph = dep_graph.as_ref().unwrap();
+        let fe = formula_entries.as_ref().unwrap();
+        let engine_js = generate_raw_engine(&workbook, graph, fe, &lib_path, &referenced_cells);
+        let engine_path = output_dir.join("raw-engine.js");
+        fs::write(&engine_path, &engine_js).expect("Failed to write raw-engine.js");
+        engine_js_len = engine_js.len();
+        println!(
+            "[rust-parser] raw-engine.js written in {}ms ({})",
+            t4.elapsed().as_millis(),
+            human_size(engine_js_len)
+        );
+    }
 
     // Phase 6: Chunked compilation (Option C) — per-sheet modules + orchestrator
     if chunked_flag {
@@ -319,8 +361,10 @@ fn main() {
     println!("Output files:");
     println!("  {} ({})", model_map_path.display(), human_size(model_map_json.len()));
     println!("  {} ({})", formulas_path.display(), human_size(formulas_written_size));
-    println!("  {} ({})", dep_path.display(), human_size(dep_json.len()));
-    println!("  {} ({})", engine_path.display(), human_size(engine_js.len()));
+    if !chunked_flag {
+        println!("  {} ({})", output_dir.join("dependency-graph.json").display(), 0);
+        println!("  {} ({})", output_dir.join("raw-engine.js").display(), human_size(engine_js_len));
+    }
     if chunked_flag {
         println!("  {}/chunked/ (per-sheet modules + engine.js)", output_dir.display());
     }

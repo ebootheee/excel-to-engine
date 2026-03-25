@@ -2,7 +2,7 @@
 
 Date: 2026-03-23  
 Owner: Active agent handoff plan  
-Status: In progress (implementation started, architecture locked)
+Status: In progress (Chariot UAT started, 59.3% accuracy on spot-check)
 
 ## Objective
 
@@ -129,7 +129,8 @@ Any incoming agent should:
 
 ## Immediate Next Actions
 
-- Inspect current `src` emitter/transpiler files.
-- Implement sheet-partition + per-sheet emitter.
-- Add orchestrator and manifest writers.
-- Run build/tests and append results to log.
+- Isolate root vs. cascading failures to get true per-formula accuracy.
+- Implement SUMIF/COUNTIF runtime evaluation (currently stubbed as 0).
+- Improve OFFSET handling for dynamic ranges.
+- Investigate SUM range truncation in formula parser.
+- Test against Lysara (21MB) and Outpost (80MB) models.

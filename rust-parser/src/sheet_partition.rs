@@ -5,6 +5,7 @@
 
 use crate::dependency::extract_refs;
 use crate::parser::{CellData, CellValue, WorkbookData};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
@@ -24,12 +25,17 @@ pub struct SheetPartition {
     pub sheet_dependencies: BTreeSet<String>,
 }
 
-/// Sheet-level DAG + topological order.
+/// Sheet-level DAG + topological order (supports circular dependencies via clusters).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetGraph {
     pub sheets: Vec<SheetGraphEntry>,
+    /// Flattened topological order of all sheets (clusters appear in sequence)
     #[serde(rename = "topoOrder")]
     pub topo_order: Vec<String>,
+    /// Groups of sheets that form circular dependencies and need convergence loops.
+    /// Empty if the sheet graph is acyclic.
+    #[serde(rename = "sheetClusters", skip_serializing_if = "Vec::is_empty", default)]
+    pub sheet_clusters: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,45 +52,48 @@ pub struct SheetGraphEntry {
 pub fn partition_sheets(workbook: &WorkbookData) -> Vec<SheetPartition> {
     let sheet_names: HashSet<String> = workbook.sheet_names.iter().cloned().collect();
 
-    let mut partitions: Vec<SheetPartition> = Vec::new();
+    // Process each sheet in parallel — extract_refs is the bottleneck (3M cells)
+    let partitions: Vec<SheetPartition> = workbook
+        .sheets
+        .par_iter()
+        .map(|sheet| {
+            let mut input_cells = Vec::new();
+            let mut formula_cells = Vec::new();
+            let mut sheet_deps: BTreeSet<String> = BTreeSet::new();
 
-    for sheet in &workbook.sheets {
-        let mut input_cells = Vec::new();
-        let mut formula_cells = Vec::new();
-        let mut sheet_deps: BTreeSet<String> = BTreeSet::new();
+            for cell in &sheet.cells {
+                if let Some(formula) = &cell.formula {
+                    formula_cells.push(cell.clone());
 
-        for cell in &sheet.cells {
-            if let Some(formula) = &cell.formula {
-                formula_cells.push(cell.clone());
-
-                // Extract cross-sheet references
-                let refs = extract_refs(formula, &sheet.name);
-                for r in &refs {
-                    if let Some(bang) = r.find('!') {
-                        let ref_sheet = &r[..bang];
-                        if ref_sheet != sheet.name && sheet_names.contains(ref_sheet) {
-                            sheet_deps.insert(ref_sheet.to_string());
+                    // Extract cross-sheet references
+                    let refs = extract_refs(formula, &sheet.name);
+                    for r in &refs {
+                        if let Some(bang) = r.find('!') {
+                            let ref_sheet = &r[..bang];
+                            if ref_sheet != sheet.name && sheet_names.contains(ref_sheet) {
+                                sheet_deps.insert(ref_sheet.to_string());
+                            }
                         }
                     }
+                } else if cell.value.is_some() {
+                    input_cells.push(cell.clone());
                 }
-            } else if cell.value.is_some() {
-                input_cells.push(cell.clone());
             }
-        }
 
-        // Sort formula cells by intra-sheet dependency order (simple row/col sort as fallback)
-        formula_cells.sort_by(|a, b| a.row.cmp(&b.row).then(a.col.cmp(&b.col)));
+            // Sort formula cells by intra-sheet dependency order (simple row/col sort as fallback)
+            formula_cells.sort_by(|a, b| a.row.cmp(&b.row).then(a.col.cmp(&b.col)));
 
-        // Sort input cells deterministically
-        input_cells.sort_by(|a, b| a.row.cmp(&b.row).then(a.col.cmp(&b.col)));
+            // Sort input cells deterministically
+            input_cells.sort_by(|a, b| a.row.cmp(&b.row).then(a.col.cmp(&b.col)));
 
-        partitions.push(SheetPartition {
-            name: sheet.name.clone(),
-            input_cells,
-            formula_cells,
-            sheet_dependencies: sheet_deps,
-        });
-    }
+            SheetPartition {
+                name: sheet.name.clone(),
+                input_cells,
+                formula_cells,
+                sheet_dependencies: sheet_deps,
+            }
+        })
+        .collect();
 
     partitions
 }
@@ -94,7 +103,8 @@ pub fn partition_sheets(workbook: &WorkbookData) -> Vec<SheetPartition> {
 // ---------------------------------------------------------------------------
 
 /// Build sheet-level dependency graph and compute topological order.
-/// Returns an error string if a cycle is detected at the sheet level.
+/// Handles circular sheet dependencies by grouping them into convergence clusters
+/// (using Tarjan SCC), then topologically ordering the condensed graph.
 pub fn build_sheet_graph(partitions: &[SheetPartition]) -> Result<SheetGraph, String> {
     let mut entries: Vec<SheetGraphEntry> = Vec::new();
     let mut adj: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -111,69 +121,197 @@ pub fn build_sheet_graph(partitions: &[SheetPartition]) -> Result<SheetGraph, St
         });
     }
 
-    // Kahn's algorithm for topo sort
-    // adj[node] lists what node depends on.
-    // So edge goes dep → node. in_degree[node] = count of deps.
-    let mut in_deg: HashMap<String, usize> = HashMap::new();
-    for name in adj.keys() {
-        in_deg.insert(name.clone(), 0);
-    }
-    for (node, deps) in &adj {
-        in_deg.entry(node.clone()).or_insert(0);
-        // node depends on each dep. So there's an edge dep→node. in_deg[node] += 1 per dep.
-        *in_deg.get_mut(node).unwrap() = deps.len();
-    }
+    // Collect all sheet names in deterministic order
+    let all_names: Vec<String> = adj.keys().cloned().collect();
 
-    let mut queue: VecDeque<String> = in_deg
+    // Run Tarjan SCC on the sheet-level graph
+    let sccs = sheet_tarjan_scc(&all_names, &adj);
+
+    // Identify multi-sheet clusters (circular deps)
+    let sheet_clusters: Vec<Vec<String>> = sccs
         .iter()
-        .filter(|(_, &d)| d == 0)
-        .map(|(k, _)| k.clone())
+        .filter(|scc| scc.len() > 1)
+        .cloned()
         .collect();
 
-    // Sort the initial queue for determinism
-    let mut sorted_queue: Vec<String> = queue.drain(..).collect();
-    sorted_queue.sort();
-    for item in sorted_queue {
-        queue.push_back(item);
+    // Map each sheet to its SCC index
+    let mut sheet_to_scc: HashMap<String, usize> = HashMap::new();
+    for (i, scc) in sccs.iter().enumerate() {
+        for name in scc {
+            sheet_to_scc.insert(name.clone(), i);
+        }
     }
 
-    let mut topo_order: Vec<String> = Vec::new();
+    // Build condensation graph and topo-sort it (Kahn's)
+    let n = sccs.len();
+    let mut cond_edges: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); n];
+    let mut in_deg = vec![0usize; n];
 
-    while let Some(node) = queue.pop_front() {
-        topo_order.push(node.clone());
-        // Find all nodes that depend on `node` and decrement their in-degree
-        let mut next_batch: Vec<String> = Vec::new();
-        for (other, deps) in &adj {
-            if deps.contains(&node) {
-                let deg = in_deg.get_mut(other).unwrap();
-                *deg -= 1;
-                if *deg == 0 {
-                    next_batch.push(other.clone());
+    for (node, deps) in &adj {
+        let src_scc = sheet_to_scc[node];
+        for dep in deps {
+            if let Some(&dep_scc) = sheet_to_scc.get(dep) {
+                if dep_scc != src_scc {
+                    if cond_edges[dep_scc].insert(src_scc) {
+                        in_deg[src_scc] += 1;
+                    }
                 }
             }
         }
-        next_batch.sort();
-        for n in next_batch {
-            queue.push_back(n);
+    }
+
+    let mut queue: VecDeque<usize> = (0..n).filter(|&i| in_deg[i] == 0).collect();
+    let mut cond_topo: Vec<usize> = Vec::new();
+
+    while let Some(v) = queue.pop_front() {
+        cond_topo.push(v);
+        for &w in &cond_edges[v] {
+            in_deg[w] -= 1;
+            if in_deg[w] == 0 {
+                queue.push_back(w);
+            }
         }
     }
 
-    if topo_order.len() != adj.len() {
-        let remaining: Vec<String> = adj
-            .keys()
-            .filter(|k| !topo_order.contains(k))
-            .cloned()
-            .collect();
-        return Err(format!(
-            "Circular sheet-level dependency detected among: {:?}",
-            remaining
-        ));
+    // Flatten: expand each SCC into its sheets (sorted for determinism)
+    let mut topo_order: Vec<String> = Vec::new();
+    for &scc_idx in &cond_topo {
+        let mut scc_sheets = sccs[scc_idx].clone();
+        scc_sheets.sort();
+        topo_order.extend(scc_sheets);
+    }
+
+    if !sheet_clusters.is_empty() {
+        eprintln!(
+            "[rust-parser] Sheet-level circular dependencies found: {} cluster(s) ({} sheets total)",
+            sheet_clusters.len(),
+            sheet_clusters.iter().map(|c| c.len()).sum::<usize>()
+        );
     }
 
     Ok(SheetGraph {
         sheets: entries,
         topo_order,
+        sheet_clusters,
     })
+}
+
+/// Tarjan SCC for sheet-level graph (iterative to avoid stack overflow).
+fn sheet_tarjan_scc(
+    names: &[String],
+    adj: &BTreeMap<String, BTreeSet<String>>,
+) -> Vec<Vec<String>> {
+    let mut index_counter: usize = 0;
+    let mut stack: Vec<String> = Vec::new();
+    let mut on_stack: HashSet<String> = HashSet::new();
+    let mut indices: HashMap<String, usize> = HashMap::new();
+    let mut lowlinks: HashMap<String, usize> = HashMap::new();
+    let mut sccs: Vec<Vec<String>> = Vec::new();
+
+    struct Frame {
+        node: String,
+        deps: Vec<String>,
+        dep_idx: usize,
+        returned_from: Option<String>,
+    }
+
+    for start in names {
+        if indices.contains_key(start) {
+            continue;
+        }
+
+        indices.insert(start.clone(), index_counter);
+        lowlinks.insert(start.clone(), index_counter);
+        index_counter += 1;
+        stack.push(start.clone());
+        on_stack.insert(start.clone());
+
+        let deps: Vec<String> = adj
+            .get(start)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+
+        let mut call_stack = vec![Frame {
+            node: start.clone(),
+            deps,
+            dep_idx: 0,
+            returned_from: None,
+        }];
+
+        loop {
+            let stack_len = call_stack.len();
+            if stack_len == 0 {
+                break;
+            }
+            let fi = stack_len - 1;
+
+            if let Some(child) = call_stack[fi].returned_from.take() {
+                let ll_child = lowlinks[child.as_str()];
+                let node = &call_stack[fi].node;
+                let ll_v = lowlinks[node.as_str()];
+                lowlinks.insert(node.clone(), ll_v.min(ll_child));
+            }
+
+            let current = call_stack[fi].node.clone();
+            let mut child_to_push: Option<(String, Vec<String>)> = None;
+
+            while call_stack[fi].dep_idx < call_stack[fi].deps.len() {
+                let w = call_stack[fi].deps[call_stack[fi].dep_idx].clone();
+                call_stack[fi].dep_idx += 1;
+
+                if !indices.contains_key(&w) {
+                    indices.insert(w.clone(), index_counter);
+                    lowlinks.insert(w.clone(), index_counter);
+                    index_counter += 1;
+                    stack.push(w.clone());
+                    on_stack.insert(w.clone());
+
+                    let w_deps: Vec<String> = adj
+                        .get(&w)
+                        .map(|s| s.iter().cloned().collect())
+                        .unwrap_or_default();
+                    child_to_push = Some((w, w_deps));
+                    break;
+                } else if on_stack.contains(&w) {
+                    let idx_w = indices[&w];
+                    let ll_v = lowlinks[&current];
+                    lowlinks.insert(current.clone(), ll_v.min(idx_w));
+                }
+            }
+
+            if let Some((child, child_deps)) = child_to_push {
+                call_stack[fi].returned_from = Some(child.clone());
+                call_stack.push(Frame {
+                    node: child,
+                    deps: child_deps,
+                    dep_idx: 0,
+                    returned_from: None,
+                });
+                continue;
+            }
+
+            // All deps done — check if root
+            if lowlinks[&current] == indices[&current] {
+                let mut scc = Vec::new();
+                loop {
+                    let w = stack.pop().unwrap();
+                    on_stack.remove(&w);
+                    scc.push(w.clone());
+                    if w == current {
+                        break;
+                    }
+                }
+                sccs.push(scc);
+            }
+
+            call_stack.pop();
+            if let Some(parent) = call_stack.last_mut() {
+                parent.returned_from = Some(current);
+            }
+        }
+    }
+
+    sccs
 }
 
 // ---------------------------------------------------------------------------
@@ -186,22 +324,22 @@ pub fn extract_ground_truth(workbook: &WorkbookData) -> BTreeMap<String, serde_j
 
     for sheet in &workbook.sheets {
         for cell in &sheet.cells {
-            if cell.formula.is_some() {
-                let qualified = format!("{}!{}", sheet.name, cell.address);
-                match &cell.value {
-                    Some(CellValue::Number(n)) => {
-                        if let Some(jn) = serde_json::Number::from_f64(*n) {
-                            gt.insert(qualified, serde_json::Value::Number(jn));
-                        }
+            // Include ALL cells with values (both formula results and literal inputs)
+            // This ensures cross-sheet references to literal cells are available
+            let qualified = format!("{}!{}", sheet.name, cell.address);
+            match &cell.value {
+                Some(CellValue::Number(n)) => {
+                    if let Some(jn) = serde_json::Number::from_f64(*n) {
+                        gt.insert(qualified, serde_json::Value::Number(jn));
                     }
-                    Some(CellValue::Text(s)) => {
-                        gt.insert(qualified, serde_json::Value::String(s.clone()));
-                    }
-                    Some(CellValue::Bool(b)) => {
-                        gt.insert(qualified, serde_json::Value::Bool(*b));
-                    }
-                    _ => {}
                 }
+                Some(CellValue::Text(s)) => {
+                    gt.insert(qualified, serde_json::Value::String(s.clone()));
+                }
+                Some(CellValue::Bool(b)) => {
+                    gt.insert(qualified, serde_json::Value::Bool(*b));
+                }
+                _ => {}
             }
         }
     }
@@ -350,6 +488,11 @@ mod tests {
 
         let partitions = partition_sheets(&wb);
         let result = build_sheet_graph(&partitions);
-        assert!(result.is_err(), "Should detect circular sheet dependency");
+        // Should succeed but identify the circular cluster
+        assert!(result.is_ok(), "Should handle circular sheet deps via clusters");
+        let graph = result.unwrap();
+        assert_eq!(graph.sheet_clusters.len(), 1, "Should have 1 cluster");
+        assert_eq!(graph.sheet_clusters[0].len(), 2, "Cluster should have 2 sheets");
+        assert_eq!(graph.topo_order.len(), 2, "All sheets should be in topo order");
     }
 }

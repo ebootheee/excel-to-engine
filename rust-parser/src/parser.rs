@@ -1,6 +1,7 @@
 use calamine::{open_workbook, Data, Range, Reader, Xlsx};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
 
 /// A single cell's extracted data
@@ -67,7 +68,14 @@ pub fn parse_workbook(path: &Path) -> Result<WorkbookData, Box<dyn std::error::E
     let mut total_cells = 0usize;
     let mut total_formula_cells = 0usize;
 
-    for sheet_name in &sheet_names.clone() {
+    for (si, sheet_name) in sheet_names.clone().iter().enumerate() {
+        eprint!(
+            "\r[rust-parser]   Parsing sheet [{}/{}] {}...",
+            si + 1,
+            sheet_names.len(),
+            sheet_name
+        );
+        std::io::stderr().flush().ok();
         match workbook.worksheet_range(sheet_name) {
             Ok(range) => {
                 let sheet = parse_sheet(sheet_name, &range);
@@ -76,14 +84,24 @@ pub fn parse_workbook(path: &Path) -> Result<WorkbookData, Box<dyn std::error::E
                 sheets.push(sheet);
             }
             Err(e) => {
-                eprintln!("[warn] Could not read sheet '{}': {}", sheet_name, e);
+                eprintln!("\n[warn] Could not read sheet '{}': {}", sheet_name, e);
             }
         }
     }
+    eprintln!(); // newline after progress
 
     // Extract formulas via worksheet_formula (requires separate pass)
     let mut workbook2: Xlsx<_> = open_workbook(path)?;
-    for sheet in &mut sheets {
+    eprintln!("[rust-parser]   Extracting formulas...");
+    for (si, sheet) in sheets.iter_mut().enumerate() {
+        eprint!(
+            "\r[rust-parser]   Formulas [{}/{}] {} ({} cells)...",
+            si + 1,
+            sheet_names.len(),
+            sheet.name,
+            sheet.cells.len()
+        );
+        std::io::stderr().flush().ok();
         match workbook2.worksheet_formula(&sheet.name) {
             Ok(formula_range) => {
                 // Build index: address -> position in cells vec for O(1) lookup
@@ -134,7 +152,7 @@ pub fn parse_workbook(path: &Path) -> Result<WorkbookData, Box<dyn std::error::E
             }
         }
     }
-
+    eprintln!(); // newline after formula progress
     Ok(WorkbookData {
         sheet_names,
         total_cells,

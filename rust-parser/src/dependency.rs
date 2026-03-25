@@ -359,6 +359,9 @@ struct TarjanState {
 }
 
 pub fn tarjan_scc(nodes: &[String], edges: &HashMap<String, Vec<String>>) -> Vec<Vec<String>> {
+    // Build a HashSet for O(1) node membership checks (critical for large graphs)
+    let node_set: HashSet<&str> = nodes.iter().map(|s| s.as_str()).collect();
+
     let mut state = TarjanState {
         index: 0,
         stack: Vec::new(),
@@ -368,58 +371,128 @@ pub fn tarjan_scc(nodes: &[String], edges: &HashMap<String, Vec<String>>) -> Vec
         sccs: Vec::new(),
     };
 
+    // Iterative Tarjan's to avoid stack overflow on deep chains (3M+ nodes)
     for node in nodes {
-        if !state.indices.contains_key(node) {
-            strongconnect(node, nodes, edges, &mut state);
+        if !state.indices.contains_key(node.as_str()) {
+            strongconnect_iterative(node, &node_set, edges, &mut state);
         }
     }
 
     state.sccs
 }
 
-fn strongconnect(
-    v: &str,
-    all_nodes: &[String],
+/// Iterative version of Tarjan's strongconnect to handle millions of nodes
+/// without risking stack overflow.
+fn strongconnect_iterative(
+    start: &str,
+    node_set: &HashSet<&str>,
     edges: &HashMap<String, Vec<String>>,
     state: &mut TarjanState,
 ) {
-    let idx = state.index;
-    state.indices.insert(v.to_string(), idx);
-    state.lowlinks.insert(v.to_string(), idx);
-    state.index += 1;
-    state.stack.push(v.to_string());
-    state.on_stack.insert(v.to_string());
+    // Each frame tracks: the node, its neighbor index progress, and whether
+    // we've just returned from a recursive call (and if so, which child).
+    struct Frame {
+        node: String,
+        dep_idx: usize,         // which dependency we're currently processing
+        returned_from: Option<String>, // child we just returned from (for lowlink update)
+    }
 
-    if let Some(deps) = edges.get(v) {
-        for w in deps {
+    let mut call_stack: Vec<Frame> = Vec::new();
+
+    // Initialize start node
+    let idx = state.index;
+    state.indices.insert(start.to_string(), idx);
+    state.lowlinks.insert(start.to_string(), idx);
+    state.index += 1;
+    state.stack.push(start.to_string());
+    state.on_stack.insert(start.to_string());
+
+    call_stack.push(Frame {
+        node: start.to_string(),
+        dep_idx: 0,
+        returned_from: None,
+    });
+
+    loop {
+        let stack_len = call_stack.len();
+        if stack_len == 0 {
+            break;
+        }
+
+        // Work with index to avoid borrow issues
+        let frame_idx = stack_len - 1;
+
+        // If we just returned from a child, update lowlink
+        if let Some(child) = call_stack[frame_idx].returned_from.take() {
+            let ll_child = state.lowlinks.get(child.as_str()).copied().unwrap_or(usize::MAX);
+            let node = &call_stack[frame_idx].node;
+            let ll_v = state.lowlinks.get(node.as_str()).copied().unwrap_or(usize::MAX);
+            state.lowlinks.insert(node.clone(), ll_v.min(ll_child));
+        }
+
+        // Get the deps for this node
+        let current_node = call_stack[frame_idx].node.clone();
+        let deps: Vec<String> = edges
+            .get(current_node.as_str())
+            .cloned()
+            .unwrap_or_default();
+
+        // Find next unprocessed dependency
+        let mut child_to_push: Option<String> = None;
+        let dep_idx = &mut call_stack[frame_idx].dep_idx;
+        while *dep_idx < deps.len() {
+            let w = &deps[*dep_idx];
+            *dep_idx += 1;
+
             if !state.indices.contains_key(w.as_str()) {
-                // w is only a meaningful node if it's in our formula set
-                if all_nodes.contains(w) {
-                    strongconnect(w, all_nodes, edges, state);
-                    let ll_w = *state.lowlinks.get(w.as_str()).unwrap_or(&usize::MAX);
-                    let ll_v = state.lowlinks.get(v).copied().unwrap_or(usize::MAX);
-                    state.lowlinks.insert(v.to_string(), ll_v.min(ll_w));
+                if node_set.contains(w.as_str()) {
+                    // Initialize w
+                    let idx = state.index;
+                    state.indices.insert(w.clone(), idx);
+                    state.lowlinks.insert(w.clone(), idx);
+                    state.index += 1;
+                    state.stack.push(w.clone());
+                    state.on_stack.insert(w.clone());
+
+                    child_to_push = Some(w.clone());
+                    break;
                 }
             } else if state.on_stack.contains(w.as_str()) {
                 let idx_w = *state.indices.get(w.as_str()).unwrap_or(&usize::MAX);
-                let ll_v = state.lowlinks.get(v).copied().unwrap_or(usize::MAX);
-                state.lowlinks.insert(v.to_string(), ll_v.min(idx_w));
+                let ll_v = state.lowlinks.get(current_node.as_str()).copied().unwrap_or(usize::MAX);
+                state.lowlinks.insert(current_node.clone(), ll_v.min(idx_w));
             }
         }
-    }
 
-    // If v is a root of an SCC
-    if state.lowlinks.get(v) == state.indices.get(v) {
-        let mut scc = Vec::new();
-        loop {
-            let w = state.stack.pop().unwrap();
-            state.on_stack.remove(&w);
-            scc.push(w.clone());
-            if w == v {
-                break;
-            }
+        if let Some(child) = child_to_push {
+            call_stack[frame_idx].returned_from = Some(child.clone());
+            call_stack.push(Frame {
+                node: child,
+                dep_idx: 0,
+                returned_from: None,
+            });
+            continue;
         }
-        state.sccs.push(scc);
+
+        // All deps processed — check if this node is an SCC root
+        if state.lowlinks.get(current_node.as_str()) == state.indices.get(current_node.as_str()) {
+            let mut scc = Vec::new();
+            loop {
+                let w = state.stack.pop().unwrap();
+                state.on_stack.remove(&w);
+                scc.push(w.clone());
+                if w == current_node {
+                    break;
+                }
+            }
+            state.sccs.push(scc);
+        }
+
+        // Pop this frame and set returned_from on parent
+        call_stack.pop();
+        if let Some(parent) = call_stack.last_mut() {
+            parent.returned_from = Some(current_node);
+        }
     }
 }
 
