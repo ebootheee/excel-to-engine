@@ -91,17 +91,42 @@ for MODEL in "${MODELS[@]}"; do
   # Mount the model's parent directory so Docker can access it
   MODEL_DIR="$(cd "$(dirname "$MODEL")" && pwd)"
   MODEL_FILE="$(basename "$MODEL")"
+  CONTAINER_NAME="iterate-${MODEL_BASENAME%%.xlsx}"
+  CONTAINER_NAME="$(echo "$CONTAINER_NAME" | tr ' ()' '---' | tr -cd 'a-zA-Z0-9-' | head -c 60)"
 
-  docker run --rm \
+  # Start container in background
+  docker run --rm -d \
+    --name "$CONTAINER_NAME" \
     -v "${MODEL_DIR}:/data/models:ro" \
     -v "${OUTPUT_DIR}:/data/output" \
     -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
     -e TARGET_ACCURACY="${TARGET_ACCURACY:-0.90}" \
     -e MAX_ITERATIONS="${MAX_ITERATIONS:-30}" \
     -e MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-6}" \
+    -e NODE_OPTIONS="--max-old-space-size=8192" \
     "$IMAGE_NAME" \
     "/data/models/${MODEL_FILE}" \
-    2>&1 | tee "${OUTPUT_DIR}/${MODEL_FILE%.xlsx}-console.log"
+    > /dev/null
+
+  # Background resource monitor — prints a status line every 5s above the log stream
+  (
+    while docker inspect "$CONTAINER_NAME" &>/dev/null; do
+      STATS=$(docker stats "$CONTAINER_NAME" --no-stream --format \
+        "    ⚡ CPU: {{.CPUPerc}}  💾 Mem: {{.MemUsage}} ({{.MemPerc}})  📡 Net: {{.NetIO}}" 2>/dev/null)
+      if [ -n "$STATS" ]; then
+        echo "$STATS"
+      fi
+      sleep 5
+    done
+  ) &
+  MONITOR_PID=$!
+
+  # Stream container logs to terminal + log file
+  docker logs -f "$CONTAINER_NAME" 2>&1 | tee "${OUTPUT_DIR}/${MODEL_FILE%.xlsx}-console.log"
+
+  # Wait for container to finish and get exit code
+  docker wait "$CONTAINER_NAME" 2>/dev/null || true
+  kill $MONITOR_PID 2>/dev/null || true
 
   EXIT_CODE=${PIPESTATUS[0]}
   if [ $EXIT_CODE -eq 0 ]; then

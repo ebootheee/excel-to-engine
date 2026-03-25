@@ -337,20 +337,35 @@ process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top30 
 
     return evalResult.accuracy;
   } catch (err) {
-    log(`  Parse/eval error: ${err.message}`);
-    if (err.stderr) log(`  stderr: ${err.stderr.slice(0, 500)}`);
+    log(`  ❌ Parse/eval error: ${err.message}`);
+    if (err.stderr) log(`  stderr: ${err.stderr.slice(0, 1000)}`);
+    if (err.killed) log(`  Process was killed (likely OOM — try increasing Docker memory)`);
 
-    // Write a zero-result eval file so the iteration loop can still read it
+    // Write an eval file with the error as a failure so Claude can diagnose it
+    const errorFailure = {
+      address: 'PARSE_ERROR',
+      expected: 'successful_parse',
+      actual: err.killed ? 'OOM_KILLED' : err.message.slice(0, 200),
+      relError: 1.0,
+    };
     await writeFile(
       join(outputDir, 'eval-results.json'),
-      JSON.stringify({ accuracy: 0, correct: 0, total: 0, failures: [] }, null, 2)
+      JSON.stringify({
+        accuracy: 0,
+        correct: 0,
+        total: 0,
+        parseError: true,
+        failures: [errorFailure],
+      }, null, 2)
     );
     return 0;
   }
 }
 
-// ── Per-sheet eval for large models ──────────────────────────────────────────
+// ── Per-sheet eval for large models (parallel) ──────────────────────────────
 async function evalPerSheet(outputDir, chunkedDir, gtPath, totalKnown) {
+  const CONCURRENCY = parseInt(process.env.EVAL_CONCURRENCY || '6');
+
   // Load graph to get sheet list
   const graph = JSON.parse(await readFile(join(chunkedDir, '_graph.json'), 'utf8'));
   const sheetNames = graph.topoOrder || graph.sheets?.map(s => s.name) || [];
@@ -367,15 +382,21 @@ async function evalPerSheet(outputDir, chunkedDir, gtPath, totalKnown) {
     gtBySheet[sheet][addr] = val;
   }
 
-  let totalCorrect = 0, totalTested = 0;
-  const allFailures = [];
-  const sheetResults = [];
+  // Write ground truth and per-sheet GT to temp files (avoid inlining as JS literals)
+  const gtTmpPath = join(outputDir, '_gt_full.json');
+  if (!existsSync(gtTmpPath)) {
+    await writeFile(gtTmpPath, JSON.stringify(allGt));
+  }
 
-  // Test up to 10 sheets (largest first by ground truth count)
+  // Test up to 20 sheets (largest first by ground truth count)
   const sheetsToTest = Object.entries(gtBySheet)
     .sort((a, b) => Object.keys(b[1]).length - Object.keys(a[1]).length)
-    .slice(0, 10);
+    .slice(0, 20);
 
+  log(`  Evaluating ${sheetsToTest.length} sheets (${CONCURRENCY} concurrent)...`);
+
+  // Prepare all eval tasks
+  const tasks = [];
   for (const [sheetName, sheetGt] of sheetsToTest) {
     const gtCount = Object.keys(sheetGt).length;
     // Sample if sheet has >5000 ground truth entries
@@ -389,24 +410,36 @@ async function evalPerSheet(outputDir, chunkedDir, gtPath, totalKnown) {
       }
     }
 
-    // Build a per-sheet eval script that imports just that sheet module
-    // and pre-seeds ctx with ground truth from upstream sheets
     const sanitized = sheetName.replace(/[^a-zA-Z0-9]/g, '_');
     const sheetModulePath = join(chunkedDir, 'sheets', `${sanitized}.mjs`);
 
     if (!existsSync(sheetModulePath)) {
-      log(`    Sheet ${sheetName}: module not found, skipping`);
+      log(`    ⏭️  ${sheetName}: module not found, skipping`);
       continue;
     }
 
+    // Write per-sheet GT to a temp file (avoids inlining large JSON as JS literal)
+    const sheetGtPath = join(outputDir, `_gt_${sanitized}.json`);
+    await writeFile(sheetGtPath, JSON.stringify(sampleGt));
+
+    tasks.push({ sheetName, sanitized, sheetModulePath, sheetGtPath, gtCount: Object.keys(sampleGt).length });
+  }
+
+  // Run eval tasks with concurrency limit
+  let totalCorrect = 0, totalTested = 0;
+  const allFailures = [];
+  const sheetResults = [];
+  let completed = 0;
+  let errored = 0;
+
+  async function evalOneSheet({ sheetName, sanitized, sheetModulePath, sheetGtPath, gtCount }) {
     const evalScript = `
 import { readFile } from 'fs/promises';
 import { compute } from '${resolve(sheetModulePath).replace(/\\/g, '/')}';
 
-// Load all ground truth to seed context (upstream sheet values)
-const allGt = JSON.parse(await readFile('${resolve(gtPath).replace(/\\/g, '/')}', 'utf8'));
+const allGt = JSON.parse(await readFile('${resolve(gtTmpPath).replace(/\\/g, '/')}', 'utf8'));
+const sheetGt = JSON.parse(await readFile('${resolve(sheetGtPath).replace(/\\/g, '/')}', 'utf8'));
 
-// Create a minimal context
 const ctx = {
   values: {},
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
@@ -425,21 +458,18 @@ const ctx = {
   }
 };
 
-// Pre-seed context with ALL ground truth values (acts as upstream sheet results)
 for (const [addr, val] of Object.entries(allGt)) {
   ctx.values[addr] = val;
 }
 
-// Now run this sheet's compute — it will overwrite its own cells
 try {
   compute(ctx);
 } catch (e) {
-  process.stdout.write(JSON.stringify({ accuracy: 0, correct: 0, total: 0, failures: [{ address: 'SHEET_ERROR:${sheetName}', expected: 0, actual: e.message, relError: 1.0 }] }));
+  const errInfo = { address: 'SHEET_ERROR:${sheetName}', expected: 0, actual: e.message + '\\n' + (e.stack || '').split('\\n').slice(0, 5).join('\\n'), relError: 1.0 };
+  process.stdout.write(JSON.stringify({ accuracy: 0, correct: 0, total: 0, failures: [errInfo], error: e.message }));
   process.exit(0);
 }
 
-// Compare this sheet's cells against ground truth
-const sheetGt = ${JSON.stringify(sampleGt)};
 let correct = 0, total = 0;
 const failures = [];
 for (const [addr, expected] of Object.entries(sheetGt)) {
@@ -466,31 +496,89 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
     await writeFile(tmpScript, evalScript);
 
     try {
-      const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=8192', tmpScript], {
-        timeout: 120000,
-        maxBuffer: 50 * 1024 * 1024,
+      const { stdout: evalOut, stderr: evalErr } = await execAsync('node', ['--max-old-space-size=8192', tmpScript], {
+        timeout: 180000, // 3 min per sheet
+        maxBuffer: 100 * 1024 * 1024,
       });
       const result = JSON.parse(evalOut);
-      totalCorrect += result.correct;
-      totalTested += result.total;
-      allFailures.push(...result.failures);
+      completed++;
+
+      if (result.error) {
+        // Sheet compute() threw an error
+        errored++;
+        log(`    ❌ ${sheetName}: RUNTIME ERROR — ${result.error}`);
+        if (result.failures?.[0]?.actual) {
+          log(`       Stack: ${result.failures[0].actual.split('\n').slice(0, 3).join('\n       ')}`);
+        }
+        return result;
+      }
 
       const pct = result.total > 0 ? (result.correct / result.total * 100).toFixed(1) : '0.0';
-      log(`    ${sheetName}: ${pct}% (${result.correct}/${result.total})`);
-      sheetResults.push({ sheet: sheetName, ...result });
+      const icon = result.accuracy >= 0.95 ? '✅' : result.accuracy >= 0.70 ? '🔶' : result.accuracy > 0 ? '🔴' : '⚫';
+      log(`    ${icon} ${sheetName}: ${pct}% (${result.correct}/${result.total})  [${completed}/${tasks.length}]`);
+      return result;
     } catch (err) {
-      log(`    ${sheetName}: eval error — ${err.message.slice(0, 100)}`);
+      completed++;
+      errored++;
+      // Extract the actual error from stderr or the message
+      const errMsg = err.stderr?.trim() || err.message;
+      const firstLine = errMsg.split('\n').find(l => l.includes('Error') || l.includes('error')) || errMsg.split('\n')[0];
+      log(`    ❌ ${sheetName}: ${firstLine.slice(0, 200)}`);
+
+      // Try to extract more useful info
+      const syntaxMatch = errMsg.match(/SyntaxError: (.+)/);
+      const refMatch = errMsg.match(/ReferenceError: (.+)/);
+      const typeMatch = errMsg.match(/TypeError: (.+)/);
+      if (syntaxMatch) log(`       SyntaxError: ${syntaxMatch[1].slice(0, 150)}`);
+      if (refMatch) log(`       ReferenceError: ${refMatch[1].slice(0, 150)}`);
+      if (typeMatch) log(`       TypeError: ${typeMatch[1].slice(0, 150)}`);
+
+      return { accuracy: 0, correct: 0, total: 0, failures: [{
+        address: `EVAL_CRASH:${sheetName}`,
+        expected: 'successful_eval',
+        actual: firstLine.slice(0, 200),
+        relError: 1.0,
+      }]};
     }
   }
 
+  // Run with concurrency limit
+  const results = [];
+  for (let i = 0; i < tasks.length; i += CONCURRENCY) {
+    const batch = tasks.slice(i, i + CONCURRENCY);
+    const batchResults = await Promise.all(batch.map(evalOneSheet));
+    results.push(...batchResults);
+  }
+
+  // Aggregate results
+  for (const result of results) {
+    if (!result) continue;
+    totalCorrect += result.correct || 0;
+    totalTested += result.total || 0;
+    if (result.failures) allFailures.push(...result.failures);
+    sheetResults.push(result);
+  }
+
   const accuracy = totalTested > 0 ? totalCorrect / totalTested : 0;
-  log(`  Overall: ${(accuracy * 100).toFixed(1)}% (${totalCorrect}/${totalTested}) across ${sheetsToTest.length} sheets`);
+
+  // Summary table
+  log('');
+  log(`  ┌─────────────────────────────────────────────────────┐`);
+  log(`  │ Sheet Eval Summary                                  │`);
+  log(`  ├───────────────────────────┬────────┬────────────────┤`);
+  log(`  │ Sheets tested             │ ${String(tasks.length).padStart(6)} │                │`);
+  log(`  │ Sheets passed (>95%)      │ ${String(results.filter(r => r && r.accuracy >= 0.95).length).padStart(6)} │                │`);
+  log(`  │ Sheets with errors        │ ${String(errored).padStart(6)} │                │`);
+  log(`  │ Total cells tested        │ ${String(totalTested).padStart(6)} │                │`);
+  log(`  │ Total cells correct       │ ${String(totalCorrect).padStart(6)} │                │`);
+  log(`  │ Overall accuracy          │ ${(accuracy * 100).toFixed(1).padStart(5)}% │                │`);
+  log(`  └───────────────────────────┴────────┴────────────────┘`);
 
   // Save eval results
   const top30 = allFailures.sort((a, b) => Math.abs(b.relError) - Math.abs(a.relError)).slice(0, 30);
   await writeFile(
     join(outputDir, 'eval-results.json'),
-    JSON.stringify({ accuracy, correct: totalCorrect, total: totalTested, failures: top30, sheetResults }, null, 2)
+    JSON.stringify({ accuracy, correct: totalCorrect, total: totalTested, failures: top30, sheetResults, errored }, null, 2)
   );
 
   return accuracy;
