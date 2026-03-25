@@ -221,16 +221,21 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
             if args.len() == 2 {
                 let a0 = transpile(&args[0], config);
                 let a1 = transpile(&args[1], config);
-                return format!("{}.reduce((acc,v,i)=>acc+((+v||0)*(+{}[i]||0)),0)", a0, a1);
+                // Wrap in IIFE to make self-contained expression
+                // (prevents paren mismatches when used in SUMPRODUCT/SUM or IFERROR)
+                return format!("(()=>{{const _a=[{}].flat(),_b=[{}].flat();return _a.reduce((acc,v,i)=>acc+((+v||0)*(+_b[i]||0)),0);}})()", a0, a1);
             }
-            // 3+ arrays: multiply element-wise then sum
+            // 3+ arrays: multiply element-wise then sum (IIFE-wrapped)
             let arrays: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
-            let first = &arrays[0];
-            let products: String = arrays[1..].iter()
-                .map(|a| format!("(+{}[i]||0)", a))
+            let arr_decls: Vec<String> = arrays.iter().enumerate()
+                .map(|(i, a)| format!("const _a{}=[{}].flat()", i, a))
+                .collect();
+            let products: String = (1..arrays.len())
+                .map(|i| format!("(+_a{}[i]||0)", i))
                 .collect::<Vec<_>>()
                 .join("*");
-            format!("{}.reduce((acc,v,i)=>acc+((+v||0)*{}),0)", first, products)
+            format!("(()=>{{{};return _a0.reduce((acc,v,i)=>acc+((+v||0)*{}),0);}})()",
+                arr_decls.join(","), products)
         }
 
         "SUMIF" | "SUMIFS" => {
