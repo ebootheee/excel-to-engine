@@ -2,6 +2,13 @@
 
 ## Near-Term (Next)
 
+### Skill & Documentation: LLM-on-Transpiled-JS Workflow
+- Update `skill/SKILL.md` to use Rust transpiler as Phase 2 default (generate `raw-engine.js` via transpiler, not LLM reasoning)
+- Define the LLM's role on transpiled output: semantic naming, gap-filling, dashboard generation, testing
+- Document how LLMs should read `diagnostics.json` when automated calibration plateaus
+- Add guidance for when to use calibration (verification) vs when to fix transpiler coverage (root cause)
+- Expand transpiler's function coverage as real-world models reveal gaps
+
 ### Incremental Re-extraction
 - Store extraction metadata (which cells were read, what values were found) alongside model-map.json
 - On re-extraction, diff against previous values and only update changed fields
@@ -56,11 +63,6 @@
 
 ## Long-Term
 
-### Excel Formula Transpiler
-- Direct Excel formula to JavaScript transpilation
-- Support common Excel functions (SUMPRODUCT, INDEX/MATCH, VLOOKUP, IF chains)
-- Reduce reliance on calibration for simple models
-
 ### Cloud Deployment
 - One-click deploy dashboard to Vercel/Netlify
 - API endpoint wrapping computeModel()
@@ -72,6 +74,16 @@
 - Custom chart types for the dashboard
 
 ## Done
+
+### Rust Formula Transpiler — Primary Pipeline (2026-03-24)
+- `rust-parser/` — Deterministic Excel formula → JavaScript transpilation
+- Tokenizer + recursive descent parser → AST → JS code generation
+- Handles ~60 Excel functions: SUM, IF, MIN/MAX, IRR/XIRR/NPV, VLOOKUP/HLOOKUP/INDEX/MATCH, IFERROR, date functions, financial (PMT/PV/FV/RATE)
+- Circular reference detection (Tarjan's SCC) with convergence loop generation
+- Topological sheet ordering for correct evaluation order
+- 100% accuracy on synthetic 3-sheet PE model (27 KPIs) in <5ms
+- **Promoted to primary path**: Transpiler produces mechanically correct JS; LLM operates on the transpiled output as a read/write/iterate tool rather than reverse-engineering Excel math
+- Calibration repositioned as verification + fallback for unsupported formulas
 
 ### Sensitivity Surface Validation & Multi-Point Calibration (2026-03-23)
 - `lib/sensitivity.mjs` — full sensitivity analysis library: surface extraction, comparison, elasticity, breakpoint detection, multi-point calibration
