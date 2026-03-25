@@ -95,7 +95,7 @@ for MODEL in "${MODELS[@]}"; do
   CONTAINER_NAME="$(echo "$CONTAINER_NAME" | tr ' ()' '---' | tr -cd 'a-zA-Z0-9-' | head -c 60)"
 
   # Start container in background
-  docker run --rm -d \
+  docker run -d \
     --name "$CONTAINER_NAME" \
     -v "${MODEL_DIR}:/data/models:ro" \
     -v "${OUTPUT_DIR}:/data/output" \
@@ -121,15 +121,14 @@ for MODEL in "${MODELS[@]}"; do
   ) &
   MONITOR_PID=$!
 
-  # Stream container logs to terminal + log file
-  docker logs -f "$CONTAINER_NAME" 2>&1 | tee "${OUTPUT_DIR}/${MODEL_FILE%.xlsx}-console.log"
+  # Stream container logs to terminal + log file (blocks until container exits)
+  docker logs -f "$CONTAINER_NAME" 2>&1 | tee "${OUTPUT_DIR}/${MODEL_FILE%.xlsx}-console.log" || true
 
-  # Wait for container to finish and get exit code
-  docker wait "$CONTAINER_NAME" 2>/dev/null || true
+  # Get exit code, kill monitor, clean up container
+  EXIT_CODE=$(docker wait "$CONTAINER_NAME" 2>/dev/null || echo "1")
   kill $MONITOR_PID 2>/dev/null || true
-
-  EXIT_CODE=${PIPESTATUS[0]}
-  if [ $EXIT_CODE -eq 0 ]; then
+  docker rm "$CONTAINER_NAME" &>/dev/null || true
+  if [ "$EXIT_CODE" = "0" ]; then
     echo "  ✅ Completed: ${MODEL_BASENAME}"
   else
     echo "  ⚠️  Finished with issues: ${MODEL_BASENAME} (exit code: $EXIT_CODE)"
