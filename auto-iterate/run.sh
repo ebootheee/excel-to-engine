@@ -64,11 +64,14 @@ else
 fi
 
 echo ""
+EVAL_CONCURRENCY="${EVAL_CONCURRENCY:-6}"
+
 echo "═══════════════════════════════════════════════════════"
 echo "  Auto-Iterate Pipeline"
 echo "  Models: ${#MODELS[@]}"
 echo "  Target: ${TARGET_ACCURACY:-85}%"
 echo "  Max iterations: ${MAX_ITERATIONS:-30}"
+echo "  Eval concurrency: ${EVAL_CONCURRENCY} sheets"
 echo "  Output: ${OUTPUT_DIR}"
 echo "═══════════════════════════════════════════════════════"
 echo ""
@@ -104,6 +107,7 @@ for MODEL in "${MODELS[@]}"; do
     -e MAX_ITERATIONS="${MAX_ITERATIONS:-30}" \
     -e MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-6}" \
     -e NODE_OPTIONS="--max-old-space-size=8192" \
+    -e EVAL_CONCURRENCY="${EVAL_CONCURRENCY}" \
     "$IMAGE_NAME" \
     "/data/models/${MODEL_FILE}" \
     > /dev/null
