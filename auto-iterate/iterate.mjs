@@ -718,15 +718,27 @@ Rules:
     try {
       patch = JSON.parse(jsonObjMatch[0]);
     } catch (parseErr) {
-      // If greedy match grabbed too much, try finding balanced braces
+      // If greedy match grabbed too much, try finding balanced braces (string-aware)
       let depth = 0, start = -1, end = -1;
+      let inString = false, escaped = false;
       for (let i = 0; i < jsonStr.length; i++) {
-        if (jsonStr[i] === '{') { if (depth === 0) start = i; depth++; }
-        else if (jsonStr[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+        const ch = jsonStr[i];
+        if (escaped) { escaped = false; continue; }
+        if (ch === '\\' && inString) { escaped = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === '{') { if (depth === 0) start = i; depth++; }
+        else if (ch === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
       }
       if (start >= 0 && end > start) {
-        patch = JSON.parse(jsonStr.slice(start, end));
+        try {
+          patch = JSON.parse(jsonStr.slice(start, end));
+        } catch (innerErr) {
+          log(`  JSON parse failed. Extracted (first 300 chars): ${jsonStr.slice(start, start + 300)}`);
+          throw innerErr;
+        }
       } else {
+        log(`  No balanced JSON object found. First 300 chars: ${jsonStr.slice(0, 300)}`);
         throw parseErr;
       }
     }

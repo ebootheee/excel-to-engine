@@ -82,7 +82,8 @@ EVAL_CONCURRENCY="${EVAL_CONCURRENCY:-6}"
 echo "═══════════════════════════════════════════════════════"
 echo "  Auto-Iterate Pipeline"
 echo "  Models: ${#MODELS[@]}"
-echo "  Target: ${TARGET_ACCURACY:-85}%"
+TARGET_PCT=$(awk "BEGIN { printf \"%.0f\", ${TARGET_ACCURACY:-0.85} * 100 }")
+echo "  Target: ${TARGET_PCT}%"
 echo "  Max iterations: ${MAX_ITERATIONS:-30}"
 echo "  Eval concurrency: ${EVAL_CONCURRENCY} sheets"
 echo "  Output: ${OUTPUT_DIR}"
@@ -110,9 +111,12 @@ for MODEL in "${MODELS[@]}"; do
   CONTAINER_NAME="iterate-${MODEL_BASENAME%%.xlsx}"
   CONTAINER_NAME="$(echo "$CONTAINER_NAME" | tr ' ()' '---' | tr -cd 'a-zA-Z0-9-' | head -c 60)"
 
+  # Remove any leftover container from a previous run (handles interrupted runs)
+  docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
   # Start container in background
   # MSYS_NO_PATHCONV prevents Git Bash on Windows from mangling /data/... paths
-  MSYS_NO_PATHCONV=1 docker run -d \
+  if ! MSYS_NO_PATHCONV=1 docker run -d \
     --name "$CONTAINER_NAME" \
     -v "${MODEL_DIR}:/data/models:ro" \
     -v "${OUTPUT_DIR}:/data/output" \
@@ -124,7 +128,11 @@ for MODEL in "${MODELS[@]}"; do
     -e EVAL_CONCURRENCY="${EVAL_CONCURRENCY}" \
     "$IMAGE_NAME" \
     "/data/models/${MODEL_FILE}" \
-    > /dev/null
+    > /dev/null; then
+    echo "  ❌ Failed to start container for: ${MODEL_BASENAME}"
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+    continue
+  fi
 
   # Background resource monitor — prints a status line every 5s above the log stream
   (
