@@ -17,6 +17,9 @@ pub struct TranspileConfig {
     pub default_sheet: String,
     /// Whether to use `sheets.SheetName.A1` style or flat `s_SheetName_A1` style
     pub use_flat_vars: bool,
+    /// Whether to emit `ctx.get("Sheet!A1")` calls instead of variable names.
+    /// When true, overrides use_flat_vars. Preserves original sheet names.
+    pub use_ctx_get: bool,
 }
 
 impl Default for TranspileConfig {
@@ -24,6 +27,7 @@ impl Default for TranspileConfig {
         TranspileConfig {
             default_sheet: "Sheet1".to_string(),
             use_flat_vars: true,
+            use_ctx_get: false,
         }
     }
 }
@@ -34,7 +38,10 @@ impl Default for TranspileConfig {
 
 pub fn cell_ref_to_var(r: &CellRef, config: &TranspileConfig) -> String {
     let sheet = r.sheet.as_deref().unwrap_or(&config.default_sheet);
-    if config.use_flat_vars {
+    if config.use_ctx_get {
+        let escaped_sheet = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("ctx.get(\"{}!{}{}\")", escaped_sheet, r.col, r.row)
+    } else if config.use_flat_vars {
         // Sanitize sheet name: spaces and special chars → underscore
         let safe_sheet: String = sheet
             .chars()
@@ -48,7 +55,10 @@ pub fn cell_ref_to_var(r: &CellRef, config: &TranspileConfig) -> String {
 
 /// Build the variable name for a cell given sheet name + address string
 pub fn addr_to_var(sheet: &str, addr: &str, config: &TranspileConfig) -> String {
-    if config.use_flat_vars {
+    if config.use_ctx_get {
+        let escaped_sheet = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("ctx.get(\"{}!{}\")", escaped_sheet, addr)
+    } else if config.use_flat_vars {
         let safe_sheet: String = sheet
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '_' })
@@ -64,6 +74,17 @@ pub fn addr_to_var(sheet: &str, addr: &str, config: &TranspileConfig) -> String 
 // ---------------------------------------------------------------------------
 
 fn expand_range_to_vars(r1: &CellRef, r2: &CellRef, config: &TranspileConfig) -> String {
+    // In ctx.get mode, emit ctx.range("Sheet!A1:B10") for efficiency
+    // This avoids expanding large ranges into thousands of individual ctx.get() calls
+    if config.use_ctx_get {
+        let sheet = r1.sheet.as_deref().unwrap_or(r2.sheet.as_deref().unwrap_or(&config.default_sheet));
+        let escaped = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+        return format!(
+            "ctx.range(\"{}!{}{}:{}{}\")",
+            escaped, r1.col, r1.row, r2.col, r2.row
+        );
+    }
+
     // Parse column letters to numbers
     fn col_num(col: &str) -> u32 {
         col.bytes().fold(0u32, |acc, b| acc * 26 + (b - b'A' + 1) as u32)
@@ -176,64 +197,96 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         // ----------------------------------------------------------------
         // Math / aggregation
         // ----------------------------------------------------------------
-        "SUM" => {
-            if args.len() == 1 {
-                if let Expr::Range(_, _) = &args[0] {
-                    let arr = transpile(&args[0], config);
-                    return format!("{}.reduce((a,b)=>a+(+b||0),0)", arr);
-                }
-            }
-            let parts: Vec<String> = args.iter().map(|a| {
-                if let Expr::Range(_, _) = a {
-                    format!("...{}", transpile(a, config))
-                } else {
-                    transpile(a, config)
-                }
+        "SUM" | "SUBTOTAL" => {
+            // SUBTOTAL(function_num, range) — function_num 9 or 109 = SUM
+            // We treat all SUBTOTAL variants as SUM for now (ignoring hidden rows)
+            let sum_args = if name_upper == "SUBTOTAL" && args.len() >= 2 {
+                &args[1..] // skip function_num argument
+            } else {
+                &args[..]
+            };
+            // Always use [].flat().reduce() pattern to safely handle both arrays and scalars
+            let parts: Vec<String> = sum_args.iter().map(|a| {
+                transpile(a, config)
             }).collect();
-            format!("[{}].reduce((a,b)=>a+(+b||0),0)", parts.join(","))
+            format!("[{}].flat().reduce((a,b)=>a+(+b||0),0)", parts.join(","))
         }
 
         "SUMPRODUCT" => {
             // SUMPRODUCT(array1, array2, ...) → zip and multiply then sum
             if args.len() == 1 {
                 let arr = transpile(&args[0], config);
-                return format!("{}.reduce((a,b)=>a+(+b||0),0)", arr);
+                return format!("[{}].flat().reduce((a,b)=>a+(+b||0),0)", arr);
             }
-            // Two arrays
-            let a0 = transpile(&args[0], config);
-            let a1 = transpile(&args[1], config);
-            format!("{}.reduce((acc,v,i)=>acc+(+v||0)*({})[(i)]||0),0)", a0, a1)
+            if args.len() == 2 {
+                let a0 = transpile(&args[0], config);
+                let a1 = transpile(&args[1], config);
+                return format!("{}.reduce((acc,v,i)=>acc+((+v||0)*(+{}[i]||0)),0)", a0, a1);
+            }
+            // 3+ arrays: multiply element-wise then sum
+            let arrays: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
+            let first = &arrays[0];
+            let products: String = arrays[1..].iter()
+                .map(|a| format!("(+{}[i]||0)", a))
+                .collect::<Vec<_>>()
+                .join("*");
+            format!("{}.reduce((acc,v,i)=>acc+((+v||0)*{}),0)", first, products)
         }
 
         "SUMIF" | "SUMIFS" => {
-            // Approximate: return 0 (requires runtime data — engine should override)
-            format!("/* SUMIF/SUMIFS approximated */ 0")
+            if name_upper == "SUMIF" {
+                // SUMIF(criteria_range, criteria, [sum_range])
+                let range = transpile(&args[0], config);
+                let criteria = arg(1);
+                let sum_range = if args.len() >= 3 {
+                    transpile(&args[2], config)
+                } else {
+                    range.clone()
+                };
+                format!("_sumif({}, {}, {})", range, criteria, sum_range)
+            } else {
+                // SUMIFS(sum_range, criteria_range1, criteria1, criteria_range2, criteria2, ...)
+                let sum_range = transpile(&args[0], config);
+                let mut pairs = Vec::new();
+                let mut i = 1;
+                while i + 1 < args.len() {
+                    let cr = transpile(&args[i], config);
+                    let cv = transpile(&args[i + 1], config);
+                    pairs.push(format!("[{}, {}]", cr, cv));
+                    i += 2;
+                }
+                format!("_sumifs({}, [{}])", sum_range, pairs.join(", "))
+            }
         }
 
         "COUNTIF" | "COUNTIFS" => {
-            format!("/* COUNTIF/COUNTIFS approximated */ 0")
+            if name_upper == "COUNTIF" {
+                // COUNTIF(range, criteria)
+                let range = transpile(&args[0], config);
+                let criteria = arg(1);
+                format!("_countif({}, {})", range, criteria)
+            } else {
+                // COUNTIFS(criteria_range1, criteria1, criteria_range2, criteria2, ...)
+                let mut pairs = Vec::new();
+                let mut i = 0;
+                while i + 1 < args.len() {
+                    let cr = transpile(&args[i], config);
+                    let cv = transpile(&args[i + 1], config);
+                    pairs.push(format!("[{}, {}]", cr, cv));
+                    i += 2;
+                }
+                format!("_countifs([{}])", pairs.join(", "))
+            }
         }
 
         "MIN" => {
-            let all: Vec<String> = args.iter().flat_map(|a| {
-                if let Expr::Range(_, _) = a {
-                    vec![format!("...{}", transpile(a, config))]
-                } else {
-                    vec![transpile(a, config)]
-                }
-            }).collect();
-            format!("Math.min({})", all.join(","))
+            let parts: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
+            format!("Math.min(...[{}].flat())", parts.join(","))
         }
 
         "MAX" => {
-            let all: Vec<String> = args.iter().flat_map(|a| {
-                if let Expr::Range(_, _) = a {
-                    vec![format!("...{}", transpile(a, config))]
-                } else {
-                    vec![transpile(a, config)]
-                }
-            }).collect();
-            format!("Math.max({})", all.join(","))
+            let parts: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
+            format!("Math.max(...[{}].flat())", parts.join(","))
         }
 
         "ABS" => format!("Math.abs({})", arg(0)),
@@ -279,7 +332,7 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "NOT" => format!("(!({}))", arg(0)),
         "TRUE" => "true".to_string(),
         "FALSE" => "false".to_string(),
-        "IFERROR" => format!("((() => {{ try {{ const _v = {}; return (isNaN(_v) && typeof _v === 'number') ? ({}) : _v; }} catch(e) {{ return {}; }} }})()", arg(0), arg(1), arg(1)),
+        "IFERROR" => format!("((() => {{ try {{ const _v = ({}); return (isNaN(_v) && typeof _v === 'number') ? ({}) : _v; }} catch(e) {{ return {}; }} }})())", arg(0), arg(1), arg(1)),
         "ISERROR" | "ISERR" => format!("(isNaN({}) || ({}) === null)", arg(0), arg(0)),
         "ISNUMBER" => format!("(typeof ({}) === 'number' && !isNaN({}))", arg(0), arg(0)),
         "ISBLANK" => format!("(({}) == null || ({}) === ``)", arg(0), arg(0)),
@@ -332,8 +385,24 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         }
 
         "OFFSET" => {
-            // OFFSET requires dynamic range — emit a comment + approximate with the reference
-            format!("/* OFFSET: {} */ {}", args_joined(", "), arg(0))
+            // OFFSET(reference, rows, cols, [height], [width])
+            // First arg is a reference — we need the address string, not the value
+            let ref_addr = match &args[0] {
+                Expr::CellRef(r) => {
+                    let sheet = r.sheet.as_deref().unwrap_or(&config.default_sheet);
+                    let escaped = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{}!{}{}\"", escaped, r.col, r.row)
+                }
+                _ => {
+                    // Fallback: emit the transpiled value (may not work for dynamic refs)
+                    format!("\"__unknown__\"")
+                }
+            };
+            let rows = arg(1);
+            let cols = arg(2);
+            let height = if args.len() >= 4 { arg(3) } else { "1".to_string() };
+            let width = if args.len() >= 5 { arg(4) } else { "1".to_string() };
+            format!("_offset(ctx, {}, {}, {}, {}, {})", ref_addr, rows, cols, height, width)
         }
 
         // ----------------------------------------------------------------
@@ -417,25 +486,12 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         // Statistical
         // ----------------------------------------------------------------
         "AVERAGE" | "MEAN" => {
-            let all: Vec<String> = args.iter().flat_map(|a| {
-                if let Expr::Range(_, _) = a {
-                    vec![format!("...{}", transpile(a, config))]
-                } else {
-                    vec![transpile(a, config)]
-                }
-            }).collect();
-            let arr = format!("[{}]", all.join(", "));
-            format!("({}.reduce((a,b)=>a+(+b||0),0) / {}.filter(v=>v!=null).length)", arr, arr)
+            let parts: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
+            format!("(()=>{{const _a=[{}].flat();return _a.reduce((a,b)=>a+(+b||0),0)/_a.filter(v=>v!=null).length}})()", parts.join(","))
         }
         "COUNT" | "COUNTA" => {
-            let all: Vec<String> = args.iter().flat_map(|a| {
-                if let Expr::Range(_, _) = a {
-                    vec![format!("...{}", transpile(a, config))]
-                } else {
-                    vec![transpile(a, config)]
-                }
-            }).collect();
-            format!("[{}].filter(v=>v!=null&&v!==``).length", all.join(", "))
+            let parts: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
+            format!("[{}].flat().filter(v=>v!=null&&v!==``).length", parts.join(","))
         }
         "LARGE" => format!("_large({}, {})", arg(0), arg(1)),
         "SMALL" => format!("_small({}, {})", arg(0), arg(1)),

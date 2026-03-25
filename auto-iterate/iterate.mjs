@@ -589,7 +589,20 @@ function categorizeFailures(failures) {
   const categories = {};
   for (const f of failures) {
     let cat = 'unknown';
-    if (f.actual === null || f.actual === undefined) {
+    const addr = f.address || f.key || '';
+    // Detect runtime crashes (SHEET_ERROR, EVAL_CRASH, PARSE_ERROR)
+    if (addr.startsWith('SHEET_ERROR:') || addr.startsWith('EVAL_CRASH:') || addr === 'PARSE_ERROR') {
+      const errorMsg = String(f.actual || '');
+      if (errorMsg.includes('.reduce is not a function')) {
+        cat = 'runtime_crash_reduce_on_non_array';
+      } else if (errorMsg.includes('is not a function')) {
+        cat = 'runtime_crash_missing_function';
+      } else if (errorMsg.includes('SyntaxError')) {
+        cat = 'runtime_crash_syntax_error';
+      } else {
+        cat = 'runtime_crash_other';
+      }
+    } else if (f.actual === null || f.actual === undefined) {
       cat = 'missing_value';
     } else if (f.actual === 0 && f.expected !== 0) {
       cat = 'zero_output_likely_stub';
