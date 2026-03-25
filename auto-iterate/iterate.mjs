@@ -134,9 +134,10 @@ async function main() {
       break;
     }
 
-    // Read current transpiler source
+    // Read current source files
     const transpilerSrc = await readFile(join(RUST_SRC_DIR, 'src/transpiler.rs'), 'utf8');
     const chunkedEmitterSrc = await readFile(join(RUST_SRC_DIR, 'src/chunked_emitter.rs'), 'utf8');
+    const formulaAstSrc = await readFile(join(RUST_SRC_DIR, 'src/formula_ast.rs'), 'utf8');
 
     // Categorize failures
     const categories = categorizeFailures(failures);
@@ -152,6 +153,7 @@ async function main() {
       categories,
       transpilerSrc,
       chunkedEmitterSrc,
+      formulaAstSrc,
       currentAccuracy: bestAccuracy,
       iterationNum: iter,
     });
@@ -641,53 +643,104 @@ function categorizeFailures(failures) {
 
 // ── Claude API call ─────────────────────────────────────────────────────────
 async function askClaudeForPatch(anthropic, context) {
-  const { failures, categories, transpilerSrc, chunkedEmitterSrc, currentAccuracy, iterationNum } = context;
+  const { failures, categories, transpilerSrc, chunkedEmitterSrc, formulaAstSrc, currentAccuracy, iterationNum } = context;
 
-  const topCategory = Object.entries(categories).sort((a, b) => b[1] - a[1])[0];
-  const failureSample = failures.slice(0, 15).map(f => ({
-    address: f.address || f.key,
-    expected: f.expected || f.excelValue,
-    actual: f.actual || f.engineValue,
-    error: f.relError || f.error,
-  }));
+  // Sort categories by count descending
+  const sortedCats = Object.entries(categories).sort((a, b) => b[1] - a[1]);
+  const topCategory = sortedCats[0];
 
-  const prompt = `You are improving a Rust-based Excel formula transpiler. The transpiler converts Excel formulas into JavaScript expressions. Current eval accuracy is ${(currentAccuracy * 100).toFixed(1)}%.
+  // Build rich failure samples with formula context where available
+  const failureSample = failures.slice(0, 20).map(f => {
+    const entry = {
+      address: f.address || f.key,
+      expected: f.expected || f.excelValue,
+      actual: f.actual || f.engineValue,
+      error: f.relError || f.error,
+    };
+    // Include the formula if available (from eval crash traces)
+    if (f.formula) entry.formula = f.formula;
+    if (f.transpiled) entry.transpiled_js = f.transpiled;
+    return entry;
+  });
 
-The top failure category is "${topCategory[0]}" (${topCategory[1]} failures).
+  // Separate runtime crashes from numeric deviations — crashes are always highest priority
+  const crashFailures = failures.filter(f => {
+    const addr = f.address || f.key || '';
+    return addr.startsWith('SHEET_ERROR:') || addr.startsWith('EVAL_CRASH:');
+  });
+  const numericFailures = failures.filter(f => {
+    const addr = f.address || f.key || '';
+    return !addr.startsWith('SHEET_ERROR:') && !addr.startsWith('EVAL_CRASH:');
+  });
 
-Here are sample failures (address, expected Excel value, actual engine value, relative error):
-${JSON.stringify(failureSample, null, 2)}
+  // If there are crashes, focus on those first regardless of category counts
+  const priorityFailures = crashFailures.length > 0 ? crashFailures.slice(0, 10) : numericFailures.slice(0, 20);
+  const focusArea = crashFailures.length > 0 ? 'RUNTIME CRASHES (highest priority — fix these first)' : `"${topCategory[0]}" (${topCategory[1]} failures)`;
 
-Here is the current transpiler source (transpiler.rs):
+  const prompt = `You are a Rust developer improving an Excel formula transpiler. The system parses .xlsx formulas and generates JavaScript expressions that run in a Node.js engine.
+
+## Current State
+- Accuracy: ${(currentAccuracy * 100).toFixed(1)}%
+- Iteration: ${iterationNum}
+- Failure categories: ${sortedCats.map(([cat, n]) => `${cat}: ${n}`).join(', ')}
+
+## Priority Focus: ${focusArea}
+
+## Sample Failures
+Each entry shows: cell address, expected Excel value, actual engine output, relative error.
+When actual is null/undefined, the formula produced no output (likely a parse error or missing function).
+When actual is a string like "ctx.get(...).reduce is not a function", it's a runtime crash.
+
+${JSON.stringify(priorityFailures.slice(0, 15), null, 2)}
+
+## Architecture
+- \`src/formula_ast.rs\`: Tokenizer + parser (Excel formula string → AST)
+- \`src/transpiler.rs\`: AST → JavaScript code generation. Excel functions are translated in a match block.
+- \`src/chunked_emitter.rs\`: Generates per-sheet .mjs modules. Contains runtime helper functions (_sumif, _index, _match, _vlookup, _offset, etc.)
+- Generated JS uses \`ctx.get("Sheet!A1")\` for cell reads, \`ctx.set("Sheet!A1", value)\` for writes, \`ctx.range("Sheet!A1:B10")\` for ranges.
+
+## Source: transpiler.rs (function translation section)
 \`\`\`rust
-${transpilerSrc}
+${transpilerSrc.slice(0, 12000)}
 \`\`\`
 
-Here is the chunked emitter that generates per-sheet modules (chunked_emitter.rs) — specifically the runtime helpers and formula output sections:
+## Source: chunked_emitter.rs (runtime helpers section)
 \`\`\`rust
 ${chunkedEmitterSrc.slice(0, 8000)}
 \`\`\`
 
-Your task: Produce a MINIMAL, TARGETED patch to fix the top failure category. Focus on one specific issue (e.g., implementing a missing Excel function, fixing a range expansion bug, correcting a runtime helper).
+## Your Task
+1. Analyze the failures to identify the ROOT CAUSE (not just symptoms)
+2. Determine if the fix is in the tokenizer/parser (formula_ast.rs), the transpiler (transpiler.rs), or the runtime helpers (chunked_emitter.rs)
+3. Produce a MINIMAL, TARGETED patch — one specific fix per iteration
 
-Respond with ONLY a JSON object in this exact format:
+Common root causes:
+- Missing Excel function implementation (transpiled as \`_fn("NAME", [...])\` which returns 0)
+- Range references parsed as string literals instead of ctx.range() calls
+- Runtime helpers returning wrong types (number vs array)
+- Operator precedence issues in generated JS
+- Missing/incorrect parenthesization in complex expressions
+
+## Response Format
+Respond with ONLY valid JSON (no markdown fences, no commentary):
 {
-  "description": "Brief description of what this patch fixes",
+  "description": "One-sentence description of root cause and fix",
+  "root_cause": "What specifically is wrong (e.g., 'INDIRECT function not implemented')",
   "files": [
     {
       "path": "src/transpiler.rs",
       "action": "replace",
-      "search": "exact string to find in the file",
+      "search": "exact string to find in the file (must be verbatim from source above)",
       "replace": "replacement string"
     }
   ]
 }
 
 Rules:
-- The "search" string must be an EXACT substring of the current file content.
-- Keep patches small and focused — one fix per iteration.
-- Only modify transpiler.rs or chunked_emitter.rs.
-- If you can't identify a clear fix, respond with: {"description": "no actionable fix identified", "files": []}`;
+- "search" must be an EXACT, VERBATIM substring from the source code shown above
+- Only modify: src/transpiler.rs, src/chunked_emitter.rs, or src/formula_ast.rs
+- One fix per response — keep patches small and verifiable
+- If no clear fix exists: {"description": "no actionable fix identified", "root_cause": "unclear", "files": []}`;
 
   try {
     const response = await anthropic.messages.create({
