@@ -1,5 +1,38 @@
 # excel-to-engine — Changelog
 
+## 2026-03-25 — Repo Restructure + Blind Eval + Merge to Main
+
+### Repository Reorganization
+- **Two clean pipelines**: `pipelines/rust/` (fast Rust parser) and `pipelines/js-reasoning/` (Claude-driven)
+- **Unified eval**: All eval tools consolidated in `eval/` (iterate, blind-eval, questions, analysis, pipeline, Dockerfile)
+- **Cleaned up**: Removed stale `_extract*.py`, `_extracted/`, duplicate container files, empty directories
+- **Updated docs**: CLAUDE.md, README.md rewritten for new structure
+
+### Blind Eval System (New)
+- `eval/generate-questions.mjs` — Generates natural-language financial questions from ground truth
+- `eval/blind-eval.mjs` — Independent Claude API validation with tool_use (zero engine knowledge)
+- `eval/analyze-report.mjs` — Structured analysis of eval results with fix recommendations
+- **50/50 (100%)** on blind eval for 38-sheet model — proves the engine data is navigable and correct
+
+### Chunked Compilation (Option C)
+- Per-sheet JS modules instead of monolithic engine (no more multi-GB files)
+- Sheet-level dependency DAG with convergence loops for circular references
+- 82 sheets for large model, 38 for mid-size — all compile and run
+- Compact mode auto-enables for workbooks >50K cells
+
+### Auto-Iteration Container
+- Docker container: parse → eval → Claude API diagnose → patch transpiler → rebuild → re-eval → loop
+- Resource monitoring in terminal (CPU/mem/network)
+- Ctrl+C cleanly kills container + monitor
+- Windows + Mac compatible (MSYS_NO_PATHCONV, .gitattributes LF)
+
+### Performance
+- Rayon parallelization: 3.8x faster (14min → 3:36 for 82-sheet model)
+- Iterative Tarjan SCC: handles 3M+ nodes without stack overflow
+- Ground truth coverage fix: +682K literal cells (+22%)
+
+---
+
 ## 2026-03-23 — Rust Engine Pipeline (Phase 1 + 2 + Docker skeleton)
 
 ### rust-parser/ — New Rust Crate
@@ -97,7 +130,7 @@ Addresses the core failure mode: engines match at base case but get the response
 
 ### Sheet Fingerprinting, Multi-Year Extraction & Build Log Improvements
 
-Incorporated learnings from the Chariot NCP build (37-asset UK car park model) into the core toolkit.
+Incorporated learnings from a 37-asset real estate model build into the core toolkit.
 
 **lib/excel-parser.mjs — New Features:**
 - `matchLabel()` — Fuzzy label matcher with 50+ financial term aliases mapping to canonical field names (revenue, EBITDA/EBITDAR/NOI, rent, IRR, MOIC, capex, cash flow, etc.)
@@ -105,7 +138,7 @@ Incorporated learnings from the Chariot NCP build (37-asset UK car park model) i
 - `detectYearRow()` — Auto-detects rows with sequential year values (2023, 2024, 2025...) and maps columns to calendar years
 - `extractMultiYear()` — Extracts a time series for any field across all year columns
 - `extractByYear()` — Extracts all fields for a specific reference year (combines fingerprint + year detection)
-- `detectEscalation()` — Computes year-over-year growth rates for any field, flags escalating values (catches rent escalation that caused 10-15% errors in the Chariot build)
+- `detectEscalation()` — Computes year-over-year growth rates for any field, flags escalating values (catches rent escalation that caused 10-15% errors in production builds)
 - `classifyAsset()` — Auto-classifies assets as leased/managed/mixed based on rent presence, coverage ratios, and label text signals
 
 **skill/SKILL.md — Phase 1 Improvements:**

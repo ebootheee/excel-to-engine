@@ -1,0 +1,11 @@
+{
+  "name": "excel-to-engine-eval",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "ws": "^8.18.0",
+    "xlsx": "^0.18.5"
+  }
+}

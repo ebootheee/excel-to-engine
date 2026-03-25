@@ -1,9 +1,0 @@
-{
-  "name": "excel-to-engine-auto-iterate",
-  "version": "0.1.0",
-  "type": "module",
-  "private": true,
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0"
-  }
-}

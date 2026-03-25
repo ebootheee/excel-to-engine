@@ -4,6 +4,8 @@ models/
 
 # Output from iteration runs
 output/
+output-win/
+package-lock.json
 
 # API keys
 .env

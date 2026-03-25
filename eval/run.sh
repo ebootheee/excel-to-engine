@@ -47,7 +47,7 @@ fi
 # Check API key
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
   echo "Error: ANTHROPIC_API_KEY is not set."
-  echo "Set it in your environment or create auto-iterate/.env with:"
+  echo "Set it in your environment or create eval/.env with:"
   echo "  ANTHROPIC_API_KEY=sk-ant-..."
   exit 1
 fi

@@ -1,310 +1,123 @@
 # excel-to-engine
 
-> Turn a complex financial Excel model into a live, testable JavaScript computation engine — in one Claude Code session.
+> Convert complex financial Excel models into live, testable JavaScript computation engines.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## What It Does
 
-A Claude Code skill + reusable library set that takes a `.xlsx` financial model (PE fund models, real estate waterfalls, DCF analyses, corporate M&A) and produces:
+Takes a `.xlsx` financial model (PE fund models, real estate waterfalls, DCF analyses, corporate M&A) and produces:
 
-1. **`engine.js`** — A pure JavaScript computation engine that replicates the model's calculations, calibrated to match Excel at base case
-2. **`tests/eval.mjs`** — An automated test suite that validates accuracy against the original Excel
-3. **`dashboard/`** — A zero-build interactive HTML dashboard with input sliders, sensitivity heatmaps, and eval results
+1. **Per-sheet JS modules** — Each Excel sheet becomes a self-contained `.mjs` file with all formulas transpiled to JavaScript
+2. **An orchestrator** (`engine.js`) — Wires sheets together in dependency order, handles circular references with convergence loops
+3. **Ground truth** — Every cell value from Excel, for automated accuracy testing
+4. **A blind eval system** — Independent validation using Claude API with zero knowledge of the engine's internals
 
-## Architecture
+## Two Pipelines
 
-![excel-to-engine pipeline: 4 phases from Excel file through Parse & Analyze, Generate Engine, Generate Tests, to Generate Dashboard](docs/architecture.png)
+### Rust Pipeline (fast, automated) — `pipelines/rust/`
 
-## Prerequisites
-
-- **Node.js 18+**
-- **npm** (for xlsx package)
+Best for large models. Parses Excel with calamine (10-50x faster than SheetJS), transpiles formulas to JS, generates per-sheet modules. Handles 3.7M cells in ~3 minutes.
 
 ```bash
-npm install
+cd pipelines/rust && cargo build --release
+./target/release/rust-parser model.xlsx output-dir --chunked
+```
+
+**Outputs:** `chunked/sheets/*.mjs` + `engine.js` + `_ground-truth.json` + `_graph.json`
+
+### JS Reasoning Pipeline (Claude-driven) — `pipelines/js-reasoning/`
+
+Best for smaller models where Claude should understand the financial logic. Uses the `excel-to-engine` skill to orchestrate: Analyze → Generate → Test → Dashboard.
+
+```
+Open in Claude Code → "Convert this Excel model into a JavaScript engine"
 ```
 
 ## Quick Start
 
-### Using Claude Code (Recommended)
+### Prerequisites
 
-Open this project in Claude Code and say:
+- Node.js 18+
+- Rust toolchain (for the Rust pipeline): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- Docker (for containerized eval)
 
-> "Convert this Excel model into a JavaScript engine"
+### Using the Rust Pipeline
 
-The `excel-to-engine` skill will guide the 4-phase pipeline automatically.
+```bash
+# 1. Build the parser
+cd pipelines/rust && cargo build --release
 
-### Manual Usage
+# 2. Parse a model
+./target/release/rust-parser /path/to/model.xlsx ./output --chunked
 
-```javascript
-import { loadWorkbook, buildModelMap } from './lib/excel-parser.mjs';
-import { computeIRR } from './lib/irr.mjs';
-import { computeWaterfall } from './lib/waterfall.mjs';
-import { calibrate } from './lib/calibration.mjs';
-
-// 1. Parse Excel
-const wb = loadWorkbook('path/to/model.xlsx');
-const modelMap = buildModelMap(wb);
-
-// 2. Use the libraries directly
-const irr = computeIRR([-1000, 200, 200, 200, 200, 200, 200, 200, 200]);
-console.log(`IRR: ${(irr * 100).toFixed(2)}%`);
-
-// 3. Compute a waterfall
-const result = computeWaterfall(
-  200_000_000,  // net proceeds
-  100_000_000,  // equity basis
-  [
-    { name: 'Return of Capital', hurdle: 0, lpSplit: 1.0, gpSplit: 0.0, type: 'return_of_capital' },
-    { name: 'Preferred Return', hurdle: 0.08, lpSplit: 1.0, gpSplit: 0.0 },
-    { name: 'GP Catch-Up', hurdle: 0, lpSplit: 0.0, gpSplit: 1.0, type: 'catchup', catchupTarget: 0.20 },
-    { name: 'Residual 80/20', hurdle: Infinity, lpSplit: 0.80, gpSplit: 0.20 },
-  ],
-  { holdPeriodYears: 5 }
-);
+# 3. Run blind eval (validates engine independently)
+cd ../../eval
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+node generate-questions.mjs ../output/chunked --count 50 --output ../output/test-questions.json
+node blind-eval.mjs ../output/chunked --questions ../output/test-questions.json
+node analyze-report.mjs ../output/eval-report.json ../output/analysis.json
 ```
+
+### Containerized Auto-Iteration (overnight runs)
+
+```bash
+cd eval
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+cp /path/to/models/*.xlsx models/
+./run.sh
+```
+
+Processes all models sequentially: parse → eval → Claude API diagnosis → patch transpiler → rebuild → re-eval → loop until 90% accuracy or 30 iterations.
 
 ## Project Structure
 
 ```
 excel-to-engine/
-├── lib/
-│   ├── irr.mjs            # Newton-Raphson IRR solver (+ XIRR)
-│   ├── waterfall.mjs       # PE distribution waterfall calculator
-│   ├── calibration.mjs     # Auto-calibration framework
-│   ├── sensitivity.mjs     # Sensitivity surface validation + multi-point calibration
-│   ├── self-eval.mjs       # Interactive self-eval with diagnostics
-│   └── excel-parser.mjs    # Excel reader + sheet fingerprinting
-├── templates/
-│   ├── engine-template.js  # Engine skeleton with calibration system
-│   └── dashboard/
-│       ├── index.html      # 2-tab dashboard template
-│       ├── styles.css      # Styling (works with Tailwind CDN)
-│       └── app.js          # Dashboard logic (reads engine + model map)
-├── eval-framework/         # Blind testing framework
-│   ├── generate-control.mjs
-│   └── compare-outputs.mjs
-├── tests/
-│   └── synthetic-pe-model/ # Sensitivity validation test
-│       ├── engine.js       # Buggy engine (simple interest pref)
-│       ├── excel-surface.mjs # Ground truth (compound interest)
-│       └── test-sensitivity.mjs
-├── skill/
-│   └── SKILL.md            # Claude Code skill definition
-├── package.json
-├── CLAUDE.md               # Instructions for Claude Code
-├── README.md               # This file
-├── PLAN.md
-├── CHANGELOG.md
-├── ROADMAP.md
-└── LICENSE
+├── pipelines/
+│   ├── rust/                    # Rust parser + formula transpiler
+│   │   ├── src/                 # parser, transpiler, chunked_emitter, dependency, formula_ast, etc.
+│   │   ├── tests/               # Synthetic model (27/27 = 100%)
+│   │   └── Cargo.toml
+│   └── js-reasoning/            # Claude-reasoning pipeline
+│       ├── skill/SKILL.md       # Claude Code skill definition
+│       ├── templates/           # Engine, eval, dashboard templates
+│       └── eval-framework/      # Blind testing tools
+├── eval/                        # Unified eval (works with both pipelines)
+│   ├── iterate.mjs              # Auto-iteration loop
+│   ├── blind-eval.mjs           # Blind Claude API eval
+│   ├── generate-questions.mjs   # Question generator
+│   ├── analyze-report.mjs       # Analysis reporter
+│   ├── pipeline.mjs             # Pipeline orchestrator
+│   ├── Dockerfile               # Container (Rust + Node)
+│   └── run.sh                   # Docker runner
+├── lib/                         # Shared JS libraries
+│   ├── irr.mjs                  # IRR/XIRR solver
+│   ├── waterfall.mjs            # PE distribution waterfall
+│   ├── calibration.mjs          # Auto-calibration
+│   ├── sensitivity.mjs          # Sensitivity surface analysis
+│   └── excel-parser.mjs         # Excel reader + fingerprinting
+├── tests/synthetic-pe-model/    # Integration test
+└── docs/                        # Historical logs
 ```
+
+## Accuracy Results
+
+| Model | Size | Sheets | Cells | Rust Pipeline | Blind Eval |
+|-------|------|--------|-------|--------------|------------|
+| Synthetic (3-sheet PE) | 3 KB | 3 | 78 | 100% (27/27) | 100% (10/10) |
+| Mid-size (38 sheets) | 21 MB | 38 | 1.7M | 75.9% | 100% (50/50) |
+| Large (82 sheets) | 52 MB | 82 | 3.7M | 43.9% | In progress |
 
 ## Libraries
 
-### `lib/irr.mjs` — IRR Solver
-
-Newton-Raphson with bisection fallback. Handles edge cases (no sign change, divergence).
-
-```javascript
-import { computeIRR, computeXIRR, npv } from './lib/irr.mjs';
-
-computeIRR([-100, 150]);           // 0.5 (50%)
-computeIRR([-1000, 0, 0, 2000]);   // ~0.2599
-
-// Irregular dates
-computeXIRR([
-  { date: new Date('2024-01-01'), amount: -1000 },
-  { date: new Date('2026-06-15'), amount: 1500 },
-]);
-```
-
-### `lib/waterfall.mjs` — Distribution Waterfall
-
-Supports standard American and European PE waterfall structures.
-
-```javascript
-import { computeWaterfall, createAmericanWaterfall, createEuropeanWaterfall } from './lib/waterfall.mjs';
-
-// Quick American-style 80/20 with 8% pref
-const tiers = createAmericanWaterfall({
-  prefReturn: 0.08,
-  carryPercent: 0.20,
-  residualLPSplit: 0.80,
-});
-const result = computeWaterfall(200e6, 100e6, tiers, { holdPeriodYears: 5 });
-```
-
-### `lib/calibration.mjs` — Calibration Framework
-
-Computes scale factors to match engine outputs to known Excel values at base case.
-
-```javascript
-import { calibrate, applyCalibration, validateOutputs } from './lib/calibration.mjs';
-
-const { factors, converged } = calibrate(
-  computeModel, BASE_CASE,
-  [
-    { key: 'returns.grossMOIC', excelValue: 2.15 },
-    { key: 'returns.netIRR', excelValue: 0.1847 },
-  ]
-);
-```
-
-### `lib/sensitivity.mjs` — Sensitivity Surface Validation
-
-Captures how outputs *respond to input changes*, not just their static values. Detects breakpoints (waterfall hurdles, MIP thresholds), compares slopes between engine and Excel, and provides multi-point calibration that works across the full input range.
-
-```javascript
-import {
-  extractSurface, compareSurfaces, computeElasticity,
-  detectBreakpoints, multiPointCalibrate, printSensitivityReport,
-} from './lib/sensitivity.mjs';
-
-// Extract how the engine responds to exit multiple changes
-const engineSurface = extractSurface(computeModel, BASE_CASE, {
-  exitMultiple: { min: 14, max: 26, steps: 7 },
-});
-
-// Compare against Excel's response surface
-const comparison = compareSurfaces(engineSurface, excelSurface);
-printSensitivityReport(comparison);
-// Shows: level errors, slope errors, breakpoint mismatches
-
-// Multi-point calibration: piecewise corrections instead of flat scale factors
-const { corrections, apply } = multiPointCalibrate(computeModel, BASE_CASE, excelSurface);
-const correctedOutput = apply(rawOutput, inputs);
-```
-
-### `lib/excel-parser.mjs` — Excel Reader + Sheet Fingerprinting
-
-Reads cells, detects model structure, builds model maps. Includes automated sheet fingerprinting, fuzzy label matching, year detection, multi-year extraction, escalation detection, and asset classification.
-
-```javascript
-import {
-  loadWorkbook, readCell, detectInputCells, buildModelMap,
-  fingerprintWorkbook, detectYearRow, extractByYear,
-  extractMultiYear, detectEscalation, classifyAsset,
-} from './lib/excel-parser.mjs';
-
-const wb = loadWorkbook('model.xlsx');
-
-// Auto-detect row mappings across identically-structured sheets
-const { commonPattern, commonSheets } = fingerprintWorkbook(wb);
-
-// Detect year columns and extract data for a reference year
-const yearInfo = detectYearRow(wb, commonSheets[0]);
-const data = extractByYear(wb, commonSheets[0], 2026, { fieldMap: commonPattern, yearInfo });
-
-// Detect rent escalation rates
-const rentByYear = extractMultiYear(wb, commonSheets[0], commonPattern.rent.row, yearInfo.columnMap);
-const escalation = detectEscalation(rentByYear);
-
-// Auto-classify asset type
-const type = classifyAsset(data.fields);
-```
-
-## How Calibration Works
-
-Financial models in Excel use hundreds of intermediate formulas. Replicating every cell exactly in JavaScript is impractical. Instead, excel-to-engine:
-
-1. Implements the core economic logic (growth, discounting, waterfall splits)
-2. Runs the engine at base case inputs
-3. Compares each output against the known Excel value
-4. Computes a multiplicative scale factor: `factor = excelValue / engineValue`
-5. Applies factors to all subsequent computations
-
-This means the engine is exact at base case and approximately correct for nearby inputs. The eval suite validates that deviations stay within tolerance across the input range.
-
-## Eval Framework
-
-The project includes tools for validating engine accuracy:
-
-### Self-Eval (during development)
-
-```javascript
-import { selfEval, printComparisonTable, diagnoseFailures } from './lib/self-eval.mjs';
-
-const result = selfEval(computeModel, BASE_CASE, EXCEL_TARGETS);
-printComparisonTable(result);
-// Shows: Metric | Engine | Excel | Status
-//        Gross MOIC | 2.50x | 2.35x | ⚠️ 6.4%
-
-const fixes = diagnoseFailures(result.results.filter(r => !r.pass));
-// Returns: [{ priority: 1, category: 'waterfall', fix: 'lpTotal should be netProceeds - gpCarry' }]
-```
-
-### Control Baseline (for blind testing)
-
-```bash
-# Generate a control baseline from a reference engine
-node eval-framework/generate-control.mjs ./reference/engine.js
-
-# Score a candidate engine against the baseline
-node eval-framework/compare-outputs.mjs ./candidate/
-```
-
-### Interactive Improvement Loop
-
-The skill supports an interactive eval cycle — build the engine, see where it's off, fix, repeat:
-
-1. **Run 1 improvement cycle** — fix worst failures, re-eval
-2. **Auto-loop until >95%** — autonomous fixing (max 5 iterations)
-3. **Accept current state** — lock the engine and proceed
-4. **Show detailed analysis** — failure diagnostics with fix suggestions
-
-## Using Your Engine
-
-After the engine is built and locked, you can use it anywhere:
-
-### In Claude Code or Claude Chat
-```
-Upload engine.js to a Claude Project as knowledge.
-Ask: "Run the model with exit multiple 22x and tell me the IRR."
-```
-
-### In a Web App
-```html
-<script type="module">
-  import { computeModel } from './engine.js';
-  const result = computeModel({ exitMultiple: 22 });
-  document.getElementById('irr').textContent =
-    (result.returns.grossIRR * 100).toFixed(1) + '%';
-</script>
-```
-
-### As an API
-```javascript
-import { computeModel } from './engine.js';
-app.get('/api/model', (req, res) => {
-  const result = computeModel(req.query);
-  res.json(result);
-});
-```
-
-### With the Dashboard
-```bash
-# Open the interactive dashboard
-npx serve dashboard/
-# or just open dashboard/index.html in any browser
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run the test suite: `node tests/eval.mjs`
-5. Submit a pull request
-
-### Design Principles
-
-- **Zero build step** — Dashboard works by opening index.html
-- **Pure functions** — All library functions are side-effect free
-- **ES modules** — Modern import/export throughout
-- **Practical accuracy** — Calibration over exact replication
-- **Financial-first** — Built for PE, RE, and fund models
+| Library | Purpose |
+|---------|---------|
+| `lib/irr.mjs` | Newton-Raphson IRR with bisection fallback, XIRR for irregular dates |
+| `lib/waterfall.mjs` | American + European PE waterfall structures |
+| `lib/calibration.mjs` | Scale factor calibration against Excel targets |
+| `lib/sensitivity.mjs` | Surface extraction, slope comparison, breakpoint detection, multi-point calibration |
+| `lib/excel-parser.mjs` | Cell reading, sheet fingerprinting, year detection, field mapping |
 
 ## License
 

@@ -181,7 +181,7 @@ Topo order: `Assumptions → Cashflows → Summary` ✅
 ### Remaining Milestones
 
 - **Milestone 7 (Pipeline/eval wiring)**: Update JS eval path to load chunked engine artifacts — NOT STARTED
-- **Milestone 7b (Validation/UAT)**: Test against Lysara/Chariot/Outpost real models — NOT STARTED (requires .xlsx files)
+- **Milestone 7b (Validation/UAT)**: Test against Model-B/Model-A/Model-C real models — NOT STARTED (requires .xlsx files)
 
 ### Next Actions
 
@@ -251,15 +251,15 @@ chunked/
 
 ---
 
-## 2026-03-24T09:00:00 Local — Chariot Model Validation (Milestone 7b)
+## 2026-03-24T09:00:00 Local — Model-A Model Validation (Milestone 7b)
 
 ### Objective
 
-Test the chunked compilation pipeline against the real Chariot model (52MB, 82 sheets, 3.7M cells, 3M formula cells).
+Test the chunked compilation pipeline against the real Model-A model (52MB, 82 sheets, 3.7M cells, 3M formula cells).
 
 ### Iteration 1: Initial Run — OOM + Performance
 
-Ran `--chunked` against Chariot. Hit two blockers:
+Ran `--chunked` against Model-A. Hit two blockers:
 
 1. **Performance**: `dependency.rs::tarjan_scc()` used `Vec::contains()` (O(n)) for node membership — O(n²) on 3M nodes. Process ran 44+ minutes at 100% CPU before being killed.
 2. **OOM**: After fixing to `HashSet` (O(1) lookups), the cell-level dependency graph still consumed 6GB+ RAM and was killed (exit 137).
@@ -339,8 +339,8 @@ These are **code/transpiler issues**, not iteration issues (test pre-loads all 3
 | `src/chunked_emitter.rs` | MODIFIED | Convergence loops in orchestrator, `use_ctx_get` mode, runtime helpers |
 | `src/transpiler.rs` | MODIFIED | `use_ctx_get` config, IFERROR paren fix |
 | `src/model_map.rs` | MODIFIED | `use_ctx_get: false` for existing code paths |
-| `tests/eval-chariot.mjs` | NEW | Spot-check eval harness for Chariot model |
-| `tests/eval-chariot-isolated.mjs` | NEW | Isolated per-formula eval (not yet run) |
+| `tests/eval-model.mjs` | NEW | Spot-check eval harness for Model-A model |
+| `tests/eval-model-isolated.mjs` | NEW | Isolated per-formula eval (not yet run) |
 
 ### Quality Gates
 
@@ -348,9 +348,9 @@ These are **code/transpiler issues**, not iteration issues (test pre-loads all 3
 |------|--------|
 | `cargo build` | **PASS** ✅ |
 | `cargo test` (11 tests) | **PASS** ✅ |
-| Chariot parse (82 sheets, 3.7M cells) | **PASS** ✅ (0 parse errors) |
-| Chariot chunked generation | **PASS** ✅ (82 modules + orchestrator) |
-| Chariot eval (8 sheets spot-check) | **59.3%** ⚠️ (see failure categories) |
+| Model-A parse (82 sheets, 3.7M cells) | **PASS** ✅ (0 parse errors) |
+| Model-A chunked generation | **PASS** ✅ (82 modules + orchestrator) |
+| Model-A eval (8 sheets spot-check) | **59.3%** ⚠️ (see failure categories) |
 
 ### Next Actions
 
@@ -358,7 +358,7 @@ These are **code/transpiler issues**, not iteration issues (test pre-loads all 3
 2. Implement SUMIF/COUNTIF with runtime evaluation.
 3. Improve OFFSET handling (common in PE models for dynamic ranges).
 4. Investigate SUM range parsing for truncation bugs.
-5. Test against Lysara (21MB) and Outpost (80MB) models.
+5. Test against Model-B (21MB) and Model-C (80MB) models.
 
 ---
 
@@ -366,7 +366,7 @@ These are **code/transpiler issues**, not iteration issues (test pre-loads all 3
 
 ### Objective
 
-Reduce pipeline runtime and output size for the Chariot model (52MB, 82 sheets, 3.7M cells).
+Reduce pipeline runtime and output size for the Model-A model (52MB, 82 sheets, 3.7M cells).
 
 ### Optimizations Applied
 
@@ -481,7 +481,7 @@ Implement pending formula fixes identified in previous eval analysis, and invest
 | `src/transpiler.rs` | MODIFIED | SUMIF/SUMIFS/COUNTIF/COUNTIFS/OFFSET transpilation, ctx.range(), SUMPRODUCT fix |
 | `src/chunked_emitter.rs` | MODIFIED | Runtime helpers (_sumif, _sumifs, _countif, _countifs, _offset, improved _index/_match), _helpers.mjs dedup |
 | `src/sheet_partition.rs` | MODIFIED | `extract_ground_truth()` includes ALL cells with values |
-| `tests/eval-chariot-isolated.mjs` | MODIFIED | Import helpers from _helpers.mjs, include new helpers |
+| `tests/eval-model-isolated.mjs` | MODIFIED | Import helpers from _helpers.mjs, include new helpers |
 
 ### Quality Gates
 
@@ -490,8 +490,8 @@ Implement pending formula fixes identified in previous eval analysis, and invest
 | `cargo build --release` | **PASS** ✅ |
 | `cargo test` (11 tests) | **PASS** ✅ |
 | Smoke test (27/27) | **PASS** ✅ (100%) |
-| Chariot generation | **PASS** ✅ (3:36, 436 MB) |
-| Chariot eval (8 sheets) | **87.6%** ⬆️ (was 59.3%) |
+| Model-A generation | **PASS** ✅ (3:36, 436 MB) |
+| Model-A eval (8 sheets) | **87.6%** ⬆️ (was 59.3%) |
 
 ### Pipeline Performance Summary
 
@@ -518,4 +518,4 @@ After:  3,726,751 entries (+682,144 literal cells = +22%)
 1. **INDIRECT implementation**: Would recover ~35 cells in Managed Budget Comparison and ~21 in Asset ICS. Requires runtime dynamic reference resolution — complex but high-impact.
 2. **Expand eval to more sheets**: Test the other 74 sheets to get a broader accuracy picture.
 3. **Root cause remaining Group Level Tax failures**: Trace D28/D29/D33 formula chains to find which upstream values are wrong.
-4. **Test against Lysara and Outpost models**: Validate generalization.
+4. **Test against Model-B and Model-C models**: Validate generalization.

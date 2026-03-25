@@ -15,14 +15,14 @@ FROM rust:1.82-slim-bookworm AS rust-builder
 WORKDIR /build/rust-parser
 
 # Copy Cargo files for dependency caching
-COPY rust-parser/Cargo.toml rust-parser/Cargo.lock* ./
+COPY pipelines/rust/Cargo.toml pipelines/rust/Cargo.lock* ./
 
 # Pre-fetch deps with dummy main
 RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 RUN cargo build --release 2>&1 || true
 
 # Copy real source and build
-COPY rust-parser/src ./src
+COPY pipelines/rust/src ./src
 RUN touch src/main.rs && cargo build --release
 
 # ─── Stage 2: Node.js runtime ───────────────────────────────────────────────
@@ -46,16 +46,16 @@ ENV PATH="/usr/local/cargo/bin:${PATH}"
 COPY --from=rust-builder /build/rust-parser/target/release/rust-parser /usr/local/bin/rust-parser
 
 # Copy Rust source AND the pre-built target dir (for fast rebuilds during iteration)
-COPY rust-parser/ /app/rust-parser/
+COPY pipelines/rust/ /app/rust-parser/
 COPY --from=rust-builder /build/rust-parser/target /app/rust-parser/target
 
 # Install Node dependencies
-COPY auto-iterate/package.json ./
+COPY eval/package.json ./
 RUN npm install --production
 
 # Copy iteration script + pipeline
-COPY auto-iterate/iterate.mjs ./
-COPY container/pipeline.mjs ./pipeline.mjs
+COPY eval/iterate.mjs ./
+COPY eval/pipeline.mjs ./pipeline.mjs
 COPY lib ./lib/
 
 # Data directories (mount models + output here)

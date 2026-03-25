@@ -2,7 +2,7 @@
 
 Date: 2026-03-23  
 Owner: Active agent handoff plan  
-Status: In progress (Chariot UAT started, 59.3% accuracy on spot-check)
+Status: In progress (Model-A UAT started, 59.3% accuracy on spot-check)
 
 ## Objective
 
@@ -99,7 +99,7 @@ export function compute(ctx) {
    - Update JS eval path to load generated engine artifacts.
 7. **Validation/UAT**
    - Synthetic model
-   - Lysara (21MB), Chariot (52MB), Outpost (80MB)
+   - Model-B (21MB), Model-A (52MB), Model-C (80MB)
 
 ## Edge Cases Checklist
 
@@ -133,4 +133,4 @@ Any incoming agent should:
 - Implement SUMIF/COUNTIF runtime evaluation (currently stubbed as 0).
 - Improve OFFSET handling for dynamic ranges.
 - Investigate SUM range truncation in formula parser.
-- Test against Lysara (21MB) and Outpost (80MB) models.
+- Test against Model-B (21MB) and Model-C (80MB) models.

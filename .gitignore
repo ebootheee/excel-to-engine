@@ -1,10 +1,21 @@
 node_modules/
 *.xlsx
-tests/eval-results.json
 .DS_Store
 
-# Proprietary model data and project-specific builds
+# Build artifacts
+pipelines/rust/target/
+
+# Eval outputs and config
+eval/output/
+eval/output-win/
+eval/models/
+eval/.env
+tests/eval-results.json
+
+# Stale extraction artifacts
 _extract*
 _extracted/
-chariot-ncp/
+
+# Claude Code session
 .claude/
+tests/uat-lysara/
