@@ -1,5 +1,32 @@
 # excel-to-engine — Changelog
 
+## 2026-03-25 — Architecture Documentation: Two-Layer Design
+
+Documented the architectural direction: Rust transpiler as the primary path (Layer 1), LLM as a semantic layer operating on transpiled output (Layer 2).
+
+**CLAUDE.md:**
+- Added Architecture Philosophy section explaining the two-layer approach
+- Layer 1: Deterministic transpilation (Rust parser produces mechanically correct JS)
+- Layer 2: LLM reads/writes/iterates on transpiled JS (naming, gap-filling, dashboards, testing)
+- Calibration repositioned as verification + fallback, not primary strategy
+- Added Rust parser key files to the reference table
+
+**README.md:**
+- Replaced architecture section with two-layer diagram
+- Added Rust transpiler and container pipeline to Quick Start
+- Updated project structure to show full repo layout (rust-parser, container, auto-iterate)
+- Rewrote "How Calibration Works" → "How It Works" covering transpiler as primary path
+
+**ROADMAP.md:**
+- Promoted Rust transpiler from "Long-Term" to "Done" with full description
+- Added "Skill & Documentation: LLM-on-Transpiled-JS Workflow" to Near-Term
+
+**PLAN.md:**
+- Updated status to reflect current state: transpiler done, skill/docs update next
+- Consolidated completed work and defined next steps
+
+---
+
 ## 2026-03-23 — Rust Engine Pipeline (Phase 1 + 2 + Docker skeleton)
 
 ### rust-parser/ — New Rust Crate

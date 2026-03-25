@@ -14,12 +14,27 @@ A Claude Code skill + reusable library set that takes a `.xlsx` financial model 
 
 ## Architecture
 
-![excel-to-engine pipeline: 4 phases from Excel file through Parse & Analyze, Generate Engine, Generate Tests, to Generate Dashboard](docs/architecture.png)
+The project uses a two-layer architecture:
+
+```
+Layer 1: Deterministic Transpilation (Rust)
+  Excel (.xlsx) → Parse (calamine) → Formula AST → JavaScript
+  Handles: ~60 Excel functions, circular refs, cross-sheet deps
+  Output: raw-engine.js (mechanically correct, cell-ref variable names)
+
+Layer 2: LLM Semantic Layer (Claude)
+  raw-engine.js → Naming, structure, gap-filling → engine.js
+  Handles: Input/output identification, dashboards, testing, docs
+  Calibration used for verification + fallback on unsupported formulas
+```
+
+The Rust transpiler is the **primary path** — it produces correct JS deterministically in milliseconds. The LLM operates on the transpiled output rather than reverse-engineering Excel math.
 
 ## Prerequisites
 
 - **Node.js 18+**
 - **npm** (for xlsx package)
+- **Rust toolchain** (optional — for building the transpiler from source)
 
 ```bash
 npm install
@@ -33,9 +48,29 @@ Open this project in Claude Code and say:
 
 > "Convert this Excel model into a JavaScript engine"
 
-The `excel-to-engine` skill will guide the 4-phase pipeline automatically.
+The `excel-to-engine` skill will guide the pipeline automatically.
 
-### Manual Usage
+### Using the Rust Transpiler Directly
+
+```bash
+# Build the transpiler
+cd rust-parser && cargo build --release
+
+# Transpile an Excel model
+./target/release/rust-parser model.xlsx output/
+# Produces: model-map.json, formulas.json, dependency-graph.json, raw-engine.js
+```
+
+### Using the Container Pipeline
+
+```bash
+# Run the full automated pipeline
+docker build -t excel-to-engine container/
+docker run -v ./model.xlsx:/data/model.xlsx excel-to-engine
+# Produces: calibrated engine.js + eval-results.json + diagnostics.json
+```
+
+### Using the JS Libraries Directly
 
 ```javascript
 import { loadWorkbook, buildModelMap } from './lib/excel-parser.mjs';
@@ -69,36 +104,44 @@ const result = computeWaterfall(
 
 ```
 excel-to-engine/
-├── lib/
-│   ├── irr.mjs            # Newton-Raphson IRR solver (+ XIRR)
-│   ├── waterfall.mjs       # PE distribution waterfall calculator
-│   ├── calibration.mjs     # Auto-calibration framework
-│   ├── sensitivity.mjs     # Sensitivity surface validation + multi-point calibration
-│   ├── self-eval.mjs       # Interactive self-eval with diagnostics
-│   └── excel-parser.mjs    # Excel reader + sheet fingerprinting
+├── rust-parser/              # Layer 1: Deterministic transpilation
+│   ├── src/
+│   │   ├── main.rs           # CLI entry point
+│   │   ├── parser.rs         # Excel parsing (calamine, 10-50x faster than SheetJS)
+│   │   ├── formula_ast.rs    # Excel formula tokenizer + AST parser
+│   │   ├── transpiler.rs     # AST → JavaScript code generation (~60 functions)
+│   │   ├── dependency.rs     # Cell dependency graph + Tarjan's SCC cycle detection
+│   │   ├── circular.rs       # Convergence loop generation for circular refs
+│   │   └── model_map.rs      # Model map + raw engine generation
+│   └── tests/
+├── container/                # Automated pipeline (Docker)
+│   ├── Dockerfile            # Multi-stage: Rust build → Node.js runtime
+│   ├── pipeline.mjs          # Orchestration: parse → validate → eval → output
+│   ├── eval-loop.mjs         # Automated calibration loop
+│   └── monitor/              # Browser dashboard for pipeline progress
+├── lib/                      # Layer 2: JS libraries (used by LLM + pipeline)
+│   ├── irr.mjs               # Newton-Raphson IRR solver (+ XIRR)
+│   ├── waterfall.mjs         # PE distribution waterfall calculator
+│   ├── calibration.mjs       # Auto-calibration framework (verification + fallback)
+│   ├── sensitivity.mjs       # Sensitivity surface validation + multi-point calibration
+│   ├── self-eval.mjs         # Interactive self-eval with diagnostics
+│   └── excel-parser.mjs      # Excel reader + sheet fingerprinting
+├── auto-iterate/             # Claude API-driven improvement loop
+│   └── iterate.mjs           # Diagnose stuck outputs via LLM, patch, re-eval
 ├── templates/
-│   ├── engine-template.js  # Engine skeleton with calibration system
-│   └── dashboard/
-│       ├── index.html      # 2-tab dashboard template
-│       ├── styles.css      # Styling (works with Tailwind CDN)
-│       └── app.js          # Dashboard logic (reads engine + model map)
-├── eval-framework/         # Blind testing framework
+│   ├── engine-template.js    # Engine skeleton with calibration system
+│   └── dashboard/            # HTML dashboard (Tailwind CDN + Chart.js)
+├── eval-framework/           # Blind testing framework
 │   ├── generate-control.mjs
 │   └── compare-outputs.mjs
 ├── tests/
-│   └── synthetic-pe-model/ # Sensitivity validation test
-│       ├── engine.js       # Buggy engine (simple interest pref)
-│       ├── excel-surface.mjs # Ground truth (compound interest)
-│       └── test-sensitivity.mjs
+│   └── synthetic-pe-model/   # Sensitivity validation proof-of-concept
 ├── skill/
-│   └── SKILL.md            # Claude Code skill definition
-├── package.json
-├── CLAUDE.md               # Instructions for Claude Code
-├── README.md               # This file
-├── PLAN.md
-├── CHANGELOG.md
-├── ROADMAP.md
-└── LICENSE
+│   └── SKILL.md              # Claude Code skill definition
+├── CLAUDE.md                 # Instructions for Claude Code (architecture philosophy)
+├── ROADMAP.md                # What's next
+├── CHANGELOG.md              # What's been done
+└── PLAN.md                   # Project status
 ```
 
 ## Libraries
@@ -205,17 +248,28 @@ const escalation = detectEscalation(rentByYear);
 const type = classifyAsset(data.fields);
 ```
 
-## How Calibration Works
+## How It Works
 
-Financial models in Excel use hundreds of intermediate formulas. Replicating every cell exactly in JavaScript is impractical. Instead, excel-to-engine:
+### Primary Path: Rust Transpiler
 
-1. Implements the core economic logic (growth, discounting, waterfall splits)
-2. Runs the engine at base case inputs
-3. Compares each output against the known Excel value
-4. Computes a multiplicative scale factor: `factor = excelValue / engineValue`
-5. Applies factors to all subsequent computations
+The Rust transpiler deterministically converts Excel formulas to JavaScript:
 
-This means the engine is exact at base case and approximately correct for nearby inputs. The eval suite validates that deviations stay within tolerance across the input range.
+1. **Parse** — Read all sheets, cells, and formulas with calamine (10-50x faster than SheetJS)
+2. **Build dependency graph** — Map which cells reference which, detect circular refs (Tarjan's SCC)
+3. **Transpile** — Convert each formula AST to a JS expression, ordered topologically
+4. **Handle circular refs** — Wrap circular clusters in convergence loops with tolerance checks
+5. **Output** — `raw-engine.js` with a `computeModel(inputs)` export
+
+The transpiler handles ~60 Excel functions (SUM, IF, IRR/XIRR, INDEX/MATCH, VLOOKUP, etc.). Unknown functions emit a `_fn('NAME', [...args])` placeholder for the LLM to fill.
+
+### Calibration (Verification + Fallback)
+
+After transpilation, calibration confirms the engine matches Excel:
+
+- **Single-point**: Scale factors at base case — fast, works when transpilation is complete
+- **Multi-point**: Piecewise-linear corrections across input range — handles waterfall hurdles and MIP thresholds where response curves are nonlinear
+
+Calibration is a **verification step** for the transpiler's output, and a **fallback** for the ~5% of formulas the transpiler can't yet handle. The goal is to shrink the calibration surface over time as transpiler coverage grows.
 
 ## Eval Framework
 
