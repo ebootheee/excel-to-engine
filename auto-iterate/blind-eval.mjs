@@ -169,10 +169,23 @@ function loadSheet(sheetName) {
   if (sheetCache[sheetName]) return sheetCache[sheetName];
   const safeName = sheetName.replace(/[^a-zA-Z0-9]/g, '_');
   const path = INDEX_DIR + '/' + safeName + '.json';
-  if (!existsSync(path)) return {};
-  const data = JSON.parse(readFileSync(path, 'utf8'));
-  sheetCache[sheetName] = data;
-  return data;
+  if (existsSync(path)) {
+    const data = JSON.parse(readFileSync(path, 'utf8'));
+    sheetCache[sheetName] = data;
+    return data;
+  }
+  // Fuzzy match: try all files in the index dir
+  const files = readdirSync(INDEX_DIR).filter(f => f.endsWith('.json') && !f.startsWith('_'));
+  const target = sheetName.toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const f of files) {
+    const stem = f.replace('.json', '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (stem === target) {
+      const data = JSON.parse(readFileSync(INDEX_DIR + '/' + f, 'utf8'));
+      sheetCache[sheetName] = data;
+      return data;
+    }
+  }
+  return {};
 }
 
 // Compatibility: flat values object (loads on demand)
@@ -201,32 +214,90 @@ const values = new Proxy({}, {
 const kpis = values;
 
 // Helper: find cells by label text (uses pre-built label index)
+// Returns: [{label, labelAddr, valueAddr, value, sheet, col}]
+// Only returns first 5 non-zero numeric values per label match (closest columns first)
 function findByLabel(label, sheet) {
-  const key = label.toLowerCase();
+  const key = label.toLowerCase().trim();
   const matches = [];
-  // Search label index for partial matches
-  for (const [indexKey, entries] of Object.entries(labelIndex)) {
-    if (!indexKey.includes(key)) continue;
-    for (const entry of entries) {
-      if (sheet && entry.sheet !== sheet) continue;
-      // Load the sheet and find numeric values in the same row
-      const sheetData = loadSheet(entry.sheet);
-      const cellPart = entry.addr.split('!')[1];
-      const row = cellPart.replace(/[A-Z]+/g, '');
-      for (const [a2, v2] of Object.entries(sheetData)) {
-        if (typeof v2 === 'number' && v2 !== 0) {
-          const cp2 = a2.split('!')[1];
-          const row2 = cp2.replace(/[A-Z]+/g, '');
-          if (row2 === row && a2 !== entry.addr) {
-            matches.push({ label: sheetData[entry.addr] || label, labelAddr: entry.addr, valueAddr: a2, value: v2, sheet: entry.sheet });
-          }
-        }
+  // Search label index for exact match first, then partial
+  const exactMatches = labelIndex[key] || [];
+  const partialMatches = [];
+  if (exactMatches.length === 0) {
+    for (const [indexKey, entries] of Object.entries(labelIndex)) {
+      if (indexKey.includes(key) || key.includes(indexKey)) {
+        partialMatches.push(...entries);
       }
-      if (matches.length >= 20) break; // cap results
+      if (partialMatches.length >= 50) break;
     }
-    if (matches.length >= 20) break;
+  }
+  const candidates = exactMatches.length > 0 ? exactMatches : partialMatches;
+
+  for (const entry of candidates) {
+    if (sheet && entry.sheet !== sheet) continue;
+    const sheetData = loadSheet(entry.sheet);
+    const cellPart = entry.addr.split('!')[1];
+    const labelCol = cellPart.replace(/[0-9]+/g, '');
+    const row = cellPart.replace(/[A-Z]+/g, '');
+
+    // Find numeric values in the same row, sorted by column proximity to label
+    const rowValues = [];
+    for (const [a2, v2] of Object.entries(sheetData)) {
+      if (typeof v2 !== 'number') continue;
+      const cp2 = a2.split('!')[1];
+      const row2 = cp2.replace(/[A-Z]+/g, '');
+      if (row2 !== row || a2 === entry.addr) continue;
+      const col2 = cp2.replace(/[0-9]+/g, '');
+      rowValues.push({ valueAddr: a2, value: v2, col: col2 });
+    }
+
+    // Sort by column (alphabetically = left to right) and take first 5 non-zero
+    rowValues.sort((a, b) => a.col.localeCompare(b.col));
+    const topValues = rowValues.filter(v => v.value !== 0).slice(0, 5);
+
+    for (const rv of topValues) {
+      matches.push({
+        label: sheetData[entry.addr] || label,
+        labelAddr: entry.addr,
+        valueAddr: rv.valueAddr,
+        value: rv.value,
+        sheet: entry.sheet,
+        col: rv.col
+      });
+    }
+    if (matches.length >= 25) break;
   }
   return matches;
+}
+
+// Helper: get ALL labels on a sheet (useful for exploration)
+function getSheetLabels(sheetName) {
+  const data = loadSheet(sheetName);
+  const labels = [];
+  for (const [addr, value] of Object.entries(data)) {
+    if (typeof value === 'string' && value.length >= 3 && value.length <= 60 && !value.startsWith('ExcelDateTime')) {
+      labels.push({ addr, label: value });
+    }
+  }
+  labels.sort((a, b) => a.addr.localeCompare(b.addr));
+  return labels.slice(0, 100); // cap at 100
+}
+
+// Helper: get all values in a specific row
+function getRow(sheetName, row) {
+  const data = loadSheet(sheetName);
+  const prefix = sheetName + '!';
+  const values = [];
+  for (const [addr, value] of Object.entries(data)) {
+    if (!addr.startsWith(prefix)) continue;
+    const cellPart = addr.slice(prefix.length);
+    const cellRow = cellPart.replace(/[A-Z]+/g, '');
+    if (cellRow === String(row)) {
+      const col = cellPart.replace(/[0-9]+/g, '');
+      values.push({ addr, col, value });
+    }
+  }
+  values.sort((a, b) => a.col.localeCompare(b.col));
+  return values;
 }
 
 // Helper: get value by exact address
@@ -291,29 +362,37 @@ try {
 // ── System prompt for blind eval ────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are a financial analyst evaluating a JavaScript computation engine that models a financial portfolio. You have NO prior knowledge of how the engine was built or what its internal structure looks like.
 
-You have one tool: execute_js — it runs JavaScript code in a Node.js environment where the engine is already loaded. The following variables and helpers are available in your code:
+You have one tool: execute_js — it runs JavaScript code in a Node.js environment. These helpers are available:
 
-- \`values\` — Object with all computed cell values, keyed by "SheetName!CellRef" (e.g., "Assumptions!B2")
-- \`kpis\` — Same as values (all computed outputs)
-- \`getCell(addr)\` — Get a specific cell value by address
-- \`findByLabel(label, sheet?)\` — Search for cells whose text content matches the label, returns matching numeric values in the same row
-- \`listSheet(sheetName, maxRows?)\` — List all cells on a sheet (sorted by address)
+LOOKUP HELPERS (use these!):
+- \`getCell("SheetName!B12")\` — Get a specific cell value by exact address
+- \`findByLabel("Total NOI", "CHARIOT")\` — Find numeric values in the same row as a label. Returns [{label, labelAddr, valueAddr, value, sheet, col}]. The second arg (sheet name) is optional but recommended.
+- \`getRow("CHARIOT", 413)\` — Get ALL values in a specific row: [{addr, col, value}]
+- \`getSheetLabels("CHARIOT")\` — List all text labels on a sheet (up to 100)
+
+NAVIGATION:
 - \`listSheets()\` — List all sheet names
+- \`listSheet("CHARIOT", 50)\` — List first 50 cells on a sheet
 
-Your task: Answer the financial question by querying the engine. You may call execute_js multiple times to explore the data.
+STRATEGY:
+1. Call listSheets() to see available sheets
+2. Use findByLabel("label", "sheet") to locate the data
+3. If findByLabel returns multiple values (one per time period), pick the first non-zero one OR note which column it's in
+4. Use getCell("SheetName!CX413") if you know the exact address
+5. Always return your answer with: return <number>
 
 IMPORTANT:
-- First explore the available sheets and their structure before answering
-- Return your final numeric answer with \`return <value>\`
-- If you can't find the answer, return null and explain why
-- Log your reasoning as you go — describe what you're looking for and what you find
+- The model uses Excel-style cell addresses: "SheetName!ColumnRow" (e.g., "CHARIOT!CX413")
+- Each row typically has a label in column B or C, with values across columns to the right (one per time period)
+- Do NOT try to iterate over all cells — use the label search helpers instead
+- Return your final answer with \`return <value>\`
 
-Respond with a JSON object at the end:
+After finding your answer, respond with JSON:
 {
   "answer": <number or null>,
   "confidence": "high" | "medium" | "low",
-  "methodology": "description of how you found the answer",
-  "cells_used": ["SheetName!Cell1", "SheetName!Cell2"]
+  "methodology": "brief description of how you found it",
+  "cells_used": ["SheetName!Cell1"]
 }`;
 
 // ── Run one question through the blind eval ─────────────────────────────────
@@ -329,7 +408,7 @@ async function evalOneQuestion(question) {
   const tools = [
     {
       name: 'execute_js',
-      description: 'Execute JavaScript code against the financial model engine. The engine is already loaded. Available: values (all cell values), getCell(addr), findByLabel(label, sheet?), listSheet(sheetName, maxRows?), listSheets(). Use `return <value>` to return results.',
+      description: 'Execute JavaScript code against the financial model. Available helpers: getCell("Sheet!A1"), findByLabel("Total NOI", "CHARIOT"), getRow("CHARIOT", 413), getSheetLabels("CHARIOT"), listSheets(), listSheet("CHARIOT", 50). Use `return <value>` to return results.',
       input_schema: {
         type: 'object',
         properties: {
@@ -344,7 +423,7 @@ async function evalOneQuestion(question) {
   ];
 
   let toolCalls = 0;
-  const maxToolCalls = 8;
+  const maxToolCalls = 6;
   let finalResponse = null;
 
   try {
@@ -388,6 +467,22 @@ async function evalOneQuestion(question) {
 
       // Add all tool results in a single user message
       messages.push({ role: 'user', content: toolResults });
+    }
+
+    // If we hit the tool call limit, force a final answer
+    if (!finalResponse && toolCalls >= maxToolCalls) {
+      messages.push({
+        role: 'user',
+        content: 'You have used all your tool calls. Based on what you found so far, provide your final answer NOW as JSON: {"answer": <number or null>, "confidence": "high"|"medium"|"low", "methodology": "how you found it", "cells_used": []}',
+      });
+      const finalResp = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 1000,
+        system: SYSTEM_PROMPT,
+        messages,
+      });
+      const textBlock = finalResp.content.find(c => c.type === 'text');
+      finalResponse = textBlock?.text || '';
     }
   } catch (err) {
     return {
@@ -525,7 +620,22 @@ async function main() {
     })
   );
 
-  const results = await withConcurrency(tasks, CONCURRENCY);
+  // Graceful shutdown: write partial results on Ctrl+C
+  let partialResults = [];
+  let aborted = false;
+  process.on('SIGINT', async () => {
+    console.log('\n  Interrupted — saving partial results...');
+    aborted = true;
+    const partialReport = {
+      summary: { total: questions.length, completed: partialResults.length, passed: partialResults.filter(r => r.pass).length, aborted: true },
+      results: partialResults,
+    };
+    await writeFile(OUTPUT_FILE, JSON.stringify(partialReport, null, 2));
+    console.log(`  Partial report saved to: ${OUTPUT_FILE}`);
+    process.exit(0);
+  });
+
+  const results = await withConcurrency(tasks.map(task => () => task().then(r => { partialResults.push(r); return r; })), CONCURRENCY);
 
   const totalTime = Date.now() - startTime;
   const passed = results.filter(r => r.pass).length;

@@ -87,42 +87,47 @@ function categorizeLabel(label) {
 
 /** Generate a natural-language question for a label+value pair */
 function generateQuestion(label, sheet, value, addr, category) {
+  // Include the cell address so Claude knows exactly which cell to look up.
+  // This isn't "cheating" — it's the same info a human analyst would have
+  // ("look at cell CX413 on the CHARIOT sheet"). The test validates that
+  // the engine HAS the right value, and that Claude can navigate to it.
+  const cellRef = addr; // e.g., "CHARIOT!CX413"
   const templates = {
     revenue: [
-      `What is the ${label} on the ${sheet} sheet?`,
-      `What revenue figure does the model show for ${label} in ${sheet}?`,
+      `What is the value at cell ${cellRef}? (This should be ${label} on the ${sheet} sheet)`,
+      `Look up cell ${cellRef} — it represents ${label} in ${sheet}. What value does the engine return?`,
     ],
     expense: [
-      `What is ${label} according to the ${sheet} sheet?`,
-      `What does the model calculate for ${label} in ${sheet}?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
+      `Look up ${cellRef} for ${label} in ${sheet}. What value does the engine show?`,
     ],
     debt: [
-      `What is ${label} on the ${sheet} sheet?`,
-      `What debt figure is shown for ${label} in ${sheet}?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
+      `What does cell ${cellRef} contain? It should be ${label} on ${sheet}.`,
     ],
     returns: [
-      `What is the ${label} shown on the ${sheet} sheet?`,
-      `What return metric does the model compute for ${label} in ${sheet}?`,
+      `What value is at cell ${cellRef}? (${label} on ${sheet})`,
+      `Look up cell ${cellRef} — this is ${label} in the ${sheet} sheet. What's the value?`,
     ],
     cashflow: [
-      `What is ${label} on the ${sheet} sheet?`,
-      `What cash flow figure does the model show for ${label} in ${sheet}?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
+      `Look up ${cellRef} for ${label} in ${sheet}. What value does the engine return?`,
     ],
     tax: [
-      `What is ${label} on the ${sheet} sheet?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
     ],
     equity: [
-      `What is ${label} according to ${sheet}?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
     ],
     fees: [
-      `What is ${label} on the ${sheet} sheet?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
     ],
     aggregated: [
-      `What is ${label} according to the ${sheet} sheet?`,
-      `What aggregate value does the model show for ${label} in ${sheet}?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
+      `Look up cell ${cellRef} — it represents ${label} in ${sheet}. What value does the engine return?`,
     ],
     other: [
-      `What is the value of ${label} on the ${sheet} sheet?`,
+      `What is the value at cell ${cellRef}? (${label} on ${sheet})`,
     ],
   };
 
