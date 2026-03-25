@@ -212,7 +212,60 @@ impl<'a> Tokenizer<'a> {
 
         // Check if it looks like a cell reference (letters + digits)
         if looks_like_cell_ref(name) {
+            // Check if it's a range like A1:B10
+            if self.peek() == Some(':') {
+                let saved = self.pos;
+                self.advance(); // consume ':'
+                // Try to read second cell ref
+                let start2 = self.pos;
+                while let Some(c) = self.peek() {
+                    if c.is_alphanumeric() || c == '$' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                let name2 = &self.input[start2..self.pos].to_string();
+                if looks_like_cell_ref(name2) || looks_like_column_ref(name2) {
+                    let ref1 = parse_simple_cell_ref(name, None);
+                    let ref2 = if looks_like_cell_ref(name2) {
+                        parse_simple_cell_ref(name2, None)
+                    } else {
+                        // Column-only ref like "BE" → treat as BE1048576 (max row)
+                        parse_column_ref(name2, None)
+                    };
+                    if let (Token::CellRef(r1), Token::CellRef(r2)) = (&ref1, &ref2) {
+                        return Token::Range(r1.clone(), r2.clone());
+                    }
+                }
+                // Not a valid range — backtrack
+                self.pos = saved;
+            }
             return parse_simple_cell_ref(name, None);
+        }
+
+        // Check for whole-column references: V:V, V:BE, AA:ZZ
+        // These are 1-3 uppercase letters with no digits, followed by ':'
+        if looks_like_column_ref(name) && self.peek() == Some(':') {
+            let saved = self.pos;
+            self.advance(); // consume ':'
+            let start2 = self.pos;
+            while let Some(c) = self.peek() {
+                if c.is_ascii_uppercase() {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            let col2 = self.input[start2..self.pos].to_string();
+            if looks_like_column_ref(&col2) {
+                // Column range V:BE → treat as V1:BE1048576
+                let ref1 = CellRef { sheet: None, col: name.to_string(), row: 1, abs_col: false, abs_row: false };
+                let ref2 = CellRef { sheet: None, col: col2, row: 1048576, abs_col: false, abs_row: false };
+                return Token::Range(ref1, ref2);
+            }
+            // Not a valid column range — backtrack
+            self.pos = saved;
         }
 
         // Check for TRUE/FALSE booleans
@@ -412,6 +465,26 @@ impl<'a> Tokenizer<'a> {
         }
         tokens
     }
+}
+
+/// Check if a string is a pure column reference (1-3 uppercase letters, no digits)
+fn looks_like_column_ref(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || bytes.len() > 3 {
+        return false;
+    }
+    bytes.iter().all(|b| b.is_ascii_uppercase())
+}
+
+/// Parse a column-only reference into a CellRef with row=1048576 (max Excel row)
+fn parse_column_ref(s: &str, sheet: Option<String>) -> Token {
+    Token::CellRef(CellRef {
+        sheet,
+        col: s.to_string(),
+        row: 1048576,
+        abs_col: false,
+        abs_row: false,
+    })
 }
 
 fn looks_like_cell_ref(s: &str) -> bool {
