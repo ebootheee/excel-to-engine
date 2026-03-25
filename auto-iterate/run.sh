@@ -111,7 +111,8 @@ for MODEL in "${MODELS[@]}"; do
   CONTAINER_NAME="$(echo "$CONTAINER_NAME" | tr ' ()' '---' | tr -cd 'a-zA-Z0-9-' | head -c 60)"
 
   # Start container in background
-  docker run -d \
+  # MSYS_NO_PATHCONV prevents Git Bash on Windows from mangling /data/... paths
+  MSYS_NO_PATHCONV=1 docker run -d \
     --name "$CONTAINER_NAME" \
     -v "${MODEL_DIR}:/data/models:ro" \
     -v "${OUTPUT_DIR}:/data/output" \
@@ -119,7 +120,7 @@ for MODEL in "${MODELS[@]}"; do
     -e TARGET_ACCURACY="${TARGET_ACCURACY:-0.90}" \
     -e MAX_ITERATIONS="${MAX_ITERATIONS:-30}" \
     -e MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-6}" \
-    -e NODE_OPTIONS="--max-old-space-size=8192" \
+    -e NODE_OPTIONS="--max-old-space-size=16384" \
     -e EVAL_CONCURRENCY="${EVAL_CONCURRENCY}" \
     "$IMAGE_NAME" \
     "/data/models/${MODEL_FILE}" \

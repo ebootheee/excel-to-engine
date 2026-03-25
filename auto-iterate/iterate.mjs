@@ -698,14 +698,38 @@ Rules:
 
     const text = response.content[0]?.text || '';
 
-    // Extract JSON from response (may be wrapped in markdown)
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      log(`  Claude response had no JSON. Skipping.`);
+    // Extract JSON from response — Claude often wraps in ```json ... ```
+    let jsonStr = text.trim();
+
+    // Try stripping markdown code fences first
+    const fenceMatch = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?\s*```/);
+    if (fenceMatch) {
+      jsonStr = fenceMatch[1].trim();
+    }
+
+    // Find the outermost JSON object
+    const jsonObjMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (!jsonObjMatch) {
+      log(`  Claude response had no JSON. First 200 chars: ${text.slice(0, 200)}`);
       return null;
     }
 
-    const patch = JSON.parse(jsonMatch[0]);
+    let patch;
+    try {
+      patch = JSON.parse(jsonObjMatch[0]);
+    } catch (parseErr) {
+      // If greedy match grabbed too much, try finding balanced braces
+      let depth = 0, start = -1, end = -1;
+      for (let i = 0; i < jsonStr.length; i++) {
+        if (jsonStr[i] === '{') { if (depth === 0) start = i; depth++; }
+        else if (jsonStr[i] === '}') { depth--; if (depth === 0) { end = i + 1; break; } }
+      }
+      if (start >= 0 && end > start) {
+        patch = JSON.parse(jsonStr.slice(start, end));
+      } else {
+        throw parseErr;
+      }
+    }
 
     if (!patch.files || patch.files.length === 0) {
       log(`  Claude: ${patch.description}`);
