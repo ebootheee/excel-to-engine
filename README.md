@@ -49,11 +49,13 @@ This project evolved through several architectural iterations, each solving a di
 
 ### Accuracy Progression
 
-| Model | Initial | After Iteration | Blind Eval |
-|-------|---------|----------------|------------|
-| Synthetic (3-sheet PE) | 100% | 100% | 100% (10/10) |
-| Mid-size (38 sheets) | 71.6% | 75.9% | 100% (50/50) |
-| Large (82 sheets) | 40.7% | 43.9% | In progress |
+| Model | Per-Sheet Eval | Blind Eval (50 questions) |
+|-------|---------------|--------------------------|
+| Synthetic (3-sheet PE) | 100% (78/78) | 100% (10/10) |
+| Mid-size (38 sheets) | 75.9% | 100% (50/50) |
+| Large (82 sheets) | 87.6% (2532/2890) | In progress |
+
+*Per-sheet eval* tests every formula cell against Excel's computed value. *Blind eval* gives a fresh Claude session the engine + 50 natural-language financial questions and measures whether it can find the correct answers with zero knowledge of the engine's internals.
 
 ### Key Technical Decisions
 
@@ -113,26 +115,61 @@ Open in Claude Code → "Convert this Excel model into a JavaScript engine"
 - Rust toolchain (for the Rust pipeline): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - Docker (for containerized eval)
 
-### Using the Rust Pipeline
+### Step 1: Parse the Model
 
 ```bash
-# 1. Build the parser
 cd pipelines/rust && cargo build --release
-
-# 2. Parse a model
 ./target/release/rust-parser /path/to/model.xlsx ./output --chunked
+```
 
-# 3. Run blind eval (validates engine independently)
-cd ../../eval
+This produces `output/chunked/` with per-sheet `.mjs` modules, `engine.js` orchestrator, and `_ground-truth.json` (every cell value from Excel).
+
+### Step 2: Run Blind Eval
+
+The blind eval is an independent test — a fresh Claude API session with zero knowledge of the engine answers 50 randomized financial questions using only the engine's output data.
+
+```bash
+cd eval
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 node generate-questions.mjs ../output/chunked --count 50 --output ../output/test-questions.json
 node blind-eval.mjs ../output/chunked --questions ../output/test-questions.json
 node analyze-report.mjs ../output/eval-report.json ../output/analysis.json
 ```
 
+The `analysis.json` output identifies which questions failed and why — providing specific, actionable fix recommendations.
+
+### Step 3: Iterate with Claude Code
+
+Open a **new Claude Code session** (clean context, no knowledge of the eval results) and give it the analysis:
+
+```
+Read eval/output/analysis.json. It contains failures from our blind eval.
+Read the Rust transpiler at pipelines/rust/src/transpiler.rs.
+Fix the top failure category, rebuild (cargo build --release), and re-parse the model.
+```
+
+This separation is intentional: **Step 2 tests honestly** (blind context), **Step 3 fixes intelligently** (full context). They never cross-contaminate.
+
+### Step 4: Re-run Blind Eval
+
+After fixes, re-parse and re-run the blind eval to measure improvement:
+
+```bash
+# Re-parse with updated transpiler
+cd pipelines/rust
+./target/release/rust-parser /path/to/model.xlsx ./output --chunked
+
+# Re-run blind eval (same questions for fair comparison)
+cd ../../eval
+node blind-eval.mjs ../output/chunked --questions ../output/test-questions.json
+node analyze-report.mjs ../output/eval-report.json ../output/analysis.json
+```
+
+Repeat Steps 3-4 until accuracy reaches target.
+
 ### Using the Generated Engine
 
-Once the engine is built, any Claude session (or any JS environment) can use it:
+Once the engine passes eval, any Claude session (or any JS environment) can use it:
 
 ```javascript
 import { run } from './chunked/engine.js';
@@ -146,7 +183,9 @@ const scenario = run({ 'Assumptions!B8': 15.0 }); // Exit multiple = 15x
 console.log(scenario.values['Summary!B5']); // IRR under new scenario
 ```
 
-### Containerized Auto-Iteration (overnight runs)
+### Containerized Auto-Iteration (overnight, hands-off)
+
+For unattended runs, the Docker container automates the full loop:
 
 ```bash
 cd eval
@@ -155,7 +194,7 @@ cp /path/to/models/*.xlsx models/
 ./run.sh
 ```
 
-Processes all models sequentially: parse → eval → Claude API diagnosis → patch transpiler → rebuild → re-eval → loop until 90% accuracy or 30 iterations.
+Processes all models: parse → eval → Claude API diagnosis → patch transpiler → rebuild → re-eval → loop until 90% accuracy or 30 iterations. Results in `eval/output/`.
 
 ## Project Structure
 
