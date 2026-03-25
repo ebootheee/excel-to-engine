@@ -18,9 +18,22 @@
 #   MAX_ITERATIONS      — Max improvement loops (default: 30)
 #   MODEL_NAME          — Claude model (default: claude-sonnet-4-6)
 
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Ctrl+C kills everything — container, monitor, script
+cleanup() {
+  echo ""
+  echo "⛔ Interrupted — shutting down..."
+  # Kill all child processes
+  kill 0 2>/dev/null || true
+  # Stop any running containers from this session
+  docker ps -q --filter "name=iterate-" | xargs -r docker kill 2>/dev/null || true
+  docker ps -aq --filter "name=iterate-" | xargs -r docker rm 2>/dev/null || true
+  exit 130
+}
+trap cleanup INT TERM
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 MODELS_DIR="${SCRIPT_DIR}/models"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
