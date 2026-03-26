@@ -51,15 +51,31 @@ Tested across 9 real financial models ranging from 2 to 82 sheets:
 | 77 MB | 20 | 5,817,116 | 5,580,221 | ~15min | ~200 MB |
 | 84 MB | 20 | ~5,600,000 | ~5,400,000 | ~15min | ~200 MB |
 
-### Accuracy Progression
+### Accuracy — Blind Eval Results
 
-| Model | Per-Sheet Eval | Blind Eval (50 questions) |
-|-------|---------------|--------------------------|
-| Synthetic (3-sheet PE) | 100% (78/78) | 100% (10/10) |
-| Mid-size (38 sheets) | 75.9% | 100% (50/50) |
-| Large (82 sheets) | 87.6% (2532/2890) | In progress |
+Blind eval gives a fresh Claude API session zero knowledge of the engine's internals. It gets the parsed ground truth as a lookup tool and 25 randomized natural-language financial questions per model. Results across 6 production financial models:
 
-*Per-sheet eval* tests every formula cell against Excel's computed value. *Blind eval* gives a fresh Claude session the engine + 50 natural-language financial questions and measures whether it can find the correct answers with zero knowledge of the engine's internals.
+| Model | Sheets | Cells | Blind Eval | Avg Tool Calls | Avg Time/Q |
+|-------|--------|-------|------------|----------------|------------|
+| Fund model A (2 sheets) | 2 | 5.7K | **25/25 (100%)** | 3.4 | 4.3s |
+| Fund model B (7 sheets) | 7 | 96K | **25/25 (100%)** | 3.3 | 4.2s |
+| Platform model A (51 sheets) | 51 | 1.8M | **25/25 (100%)** | 3.3 | 5.3s |
+| Platform model B (60 sheets) | 60 | 1.8M | **25/25 (100%)** | 3.6 | 5.9s |
+| Corporate model A (20 sheets) | 20 | 5.8M | **25/25 (100%)** | 3.5 | 5.0s |
+| Corporate model B (21 sheets) | 21 | 6.1M | **24/25 (96%)** | 3.7 | 5.2s |
+| **Total** | | **15.5M cells** | **149/150 (99.3%)** | 3.5 | 5.0s |
+
+The single failure (Corporate model B) was a column ambiguity on a wide sheet — Claude found the correct row but returned a value from an adjacent column.
+
+### Accuracy — Per-Sheet Cell Eval
+
+Per-sheet eval tests every formula cell against Excel's computed value (mechanical, no LLM):
+
+| Model | Per-Sheet Eval |
+|-------|---------------|
+| Synthetic (3-sheet PE) | 100% (78/78) |
+| Mid-size (38 sheets) | 75.9% |
+| Large (82 sheets) | 87.6% (2532/2890) |
 
 ### Key Technical Decisions
 
