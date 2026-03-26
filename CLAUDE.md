@@ -93,7 +93,12 @@ cp /path/to/models/*.xlsx models/
 | `lib/waterfall.mjs` | PE distribution waterfall (American + European structures) |
 | `lib/calibration.mjs` | Auto-calibration with ratio/offset modes |
 | `lib/sensitivity.mjs` | Sensitivity surface extraction, comparison, multi-point calibration |
-| `lib/excel-parser.mjs` | Excel reader, sheet fingerprinting, year detection, field mapping |
+| `lib/excel-parser.mjs` | Excel reader, sheet fingerprinting, year detection, field mapping, waterfall detection, cash flow extraction |
+
+### New in excel-parser.mjs (production-informed)
+- `extractWaterfallStructure(groundTruth)` — Auto-detect waterfall tiers, hurdle rates, carry %, and cash flow series from ground truth
+- `extractCashFlowSeries(groundTruth)` — Extract time series for IRR computation (avoids MOIC^(1/n) approximation)
+- New label aliases: carry, prefReturn, catchUp, distributions, peakEquity, waterfallTier, mip
 
 ## Templates
 

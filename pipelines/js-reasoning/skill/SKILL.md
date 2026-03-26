@@ -24,6 +24,21 @@ This skill runs a 4-phase pipeline:
 3. **Test** — Generate `tests/eval.mjs` that validates engine accuracy against Excel
 4. **Dashboard** — Generate an interactive HTML dashboard with sliders, charts, and eval results
 
+## Two Pipelines Available
+
+This skill is the **JS Reasoning Pipeline** — best for smaller models (<20 sheets) where Claude should understand the financial logic and build a hand-crafted engine.
+
+For **larger models** (20+ sheets, millions of cells), use the **Rust Pipeline** instead:
+```bash
+cd pipelines/rust && cargo build --release
+./target/release/rust-parser model.xlsx output-dir --chunked
+```
+The Rust pipeline automatically transpiles formulas to JS, generates per-sheet modules, and handles circular references. It processes 3.7M cells in ~3 minutes. See `CLAUDE.md` for the full eval workflow.
+
+**When to use which:**
+- **This skill (JS Reasoning)**: Models where you need Claude to understand the business logic, <20 sheets, or where you want a hand-crafted engine with named fields (grossIRR, lpTotal, gpCarry)
+- **Rust Pipeline**: Large models with many sheets, models where mechanical formula transpilation is sufficient, or when running automated eval/iteration loops
+
 ## Prerequisites
 
 - Node.js 18+
@@ -465,6 +480,24 @@ The engine must return this structure:
 - **Use the library functions.** `lib/irr.mjs` for IRR, `lib/waterfall.mjs` for waterfalls, `lib/calibration.mjs` for calibration.
 - **Keep it readable.** Name variables clearly, add comments explaining the financial logic.
 - **Handle edge cases.** Division by zero, negative values, missing inputs should all produce safe defaults.
+
+### CRITICAL: Use Actual Engine Output, NOT Simplified Approximations
+
+**Production lesson**: A 6-vehicle carry computation project that used the Rust parser achieved only 29-60% accuracy on 4/6 vehicles because it built simplified parametric waterfall wrappers instead of using the actual parsed engine output. The parser extracted the data correctly — the problem was downstream approximation.
+
+**Rules to prevent this:**
+
+1. **NEVER approximate IRR from MOIC.** The formula `IRR ≈ MOIC^(1/years) - 1` assumes a single lump-sum exit. Real models have interim distributions, capital calls over time, etc. Always extract the actual cash flow series and use `computeIRR()` from `lib/irr.mjs`.
+
+2. **Extract the actual cash flow time series.** Look for rows labeled "Cash Flow", "Net Cash Flow", "Distributions", "Pre-Carry Cash Flows" on the carry/promote/returns sheets. Use `extractCashFlowSeries()` from `lib/excel-parser.mjs`.
+
+3. **For pref calculations on long-hold models (>7 years)**, check whether the model uses quarterly/annual cash flow waterfalls with interim distributions (most real models do) vs. bullet maturity. If it uses periodic distributions, compounding 8% over 12 years (=2.52x) will wildly overstate the hurdle. Extract the actual pref amount from the model instead of computing it.
+
+4. **Detect multi-tier waterfalls.** Real PE waterfalls have 3-4+ tiers (pref return, catch-up, residual split, and sometimes a secondary IRR hurdle). Use `extractWaterfallStructure()` from `lib/excel-parser.mjs` to auto-detect the tier structure.
+
+5. **For the Rust pipeline**: If the ground truth has the values you need, use them directly. The chunked engine output has every cell value from Excel. Don't rebuild a simplified model on top of that data.
+
+6. **MIP (Management Incentive Plan) deductions** should happen BEFORE the carry waterfall, not separately. Check the model's order of operations: typically gross value → MIP deduction → net to LP/GP → waterfall → carry.
 
 ### CRITICAL: Base Case Value Extraction
 
