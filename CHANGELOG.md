@@ -1,5 +1,44 @@
 # excel-to-engine — Changelog
 
+## 2026-03-25 — Production Eval + Doc Updates
+
+### Production Use Evaluation
+Evaluated the toolkit's output quality on a real 6-vehicle carry computation project that used the Rust parser. Key findings:
+
+**What worked well:**
+- All 6 models (5.7K to 5.8M cells) parsed successfully with `--chunked` mode
+- Ground truth extraction captured carry-relevant cells across complex sheet structures
+- GRAF models (2-7 sheets) parsed in <1 second, large models in ~15 minutes
+- Per-sheet module architecture worked without OOM even on 5.8M-cell models
+
+**Accuracy gaps identified in downstream use:**
+- Simplified parametric waterfall engines diverged 29-60% from model actuals on 4/6 vehicles
+- IRR approximation via `MOIC^(1/years) - 1` is very inaccurate for models with interim distributions
+- Long-hold pref compounding (12 years at 8%) creates unrealistically high hurdles
+- Multi-tier waterfalls (4+ tiers with IRR hurdles) not captured in model metadata
+
+**Improvements needed (added to ROADMAP):**
+- Cash flow series extraction from ground truth (not just terminal values)
+- Waterfall structure detection and metadata in model map
+- Guidance in SKILL.md for when to use actual parsed engine vs simplified wrappers
+
+### Documentation Updates
+- All MD files updated to reflect current status (PLAN, ROADMAP, CHANGELOG, CLAUDE.md, README)
+- Historical docs in `docs/` annotated with path migration notes
+- SKILL.md template paths updated for new `pipelines/js-reasoning/` location
+- README expanded with development journey, scale progression, accuracy metrics, and production learnings
+
+### Scale Data (from production use)
+| Model | Sheets | Cells | Formulas | Parse Time |
+|-------|--------|-------|----------|------------|
+| Small (2 sheets) | 2 | 5,684 | 5,271 | 56ms |
+| Medium (7 sheets) | 7 | 96,390 | 86,812 | 718ms |
+| Large (34 sheets) | 34 | ~1.4M | ~1.2M | ~3min |
+| XL (50 sheets) | 50 | ~1.5M | ~1.3M | ~4min |
+| XXL (20 sheets) | 20 | 5,817,116 | 5,580,221 | ~15min |
+
+---
+
 ## 2026-03-25 — Repo Restructure + Blind Eval + Merge to Main
 
 ### Repository Reorganization

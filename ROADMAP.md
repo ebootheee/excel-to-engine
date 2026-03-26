@@ -1,12 +1,18 @@
 # excel-to-engine — Roadmap
 
-## Now — Accuracy Improvement
+## Now — Accuracy Improvement + Production Learnings
 
 ### Transpiler Coverage
 - Implement INDIRECT function (dynamic cell references)
 - Fix 2D range handling edge cases for very large sheets
 - Handle array formulas / CSE (Ctrl+Shift+Enter) patterns
 - Improve SUBTOTAL dispatch (function_num variants beyond SUM)
+
+### Production-Informed Fixes (from 6-vehicle carry project)
+- **Cash flow series extraction** — Ground truth only stores terminal values. Need to extract the full distribution series for accurate IRR computation. The `MOIC^(1/years) - 1` approximation diverges badly for long holds with interim distributions.
+- **Waterfall structure detection** — Detect multi-tier waterfalls (pref, catch-up, residual, IRR hurdle tiers) and emit as structured metadata in model-map.json. Current models have 4+ tiers but the metadata doesn't capture this.
+- **SKILL.md guidance** — Add guidance for when downstream consumers should use actual parsed engine output vs simplified parametric wrappers. The carry project used simplified wrappers and diverged 29-60% on 4/6 vehicles.
+- **Pref compounding for long holds** — 12-year 8% compound pref = 2.52x hurdle, which exceeds many MOIC targets. Need to detect when models use quarterly cash flow waterfalls vs bullet maturity and adjust accordingly.
 
 ### Eval System
 - Increase blind eval question diversity (computed questions, cross-sheet aggregations)

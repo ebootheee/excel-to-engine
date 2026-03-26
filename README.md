@@ -37,15 +37,19 @@ This project evolved through several architectural iterations, each solving a di
 
 ### Scale Progression
 
-| Metric | Synthetic | Mid-size (38 sheets) | Large (82 sheets) |
-|--------|-----------|---------------------|-------------------|
-| Excel file size | 3 KB | 21 MB | 52 MB |
-| Total cells | 78 | 1,686,218 | 3,726,754 |
-| Formula cells | 27 | 1,312,865 | 3,044,793 |
-| Circular ref clusters | 1 (3 cells) | 0 | 1 (62 sheets) |
-| Parse time | 1ms | 12s | 3.5min |
-| Output (chunked) | 9 KB | ~90 MB | ~450 MB |
-| Ground truth entries | 78 | 1,685,973 | 3,726,751 |
+Tested across 9 real financial models ranging from 2 to 82 sheets:
+
+| Model Size | Sheets | Cells | Formulas | Parse Time | Output |
+|------------|--------|-------|----------|------------|--------|
+| 3 KB (synthetic) | 3 | 78 | 27 | 1ms | 9 KB |
+| 332 KB | 2 | 5,684 | 5,271 | 56ms | 579 KB |
+| 1.5 MB | 7 | 96,390 | 86,812 | 718ms | 9 MB |
+| 21 MB | 38 | 1,686,218 | 1,312,865 | 12s | ~90 MB |
+| 23 MB | 34 | ~1,400,000 | ~1,200,000 | ~3min | ~60 MB |
+| 23 MB | 50 | ~1,500,000 | ~1,300,000 | ~4min | ~65 MB |
+| 52 MB | 82 | 3,726,754 | 3,044,793 | 3.5min | ~450 MB |
+| 77 MB | 20 | 5,817,116 | 5,580,221 | ~15min | ~200 MB |
+| 84 MB | 20 | ~5,600,000 | ~5,400,000 | ~15min | ~200 MB |
 
 ### Accuracy Progression
 
