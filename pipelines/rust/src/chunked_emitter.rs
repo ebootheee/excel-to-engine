@@ -304,8 +304,10 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
                 "  // ── Convergence loop ({} circular cells) ──",
                 cycle.len()
             ));
-            lines.push("  const _maxIter = 100;".to_string());
-            lines.push("  const _tol = 1e-8;".to_string());
+            lines.push("  const _maxIter = 200;".to_string());
+            lines.push("  const _tol = 1e-6;".to_string());
+            lines.push("  let _staleCount = 0;".to_string());
+            lines.push("  let _prevDelta = Infinity;".to_string());
             lines.push("  for (let _ci = 0; _ci < _maxIter; _ci++) {".to_string());
 
             // Save previous values of cycle cells
@@ -345,9 +347,16 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
                     .join(", ")
             ));
             lines.push(
-                "    if (_prev.every((v, i) => Math.abs(v - (_curr[i] || 0)) < _tol)) break;"
+                "    const _delta = _prev.reduce((mx, v, i) => Math.max(mx, Math.abs(v - (_curr[i] || 0))), 0);"
                     .to_string(),
             );
+            lines.push("    if (_delta < _tol) break;".to_string());
+            lines.push(
+                "    _staleCount = (Math.abs(_delta - _prevDelta) < _tol * 0.01) ? _staleCount + 1 : 0;"
+                    .to_string(),
+            );
+            lines.push("    if (_staleCount >= 5) break; // stale — values stopped improving".to_string());
+            lines.push("    _prevDelta = _delta;".to_string());
             lines.push("  }".to_string());
 
             if !post.is_empty() {
@@ -546,7 +555,7 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
     } else {
         // Complex case: execute with convergence loops for clusters
         lines.push("  // Execute sheets in topological order with convergence loops for circular deps".to_string());
-        lines.push("  const MAX_ITER = 50;".to_string());
+        lines.push("  const MAX_ITER = 200;".to_string());
         lines.push("  const TOL = 1e-6;".to_string());
         lines.push("  const executed = new Set();".to_string());
         lines.push(String::new());
@@ -558,6 +567,7 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
         lines.push("      const cluster = SHEET_CLUSTERS.find(c => c.includes(sheetName));".to_string());
         lines.push("      if (cluster && !cluster.some(s => executed.has(s))) {".to_string());
         lines.push("        // Run the entire cluster in a convergence loop".to_string());
+        lines.push("        let _prevClusterDelta = Infinity, _clusterStale = 0;".to_string());
         lines.push("        for (let iter = 0; iter < MAX_ITER; iter++) {".to_string());
         lines.push("          const snapshot = JSON.stringify(ctx.values);".to_string());
         lines.push("          for (const s of cluster) {".to_string());
@@ -574,6 +584,9 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
         lines.push("            }".to_string());
         lines.push("          }".to_string());
         lines.push("          if (maxDelta < TOL) break;".to_string());
+        lines.push("          _clusterStale = (Math.abs(maxDelta - _prevClusterDelta) < TOL * 0.01) ? _clusterStale + 1 : 0;".to_string());
+        lines.push("          if (_clusterStale >= 5) break; // stale — values stopped improving".to_string());
+        lines.push("          _prevClusterDelta = maxDelta;".to_string());
         lines.push("        }".to_string());
         lines.push("        for (const s of cluster) executed.add(s);".to_string());
         lines.push("      }".to_string());

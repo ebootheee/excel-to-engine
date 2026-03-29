@@ -19,3 +19,4 @@ _extracted/
 # Claude Code session
 .claude/
 tests/uat-lysara/
+chariot/

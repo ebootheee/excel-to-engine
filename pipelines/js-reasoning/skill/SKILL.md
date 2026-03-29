@@ -393,6 +393,25 @@ const breakpoints = detectBreakpoints(excelSurface, 'waterfall.gpCarry');
 
 This surface data will be used in Phase 2 for multi-point calibration instead of single-point calibration.
 
+### Production Learnings — Common Pitfalls
+
+These patterns caused 29-60% accuracy divergence in real production use:
+
+**1. Never approximate IRR from MOIC.**
+`MOIC^(1/years) - 1` diverges badly for long holds with interim distributions. Always extract the actual cash flow series from the ground truth and pass to `computeIRR()`. Look for rows labeled "Cash Flow", "Net Cash Flow", "Distributions", "CF to LP/GP".
+
+**2. Don't simplify waterfall tiers.**
+Real models have 4+ tiers with IRR hurdles, catch-up provisions, and quarterly compounding. Extract the actual tier structure from ground truth (look for "Preferred Return", "Pref", "Catch-Up", "Tier 1/2/3/4", "Residual Split" labels). Don't flatten to 2 tiers.
+
+**3. Watch for compound pref on long holds.**
+12-year 8% compound pref = 2.52x hurdle — this exceeds many MOIC targets. Detect whether the model uses quarterly cash flow waterfalls (interim distributions reduce the pref base) vs bullet maturity. If quarterly: extract actual pref amount, don't compute.
+
+**4. Use parsed engine output, not parametric wrappers.**
+When building downstream apps that consume engine output: read the actual computed values from the engine, don't build simplified parametric models that approximate the engine's logic. The approximations accumulate.
+
+**5. Check for `extractWaterfallStructure()` and `extractCashFlowSeries()` in `lib/excel-parser.mjs`.**
+These helpers auto-detect waterfall tiers, hurdle rates, carry percentages, and cash flow series from ground truth data.
+
 ## Phase 2 — Generate
 
 Create `engine.js` as an ES module. Use `pipelines/js-reasoning/templates/engine-template.js` as the starting skeleton.
@@ -1076,6 +1095,29 @@ If the user asks for a Python version, generate `engine.py` with:
 
 This is opt-in only — do NOT generate Python by default.
 
+## Recommended Eval Workflow
+
+For validating any engine (JS reasoning or Rust pipeline):
+
+1. **Parse the model** → produces ground truth + chunked modules
+2. **Run blind eval** → fresh Claude API session answers business questions (independent test)
+3. **Take the eval report** → give to a NEW Claude Code session
+4. **That session reads failures, fixes the engine/transpiler, pushes code**
+5. **Re-parse and re-eval** (blind again — clean context)
+
+This separation is critical: the builder has full context, the evaluator has zero context. This prevents overfitting and catches real usability issues.
+
+```bash
+# One-command eval (local, no Docker needed):
+node eval/run-all.mjs model.xlsx --questions 50
+
+# Or step by step:
+node eval/generate-questions.mjs output/chunked --count 50 --output output/test-questions.json
+ANTHROPIC_API_KEY=... node eval/blind-eval.mjs output/chunked --questions output/test-questions.json
+node eval/analyze-report.mjs output/eval-report.json output/analysis.json
+node eval/per-sheet-eval.mjs output/chunked --output output/per-sheet-report.json
+```
+
 ## Tips
 
 - **Start with the Summary sheet.** Most financial models have a summary sheet with the key outputs. Start there and work backward to find inputs.
@@ -1083,3 +1125,5 @@ This is opt-in only — do NOT generate Python by default.
 - **Test early.** Run `eval.mjs` after Phase 2 to see how close you are. Iterate on the engine logic until base case accuracy is within 1%.
 - **Use named ranges.** If the Excel model uses named ranges, they make great input/output identifiers.
 - **Ask the user.** Financial models have nuances that automated detection can't capture. Always confirm the model map with the user.
+- **Never approximate IRR from MOIC.** Extract actual cash flow series from ground truth. The MOIC^(1/n)-1 shortcut diverges for long holds with interim distributions.
+- **Check for waterfall structure helpers.** `extractWaterfallStructure(groundTruth)` and `extractCashFlowSeries(groundTruth)` in `lib/excel-parser.mjs` auto-detect multi-tier waterfalls and distribution series.

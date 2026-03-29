@@ -1,0 +1,51 @@
+{
+  "summary": {
+    "chunkedDir": "/Users/ericboothe/Documents/Claude Projects/Coding Projects/excel-to-engine/pipelines/rust/tests/output/chunked",
+    "totalGroundTruthCells": 78,
+    "sheetsEvaluated": 3,
+    "sheetsSkipped": 0,
+    "sheetsPassing": 3,
+    "sheetsWithErrors": 0,
+    "sheetsOom": 0,
+    "totalCellsTested": 78,
+    "totalCellsCorrect": 78,
+    "overallAccuracy": 100,
+    "elapsedMs": 55,
+    "concurrency": 6,
+    "sampleSize": 2000
+  },
+  "sheets": [
+    {
+      "name": "Cashflows",
+      "status": "ok",
+      "accuracy": 100,
+      "correct": 34,
+      "total": 34,
+      "elapsedMs": 51,
+      "error": null,
+      "topFailures": []
+    },
+    {
+      "name": "Summary",
+      "status": "ok",
+      "accuracy": 100,
+      "correct": 24,
+      "total": 24,
+      "elapsedMs": 50,
+      "error": null,
+      "topFailures": []
+    },
+    {
+      "name": "Assumptions",
+      "status": "ok",
+      "accuracy": 100,
+      "correct": 20,
+      "total": 20,
+      "elapsedMs": 49,
+      "error": null,
+      "topFailures": []
+    }
+  ],
+  "skipped": [],
+  "topFailures": []
+}

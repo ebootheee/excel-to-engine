@@ -62,7 +62,13 @@ The skill is at `pipelines/js-reasoning/skill/SKILL.md`. Triggers on: "Convert t
 
 ## How to Run Eval
 
-### Blind Eval (independent validation)
+### One-Command Full Eval (recommended)
+```bash
+node eval/run-all.mjs model.xlsx --questions 50 --output output/
+```
+This runs: parse → generate questions → blind eval → per-sheet eval → combined report.
+
+### Step by Step
 ```bash
 # 1. Parse the model
 ./pipelines/rust/target/release/rust-parser model.xlsx output-dir --chunked
@@ -71,13 +77,26 @@ The skill is at `pipelines/js-reasoning/skill/SKILL.md`. Triggers on: "Convert t
 node eval/generate-questions.mjs output-dir/chunked --count 50 --output output-dir/test-questions.json
 
 # 3. Run blind eval (needs ANTHROPIC_API_KEY)
-node eval/blind-eval.mjs output-dir/chunked --questions output-dir/test-questions.json
+ANTHROPIC_API_KEY=... node eval/blind-eval.mjs output-dir/chunked --questions output-dir/test-questions.json
 
-# 4. Analyze results
+# 4. Run per-sheet mechanical eval
+node eval/per-sheet-eval.mjs output-dir/chunked --output output-dir/per-sheet-report.json
+
+# 5. Analyze results
 node eval/analyze-report.mjs output-dir/eval-report.json output-dir/analysis.json
 ```
 
-### Containerized Auto-Iteration
+### Improvement Cycle (the right way)
+1. Run eval (produces analysis.json with failures)
+2. Open a NEW Claude Code session (clean context)
+3. Point it at analysis.json + the Rust source
+4. It reads failures → fixes transpiler → rebuilds → pushes
+5. Re-run eval (blind again)
+6. Repeat until target accuracy
+
+The builder session has full context. The eval session has zero context. This prevents overfitting.
+
+### Containerized Auto-Iteration (overnight, hands-off)
 ```bash
 cd eval
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env

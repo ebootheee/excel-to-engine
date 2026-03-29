@@ -30,5 +30,10 @@
   "dependencies": {
     "xlsx": "^0.18.5"
   },
+  "scripts": {
+    "setup": "npm install && cd eval && npm install && echo 'Setup complete. Build Rust parser: cd pipelines/rust && cargo build --release'",
+    "check-env": "node scripts/check-env.mjs",
+    "smoke": "node pipelines/rust/tests/smoke-chunked.mjs"
+  },
   "devDependencies": {}
 }

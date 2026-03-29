@@ -489,8 +489,8 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "DAYS" => format!("({} - {})", arg(0), arg(1)),
         "DATEDIF" => format!("/* DATEDIF */ ({} - {})", arg(1), arg(0)),
         "YEARFRAC" => format!("/* YEARFRAC */ (({} - {}) / 365.25)", arg(1), arg(0)),
-        "EDATE" => format!("({} + {} * 30.44)", arg(0), arg(1)),
-        "EOMONTH" => format!("({} + {} * 30.44)", arg(0), arg(1)),
+        "EDATE" => format!("((+({}) || 0) + (+({}) || 0) * 30.44)", arg(0), arg(1)),
+        "EOMONTH" => format!("((+({}) || 0) + (+({}) || 0) * 30.44)", arg(0), arg(1)),
         "NETWORKDAYS" => format!("/* NETWORKDAYS */ ({} - {})", arg(1), arg(0)),
 
         // ----------------------------------------------------------------
@@ -543,7 +543,6 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         // ----------------------------------------------------------------
         // Misc / passthrough
         // ----------------------------------------------------------------
-        "EOMONTH" => format!("({} + {} * 30)", arg(0), arg(1)),
         "NA" => "null".to_string(),
         "ERROR.TYPE" => "null".to_string(),
         "ROW" => {
@@ -555,7 +554,26 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "COLUMNS" => format!("/* COLUMNS */ 1"),
         "TRANSPOSE" => format!("/* TRANSPOSE */ {}", arg(0)),
         "ADDRESS" => format!("(`R${{{}}}C${{{}}}`)", arg(0), arg(1)),
-        "INDIRECT" => format!("/* INDIRECT: dynamic ref not supported */ null"),
+        "INDIRECT" => {
+            if config.use_ctx_get {
+                // In chunked/ctx.get mode, INDIRECT resolves a string address at runtime
+                match args.first() {
+                    Some(Expr::StringLit(s)) => {
+                        // Static string like INDIRECT("Sheet!A1") → ctx.get("Sheet!A1")
+                        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+                        format!("ctx.get(\"{}\")", escaped)
+                    }
+                    _ => {
+                        // Dynamic expression like INDIRECT("Sheet!"&"A"&ROW())
+                        // Transpile the arg (& becomes string concat) and wrap in ctx.get()
+                        let addr_expr = arg(0);
+                        format!("ctx.get({})", addr_expr)
+                    }
+                }
+            } else {
+                format!("/* INDIRECT: dynamic ref not supported */ null")
+            }
+        }
         "CELL" => format!("/* CELL info */ null"),
         "TYPE" => format!("/* TYPE */ 1"),
         "N" => format!("(+({}) || 0)", arg(0)),

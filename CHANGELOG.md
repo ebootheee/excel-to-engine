@@ -1,5 +1,40 @@
 # excel-to-engine — Changelog
 
+## 2026-03-29 — V1 Fixes from Zero-Basis E2E Test
+
+### E2E Test Results (fresh Opus 4.6 session, zero prior knowledge)
+A fresh Claude Code session cloned the repo and ran the full pipeline on a 60-sheet, 1.8M-cell model with zero prior context. Results:
+- **Parser: A+** — 1.8M cells parsed in 71s, zero errors
+- **Blind eval: 50/50 (100%)** — Perfect on natural language queries
+- **Per-sheet eval: 70.1%** — Top sheets 92-95%, dragged down by EOMONTH/INDIRECT bugs
+
+### Fixes Applied
+
+**Blockers:**
+- `iterate.mjs` now auto-detects local vs Docker paths — works without container
+- New `eval/per-sheet-eval.mjs` — standalone per-sheet accuracy testing without Docker
+- New `eval/run-all.mjs` — one command for full eval pipeline (parse → questions → blind eval → per-sheet → report)
+
+**Accuracy:**
+- Fixed EOMONTH transpilation: was concatenating array fragments, now returns single serial number
+- Fixed INDIRECT: was returning column letters ("Z", "AA"), now resolves to ctx.get() calls
+- Convergence loop: increased max iterations to 200, tolerance to 1e-6, added stale detection
+
+**UX:**
+- README: added npm install step, cargo PATH note, memory requirements table
+- New `npm run setup` — one-command fresh clone setup
+- New `scripts/check-env.mjs` — verifies Node, cargo, npm deps, API key, rust binary
+- Per-sheet eval cleans up temp files after completion
+- Clearer sheet count reporting (tested vs succeeded vs skipped)
+
+**Documentation:**
+- Updated SKILL.md with production learnings (cash flow series, waterfall detection, pref compounding)
+- Updated CLAUDE.md with new eval workflow
+- Updated ROADMAP.md with production-informed priorities
+- Updated PLAN.md to reflect current state
+
+---
+
 ## 2026-03-25 — Production Eval + Doc Updates
 
 ### Production Use Evaluation

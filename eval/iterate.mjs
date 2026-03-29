@@ -24,18 +24,29 @@ import { promisify } from 'util';
 import { readFile, writeFile, mkdir, stat, readdir, copyFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, resolve, basename, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 const execAsync = promisify(execFile);
 const execShell = promisify(exec);
+
+// ── Path auto-detection ────────────────────────────────────────────────────
+// When /data exists we're inside Docker; otherwise resolve relative to this script.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const IN_DOCKER = existsSync('/data');
+
+function defaultPath(dockerPath, localPath) {
+  return IN_DOCKER ? dockerPath : resolve(__dirname, localPath);
+}
 
 // ── Config ──────────────────────────────────────────────────────────────────
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const TARGET_ACCURACY = parseFloat(process.env.TARGET_ACCURACY || '0.85');
 const MAX_ITERATIONS = parseInt(process.env.MAX_ITERATIONS || '30');
 const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4-6';
-const RUST_PARSER_BIN = process.env.RUST_PARSER_BIN || '/usr/local/bin/rust-parser';
-const RUST_SRC_DIR = process.env.RUST_SRC_DIR || '/app/rust-parser';
-const MODELS_DIR = process.env.MODELS_DIR || '/data/models';
+const RUST_PARSER_BIN = process.env.RUST_PARSER_BIN || defaultPath('/usr/local/bin/rust-parser', '../pipelines/rust/target/release/rust-parser');
+const RUST_SRC_DIR = process.env.RUST_SRC_DIR || defaultPath('/app/rust-parser', '../pipelines/rust');
+const MODELS_DIR = process.env.MODELS_DIR || defaultPath('/data/models', './models');
 
 // ── Logging ─────────────────────────────────────────────────────────────────
 const LOG_ENTRIES = [];
@@ -60,7 +71,7 @@ async function main() {
   if (!modelArg) {
     console.error('Usage: node iterate.mjs <model.xlsx>');
     console.error('');
-    console.error('Place .xlsx files in /data/models/ (or pass absolute path)');
+    console.error(`Place .xlsx files in ${MODELS_DIR}/ (or pass absolute path)`);
     process.exit(1);
   }
 
@@ -85,7 +96,7 @@ async function main() {
   }
 
   const modelName = basename(modelPath, '.xlsx').replace(/[^a-zA-Z0-9]/g, '-').toLowerCase();
-  const outputDir = process.env.OUTPUT_DIR || join('/data/output', modelName);
+  const outputDir = process.env.OUTPUT_DIR || defaultPath(join('/data/output', modelName), join('./output', modelName));
   await mkdir(outputDir, { recursive: true });
 
   const anthropic = API_KEY ? new Anthropic({ apiKey: API_KEY }) : null;
