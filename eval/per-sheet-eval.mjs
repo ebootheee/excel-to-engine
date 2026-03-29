@@ -86,12 +86,22 @@ async function main() {
 
   console.log(`  Sheets: ${sheetEntries.length}`);
 
-  // Load graph for topo order if available (for context seeding)
+  // Load graph for topo order and circular clusters
   let topoOrder = null;
+  let sheetClusters = [];  // arrays of sheet names that form circular deps
+  let clusterSheetSet = new Set();  // flat set of all sheets in any cluster
   if (existsSync(graphPath)) {
     try {
       const graph = JSON.parse(await readFile(graphPath, 'utf8'));
       topoOrder = graph.topoOrder || graph.sheets?.map(s => s.name) || null;
+      sheetClusters = graph.sheetClusters || [];
+      for (const cluster of sheetClusters) {
+        for (const s of cluster) clusterSheetSet.add(s);
+      }
+      if (sheetClusters.length > 0) {
+        console.log(`  Circular clusters: ${sheetClusters.length} (${clusterSheetSet.size} sheets total)`);
+        console.log(`  Cluster sheets will run through convergence loop, not in isolation.`);
+      }
     } catch { /* ignore */ }
   }
 
@@ -169,10 +179,51 @@ async function main() {
   async function evalOneSheet(task) {
     const { sheetName, sanitized, modulePath, sheetGtPath, gtTmpPath: gtFullPath, gtCount } = task;
 
-    // Build a child process script that loads the sheet module and compares
+    // Determine if this sheet is in a circular cluster
+    const cluster = sheetClusters.find(c => c.includes(sheetName));
+    const clusterModules = cluster ? cluster.map(s => {
+      const san = s.replace(/[^a-zA-Z0-9]/g, '_');
+      const modPath = join(sheetsDir, `${san}.mjs`).replace(/\\/g, '/');
+      return { name: s, sanitized: san, path: modPath };
+    }).filter(m => existsSync(join(sheetsDir, `${m.sanitized}.mjs`))) : [];
+
+    // Build a child process script that loads the sheet module(s) and compares
+    const clusterImports = clusterModules.length > 0
+      ? clusterModules.map(m => `import { compute as compute_${m.sanitized} } from '${m.path}';`).join('\n')
+      : '';
+    const clusterComputeBlock = clusterModules.length > 0
+      ? `
+  // Convergence loop for circular cluster (${clusterModules.length} sheets)
+  const clusterFns = [${clusterModules.map(m => `compute_${m.sanitized}`).join(', ')}];
+  const MAX_ITER = 200;
+  const TOL = 1e-6;
+  let prevSnapshot = {};
+  for (let _ci = 0; _ci < MAX_ITER; _ci++) {
+    for (const fn of clusterFns) fn(ctx);
+    // Check convergence on numeric values
+    let maxDelta = 0;
+    const snapshot = {};
+    for (const [k, v] of Object.entries(ctx.values)) {
+      if (typeof v === 'number') {
+        snapshot[k] = v;
+        const prev = prevSnapshot[k] || 0;
+        const d = Math.abs(v - prev);
+        if (d > maxDelta) maxDelta = d;
+      }
+    }
+    prevSnapshot = snapshot;
+    if (_ci > 0 && maxDelta < TOL) break;
+  }
+`
+      : `
+  // Single sheet (not in circular cluster)
+  compute(ctx);
+`;
+
     const evalScript = `
 import { readFile } from 'fs/promises';
 import { compute } from '${modulePath.replace(/\\/g, '/')}';
+${clusterImports}
 
 const allGt = JSON.parse(await readFile('${gtFullPath.replace(/\\/g, '/')}', 'utf8'));
 const sheetGt = JSON.parse(await readFile('${sheetGtPath.replace(/\\/g, '/')}', 'utf8'));
@@ -217,9 +268,9 @@ for (const [addr, val] of Object.entries(allGt)) {
   ctx.values[addr] = val;
 }
 
-// Run compute
+// Run compute (with convergence loop for circular clusters)
 try {
-  compute(ctx);
+${clusterComputeBlock}
 } catch (e) {
   process.stdout.write(JSON.stringify({
     error: e.message,
