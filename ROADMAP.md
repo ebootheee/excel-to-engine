@@ -64,6 +64,22 @@
 
 ## Done
 
+### Security Hardening + Root Cause Fixes (2026-03-29)
+- Template literal `${}` injection blocked in cell value emission
+- `escape_js_string` complete (newlines, CR, tabs, `${}`)
+- API key stripped from child process environment
+- Container runs as non-root user
+- Safe `.env` loading (no shell injection via xargs)
+- INDIRECT dynamic refs resolve correctly (`INDIRECT("P"&ROW())` → `ctx.get("Sheet!P20")`)
+- ROW()/COLUMN() emit actual cell position (was always 0)
+- ExcelDateTime → numeric serial value (3,300+ cells fixed)
+- Convergence: 200 max iterations, 1e-6 tolerance, stale detection
+
+### E2E Test 2 — Outpost A-2 (2026-03-29)
+- 80MB model, 21 sheets, 6M cells
+- Blind eval: 49/50 (98%), per-sheet: 71.4%
+- Full red team security audit: 8 HIGH + 7 MEDIUM findings → all P0s fixed
+
 ### Repo Restructure (2026-03-25)
 - Two clean pipelines: `pipelines/rust/` and `pipelines/js-reasoning/`
 - Unified eval tools in `eval/`

@@ -69,17 +69,26 @@ excel-to-engine/
 ## Current Phase — Accuracy Improvement
 
 ### Best Results So Far
-| Model | Per-Sheet Eval | Blind Eval |
-|-------|---------------|------------|
-| Synthetic (3 sheets) | 100% (78/78) | 100% (10/10) |
-| Mid-size (38 sheets) | 75.9% | 100% (50/50) |
-| Large (82 sheets) | 87.6% (2532/2890) | In progress |
+| Model | Sheets | Cells | Per-Sheet Eval | Blind Eval |
+|-------|--------|-------|---------------|------------|
+| Synthetic | 3 | 78 | 100% (78/78) | 100% (10/10) |
+| Mid-size (Lysara) | 38-60 | 1.7M | 70-76% | 100% (50/50) |
+| Large (Chariot) | 82 | 3.7M | 87.6% (2532/2890) | In progress |
+| Very Large (Outpost) | 21 | 6M | 71.4% (24K/34K) | 98% (49/50) |
+| 6 production models | 2-60 | 5.7K-5.8M | — | 99.3% (149/150) |
+
+### Fixes Applied (latest)
+- [x] INDIRECT dynamic references + ROW()/COLUMN() context
+- [x] ExcelDateTime → numeric serial values
+- [x] Security: template literal injection, API key isolation, non-root container, safe .env
+- [x] EOMONTH/EDATE numeric coercion
+- [x] Convergence: 200 iterations, 1e-6 tolerance, stale detection
 
 ### Active Improvement Areas
-- [ ] Implement missing Excel functions (INDIRECT, array formulas)
-- [ ] Fix 2D range handling edge cases for large sheets
-- [ ] Improve convergence loop accuracy for 62-sheet circular cluster
-- [ ] Reduce per-sheet eval memory for sheets >150MB
+- [ ] Array formulas (FILTER, UNIQUE, CHOOSEROWS) — Headcount still ~18%
+- [ ] Circular cluster convergence — 17-sheet Outpost cluster needs orchestrator eval
+- [ ] Large sheet eval — Owned Asset PP&E (190MB module) can't be evaluated
+- [ ] Wide sheet column disambiguation for blind eval
 
 ## Next Phase — Polish + Publish
 - [ ] Unit tests for all lib/ modules

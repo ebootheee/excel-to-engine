@@ -1,5 +1,26 @@
 # excel-to-engine — Changelog
 
+## 2026-03-29 — Security Hardening + Root Cause Accuracy Fixes
+
+### E2E Test 2 Results (Outpost A-2, 80MB, 21 sheets, 6M cells)
+- **Blind eval: 49/50 (98%)** — 1 failure from column ambiguity on wide sheet
+- **Per-sheet eval: 71.4%** (24,266/33,971 cells) — 4 sheets >95%, 6 sheets <65%
+- **Red team audit: 8 HIGH, 7 MEDIUM** security findings identified and fixed
+
+### Security Fixes (from red team audit)
+- **VULN-1**: Escape `${}` in template literals — blocks RCE via Excel text cells
+- **VULN-8**: Complete `escape_js_string` — blocks string breakout via newlines/CR
+- **VULN-9**: Strip `ANTHROPIC_API_KEY` from child process environment
+- **VULN-4**: Container runs as non-root user (`USER node`)
+- **VULN-5**: Safe `.env` loading — line-by-line parser instead of unsafe `xargs`
+
+### Root Cause Accuracy Fixes
+- **Root Cause 1 (INDIRECT)**: `INDIRECT("P"&ROW())` was emitting `ctx.get("P0")` because ROW() always returned 0. Fixed: ROW()/COLUMN() now emit actual cell position. INDIRECT auto-prepends sheet name. Expected impact: Headcount 18.6%→~75%, G&A 45.9%→~75%.
+- **Root Cause 2 (DateTime)**: `ExcelDateTime { value: 45322.0, ... }` stored as debug string instead of numeric 45322.0. Fixed: `Data::DateTime(dt)` now emits `dt.as_f64()`. Fixes 3,300+ date cells across all models.
+- **Root Cause 3 (SUMIFS criteria)**: Cascade from INDIRECT fix — `">"&K$7` now resolves cell value correctly.
+
+---
+
 ## 2026-03-29 — V1 Fixes from Zero-Basis E2E Test
 
 ### E2E Test Results (fresh Opus 4.6 session, zero prior knowledge)
