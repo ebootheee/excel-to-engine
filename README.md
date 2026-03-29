@@ -77,6 +77,22 @@ Per-sheet eval tests every formula cell against Excel's computed value (mechanic
 | Mid-size (38 sheets) | 75.9% |
 | Large (82 sheets) | 87.6% (2532/2890) |
 
+### Design Philosophy: Why It Works Like a Game Engine
+
+The Rust transpiler's architecture shares core design patterns with video game engines — both solve the same fundamental problem: **evaluate a massive graph of interdependent computations efficiently, handling cycles through iterative convergence, while keeping memory bounded by modularizing the workload.**
+
+| Concept | Game Engine | Excel-to-Engine |
+|---------|-------------|-----------------|
+| **Asset Pipeline** | Raw assets (models, textures) → compiled runtime formats | Raw Excel formulas → transpiled JavaScript modules |
+| **Scene Graph** | Directed graph of objects; parent transforms propagate to children | Cell dependency graph (DAG); upstream values propagate to dependents |
+| **Physics Solver** | Iterative constraint solving for feedback loops (gravity ↔ velocity ↔ collision), ~10-20 iterations/frame | Convergence loops for financial feedback loops (interest ↔ debt ↔ cash flow), ~5-200 iterations/eval |
+| **Per-Asset Modules** | Each mesh/shader/texture is self-contained, linked at runtime | Each sheet is a self-contained `.mjs` module, wired by orchestrator |
+| **Deterministic Simulation** | Same inputs → same frame, every tick | Same inputs → same cell values, every evaluation (topological ordering guarantees this) |
+
+**The physics solver parallel is the deepest.** Game engines handle circular force dependencies (gravity affects velocity, velocity affects position, position affects collision, collision affects forces) using iterative solvers that converge to a stable state. Financial models have identical circular dependencies — you can't compute debt without knowing interest, which depends on debt. The transpiler detects these cycles via Tarjan's SCC algorithm and wraps them in convergence loops with the same iterative approach: run the cycle, check if values stabilized (tolerance: 1e-6), repeat until convergence or max iterations.
+
+**The chunked module system mirrors game asset loading.** Just as a game engine never loads a 5GB scene file monolithically — it streams assets independently — the transpiler splits 82-sheet models into independent modules to avoid OOM crashes. A lightweight orchestrator (`engine.js`, ~19KB) manages evaluation order, just like a game engine's scene manager.
+
 ### Key Technical Decisions
 
 1. **Chunked compilation over monolithic** — Solved the 5.4GB JSON / OOM problem. Each sheet is a self-contained module with `ctx.get()`/`ctx.set()` interface. No single file exceeds a few MB.
