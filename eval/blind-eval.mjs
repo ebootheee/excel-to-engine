@@ -83,9 +83,13 @@ process.stdout.write(String(Object.keys(result.values).length));
     await writeFile(tmpFile, precomputeScript);
 
     try {
+      // SECURITY: Strip secrets from child process environment
+      const safeEnvPre = { ...process.env };
+      delete safeEnvPre.ANTHROPIC_API_KEY;
       const { stdout } = await execAsync('node', ['--max-old-space-size=8192', tmpFile], {
         timeout: 120000,
         maxBuffer: 10 * 1024 * 1024,
+        env: safeEnvPre,
       });
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
       console.log(`  Engine computed ${stdout.trim()} values in ${elapsed}s`);
@@ -341,9 +345,13 @@ try {
   await writeFile(tmpFile, wrappedCode);
 
   try {
+    // SECURITY: Strip secrets from child process environment (VULN-9)
+    const safeEnv = { ...process.env };
+    delete safeEnv.ANTHROPIC_API_KEY;
     const { stdout, stderr } = await execAsync('node', ['--max-old-space-size=8192', tmpFile], {
       timeout: 60000, // 1 min (pre-computed values load in ~5s even for large models)
       maxBuffer: 10 * 1024 * 1024,
+      env: safeEnv,
     });
     try {
       return JSON.parse(stdout);

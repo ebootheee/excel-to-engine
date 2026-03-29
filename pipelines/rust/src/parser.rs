@@ -187,7 +187,7 @@ fn parse_sheet(name: &str, range: &Range<Data>) -> SheetData {
                 }
                 Data::Bool(b) => Some(CellValue::Bool(*b)),
                 Data::Error(e) => Some(CellValue::Error(format!("{:?}", e))),
-                Data::DateTime(dt) => Some(CellValue::Text(format!("{:?}", dt))),
+                Data::DateTime(dt) => Some(CellValue::Number(dt.as_f64())),
                 Data::DateTimeIso(s) => Some(CellValue::Text(s.clone())),
                 Data::DurationIso(s) => Some(CellValue::Text(s.clone())),
             };

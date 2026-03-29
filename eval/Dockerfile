@@ -61,6 +61,10 @@ COPY lib ./lib/
 # Data directories (mount models + output here)
 VOLUME ["/data/models", "/data/output"]
 
+# SECURITY: Run as non-root user (VULN-4)
+RUN chown -R node:node /app /data 2>/dev/null || true
+USER node
+
 # Environment defaults
 ENV ANTHROPIC_API_KEY=""
 ENV TARGET_ACCURACY="0.90"

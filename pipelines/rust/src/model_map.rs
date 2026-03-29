@@ -165,7 +165,8 @@ pub fn generate_raw_engine(
             let var_name = addr_to_var(&sheet.name, &cell.address, &config);
             let default_val = match &cell.value {
                 Some(crate::parser::CellValue::Number(n)) => format!("{}", n),
-                Some(crate::parser::CellValue::Text(s)) => format!("`{}`", s.replace('`', "\\`")),
+                Some(crate::parser::CellValue::Text(s)) => format!("`{}`",
+                    s.replace('\\', "\\\\").replace('`', "\\`").replace("${", "\\${")),
                 Some(crate::parser::CellValue::Bool(b)) => b.to_string(),
                 _ => "null".to_string(),
             };

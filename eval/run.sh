@@ -39,9 +39,18 @@ MODELS_DIR="${SCRIPT_DIR}/models"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 IMAGE_NAME="excel-iterate"
 
-# Load .env if present
+# Load .env if present (SECURITY: safe line-by-line parsing, no shell injection)
 if [ -f "${SCRIPT_DIR}/.env" ]; then
-  export $(grep -v '^#' "${SCRIPT_DIR}/.env" | xargs)
+  while IFS='=' read -r key value; do
+    # Skip comments and empty lines
+    case "$key" in '#'*|'') continue ;; esac
+    # Strip surrounding quotes from value
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    export "$key=$value"
+  done < "${SCRIPT_DIR}/.env"
 fi
 
 # Check API key

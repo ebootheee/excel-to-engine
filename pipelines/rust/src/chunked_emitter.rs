@@ -1168,7 +1168,12 @@ fn cell_value_to_js(value: &Option<CellValue>) -> String {
                 format!("{}", n)
             }
         }
-        Some(CellValue::Text(s)) => format!("`{}`", s.replace('\\', "\\\\").replace('`', "\\`")),
+        // SECURITY: Escape ${ to prevent template literal injection (VULN-1)
+        Some(CellValue::Text(s)) => format!("`{}`",
+            s.replace('\\', "\\\\")
+             .replace('`', "\\`")
+             .replace("${", "\\${")
+        ),
         Some(CellValue::Bool(b)) => b.to_string(),
         Some(CellValue::Error(e)) => format!("/* {} */ null", e),
         Some(CellValue::Empty) | None => "null".to_string(),
@@ -1182,7 +1187,12 @@ fn sanitize_sheet_name(name: &str) -> String {
 }
 
 fn escape_js_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    s.replace('\\', "\\\\")
+     .replace('"', "\\\"")
+     .replace('\n', "\\n")
+     .replace('\r', "\\r")
+     .replace('\t', "\\t")
+     .replace("${", "\\${")
 }
 
 fn human_size(bytes: usize) -> String {

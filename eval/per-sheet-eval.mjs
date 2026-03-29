@@ -257,10 +257,13 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
 
     const evalStart = Date.now();
     try {
+      // SECURITY: Strip secrets from child process environment (VULN-9)
+      const safeEnv = { ...process.env };
+      delete safeEnv.ANTHROPIC_API_KEY;
       const { stdout: evalOut } = await execAsync(
         'node',
         ['--max-old-space-size=8192', tmpScript],
-        { timeout: 300000, maxBuffer: 50 * 1024 * 1024 }
+        { timeout: 300000, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
       );
       const result = JSON.parse(evalOut);
       completed++;
