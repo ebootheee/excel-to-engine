@@ -20,6 +20,10 @@ pub struct TranspileConfig {
     /// Whether to emit `ctx.get("Sheet!A1")` calls instead of variable names.
     /// When true, overrides use_flat_vars. Preserves original sheet names.
     pub use_ctx_get: bool,
+    /// Current cell's row number (1-based, for ROW() function). 0 = unknown.
+    pub current_row: u32,
+    /// Current cell's column number (1-based, for COLUMN() function). 0 = unknown.
+    pub current_col: u32,
 }
 
 impl Default for TranspileConfig {
@@ -28,6 +32,8 @@ impl Default for TranspileConfig {
             default_sheet: "Sheet1".to_string(),
             use_flat_vars: true,
             use_ctx_get: false,
+            current_row: 0,
+            current_col: 0,
         }
     }
 }
@@ -546,10 +552,22 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "NA" => "null".to_string(),
         "ERROR.TYPE" => "null".to_string(),
         "ROW" => {
-            // ROW() with no args is hard to know statically — emit 0
-            format!("/* ROW */ 0")
+            if args.is_empty() && config.current_row > 0 {
+                format!("{}", config.current_row)
+            } else if !args.is_empty() {
+                // ROW(ref) — extract row from reference (best-effort)
+                format!("/* ROW(ref) */ 0")
+            } else {
+                format!("/* ROW: unknown cell */ 0")
+            }
         }
-        "COLUMN" => format!("/* COLUMN */ 0"),
+        "COLUMN" => {
+            if args.is_empty() && config.current_col > 0 {
+                format!("{}", config.current_col)
+            } else {
+                format!("/* COLUMN */ 0")
+            }
+        }
         "ROWS" => format!("/* ROWS */ 1"),
         "COLUMNS" => format!("/* COLUMNS */ 1"),
         "TRANSPOSE" => format!("/* TRANSPOSE */ {}", arg(0)),
@@ -557,17 +575,30 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "INDIRECT" => {
             if config.use_ctx_get {
                 // In chunked/ctx.get mode, INDIRECT resolves a string address at runtime
+                let sheet_prefix = format!("\"{}!\" + ", config.default_sheet);
                 match args.first() {
                     Some(Expr::StringLit(s)) => {
                         // Static string like INDIRECT("Sheet!A1") → ctx.get("Sheet!A1")
                         let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
-                        format!("ctx.get(\"{}\")", escaped)
+                        if escaped.contains('!') {
+                            format!("ctx.get(\"{}\")", escaped)
+                        } else {
+                            // No sheet prefix — add the default sheet
+                            format!("ctx.get(\"{}!{}\")", config.default_sheet, escaped)
+                        }
                     }
                     _ => {
-                        // Dynamic expression like INDIRECT("Sheet!"&"A"&ROW())
+                        // Dynamic expression like INDIRECT("P"&ROW())
                         // Transpile the arg (& becomes string concat) and wrap in ctx.get()
+                        // If the expression doesn't contain "!", prefix with the current sheet
                         let addr_expr = arg(0);
-                        format!("ctx.get({})", addr_expr)
+                        let addr_str = addr_expr.to_string();
+                        if addr_str.contains('!') || addr_str.contains("\"!\"") {
+                            format!("ctx.get(String({}))", addr_expr)
+                        } else {
+                            // Prefix with default sheet name
+                            format!("ctx.get({}String({}))", sheet_prefix, addr_expr)
+                        }
                     }
                 }
             } else {

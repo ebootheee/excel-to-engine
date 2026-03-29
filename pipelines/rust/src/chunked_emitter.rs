@@ -236,19 +236,21 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
 
     // Phase 2: formula cells — detect intra-sheet cycles and wrap in convergence loops
     if !partition.formula_cells.is_empty() {
-        let config = TranspileConfig {
-            default_sheet: sheet_name.clone(),
-            use_flat_vars: false,
-            use_ctx_get: true,
-        };
-
         // Build per-cell transpiled expressions
         let mut cell_exprs: Vec<(String, String)> = Vec::new(); // (qualified_addr, js_expr)
         for cell in &partition.formula_cells {
             if let Some(formula) = &cell.formula {
                 let qualified = format!("{}!{}", sheet_name, cell.address);
+                // Set current cell position so ROW()/COLUMN() resolve correctly
+                let cell_config = TranspileConfig {
+                    default_sheet: sheet_name.clone(),
+                    use_flat_vars: false,
+                    use_ctx_get: true,
+                    current_row: cell.row + 1,  // Excel is 1-based
+                    current_col: cell.col + 1,
+                };
                 let js_expr = match parse_formula(formula) {
-                    Some(ast) => transpile(&ast, &config),
+                    Some(ast) => transpile(&ast, &cell_config),
                     None => format!("/* parse error: {} */ 0", escape_js_string(formula)),
                 };
                 cell_exprs.push((qualified, js_expr));

@@ -42,6 +42,7 @@ pub fn build_formulas_json(workbook: &WorkbookData) -> Vec<FormulaEntry> {
         let config = TranspileConfig { use_ctx_get: false,
             default_sheet: sheet.name.clone(),
             use_flat_vars: true,
+            ..Default::default()
         };
 
         for cell in &sheet.cells {
@@ -149,6 +150,7 @@ pub fn generate_raw_engine(
         let config = TranspileConfig { use_ctx_get: false,
             default_sheet: sheet.name.clone(),
             use_flat_vars: true,
+            ..Default::default()
         };
         for cell in &sheet.cells {
             if cell.formula.is_some() {
@@ -192,6 +194,7 @@ pub fn generate_raw_engine(
         let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig { use_ctx_get: false,
             default_sheet: entry.sheet.clone(),
             use_flat_vars: true,
+            ..Default::default()
         });
         lines.push(format!("  let {} = 0;", var_name));
     }
@@ -210,6 +213,7 @@ pub fn generate_raw_engine(
             addr_to_var(sheet, cell_addr, &TranspileConfig { use_ctx_get: false,
                 default_sheet: sheet.clone(),
                 use_flat_vars: true,
+                ..Default::default()
             })
         } else {
             // Not a formula cell — it might be an input cell; try to parse sheet!addr
@@ -219,6 +223,7 @@ pub fn generate_raw_engine(
                 addr_to_var(sheet, cell_addr, &TranspileConfig { use_ctx_get: false,
                     default_sheet: sheet.to_string(),
                     use_flat_vars: true,
+                    ..Default::default()
                 })
             } else {
                 addr.to_string()
@@ -279,6 +284,7 @@ pub fn generate_raw_engine(
             let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig { use_ctx_get: false,
                 default_sheet: entry.sheet.clone(),
                 use_flat_vars: true,
+                ..Default::default()
             });
             lines.push(format!("  {} = {};", var_name, entry.js_expr));
         }
@@ -293,6 +299,7 @@ pub fn generate_raw_engine(
         let var_name = addr_to_var(&entry.sheet, &entry.address, &TranspileConfig { use_ctx_get: false,
             default_sheet: entry.sheet.clone(),
             use_flat_vars: true,
+            ..Default::default()
         });
         lines.push(format!(
             "  outputs['{}'] = {};",
