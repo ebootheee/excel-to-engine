@@ -89,6 +89,23 @@ Per-sheet eval tests every formula cell against Excel's computed value (mechanic
 
 5. **Per-sheet eval for memory safety** — Large models can't be evaluated monolithically (16GB+ heap). The eval runs each sheet independently against ground truth.
 
+### Why This Approach (Token Economics)
+
+A real-world example: querying the Outpost A-2 model (23MB Excel, 21 sheets, 6M cells, 5.8M formulas).
+
+**What the Rust pipeline enables:**
+
+| Approach | Feasible? | Tokens | Time | Accuracy |
+|----------|-----------|--------|------|----------|
+| **Rust parse → ground truth query** | **Yes** | **~165K** | **~10 min** | **Exact Excel values** |
+| Load full XLSX into context | No | ~500M+ | Impossible | N/A |
+| Load key sheets as CSV | Barely | ~5-40M | Exceeds context | Partial |
+| Load just summary sheet | Yes | ~5K | 30 sec | Missing detail |
+
+The ground truth JSON is 201MB / ~6M entries. A typical query session pulls targeted slices (20-30KB of actual data into the context window), costing ~$3-5 at Opus rates across ~12 tool calls.
+
+**The token cost is roughly 3,000x smaller than trying to load the raw model**, and you get exact values instead of approximations. Without the pipeline, you'd need to manually identify which of 6M cells matter, extract them by hand, and paste them in — which is essentially what the pipeline automates.
+
 ### Codebase Stats
 
 | Component | Language | Lines | Files |
