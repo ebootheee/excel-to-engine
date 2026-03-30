@@ -34,8 +34,10 @@ function getFlag(name, fallback) {
 }
 
 const OUTPUT_FILE = getFlag('output', join(chunkedDir, '..', 'per-sheet-report.json'));
-const CONCURRENCY = parseInt(getFlag('concurrency', '6'));
-const SAMPLE_SIZE = parseInt(getFlag('sample', '2000'));
+const CONCURRENCY = parseInt(getFlag('concurrency', process.env.EVAL_CONCURRENCY || '6'));
+const SAMPLE_SIZE = parseInt(getFlag('sample', process.env.SAMPLE_SIZE || '2000'));
+const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '8192');
+const MAX_SHEET_SIZE_MB = parseInt(process.env.MAX_SHEET_SIZE_MB || '150');
 
 // ── Validate inputs ────────────────────────────────────────────────────────
 const gtPath = join(chunkedDir, '_ground-truth.json');
@@ -128,8 +130,8 @@ async function main() {
     try {
       const modStat = await stat(modulePath);
       const sizeMB = modStat.size / (1024 * 1024);
-      if (sizeMB > 150) {
-        skipped.push({ name: entry.name, reason: `module too large (${sizeMB.toFixed(0)}MB)` });
+      if (sizeMB > MAX_SHEET_SIZE_MB) {
+        skipped.push({ name: entry.name, reason: `module too large (${sizeMB.toFixed(0)}MB > ${MAX_SHEET_SIZE_MB}MB limit)` });
         continue;
       }
     } catch {
@@ -313,7 +315,7 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
       delete safeEnv.ANTHROPIC_API_KEY;
       const { stdout: evalOut } = await execAsync(
         'node',
-        ['--max-old-space-size=8192', tmpScript],
+        [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript],
         { timeout: 300000, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
       );
       const result = JSON.parse(evalOut);
