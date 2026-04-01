@@ -124,3 +124,8 @@
 - IRR, waterfall, calibration, Excel parser, self-eval libraries
 - Claude Code skill for 4-phase pipeline
 - Dashboard templates (Tailwind + Chart.js, zero build step)
+
+## Telemetry & Developer Dashboard
+- [ ] Emit usage metrics to D1 (page views, API calls, errors)
+- [ ] Feed structured feedback into code-review dashboard
+- [ ] Add health check endpoint for automated monitoring

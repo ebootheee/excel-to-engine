@@ -20,3 +20,7 @@ _extracted/
 .claude/
 tests/uat-lysara/
 chariot/
+
+# Internal telemetry
+project-telemetry.json
+.gstack/

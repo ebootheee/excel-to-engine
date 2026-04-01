@@ -220,6 +220,48 @@ node analyze-report.mjs ../output/eval-report.json ../output/analysis.json
 
 Repeat Steps 3-4 until accuracy reaches target.
 
+### Step 5: Validate Engine Values
+
+If you build a downstream engine that stores base case values from ground truth (e.g., a carry calculator or scenario dashboard), add `_sources` metadata and validate before deploying:
+
+```javascript
+// In your engine file
+export const VEHICLE_A = {
+  _sources: {
+    groundTruth: 'output',              // directory with _ground-truth.json
+    cells: {
+      totalCarry: 'Waterfall!D86',      // direct cell lookup
+      grossMOIC: 'Summary!C15',
+      'tiers.catchUp': 'Waterfall!D61', // dot-path into nested objects
+    },
+    aggregates: {                        // optional: sum across multiple cells
+      totalCarry: {
+        cells: ['ClassA!D86', 'ClassB!D86'],
+        op: 'sum',
+      },
+    },
+  },
+  base: {
+    totalCarry: 49_287_893,
+    grossMOIC: 2.56,
+    tiers: { catchUp: 16_152_014 },
+  },
+};
+```
+
+```bash
+# Validate all exports with _sources against ground truth
+node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/
+
+# Strict mode (0.01% tolerance — catches display rounding)
+node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/ --strict
+
+# JSON output for CI integration
+node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/ --json
+```
+
+The validator reads each `_sources.cells` entry, looks it up in the corresponding `_ground-truth.json`, and flags any mismatch beyond tolerance. This catches wrong-sheet, wrong-model, and arithmetic-estimate errors before they ship.
+
 ### Using the Generated Engine
 
 Once the engine passes eval, any Claude session (or any JS environment) can use it:
@@ -267,6 +309,7 @@ excel-to-engine/
 │   ├── blind-eval.mjs           # Blind Claude API eval (tool_use)
 │   ├── generate-questions.mjs   # Question generator from ground truth
 │   ├── analyze-report.mjs       # Analysis reporter with fix recommendations
+│   ├── validate-engine.mjs      # Validate engine _sources against ground truth
 │   ├── pipeline.mjs             # Pipeline orchestrator
 │   ├── Dockerfile               # Container (Rust + Node)
 │   └── run.sh                   # Docker runner (Mac + Windows)
