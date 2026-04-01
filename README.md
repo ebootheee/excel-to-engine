@@ -1,6 +1,8 @@
 # excel-to-engine
 
-> Convert complex financial Excel models into live, testable JavaScript computation engines.
+> Convert complex financial Excel models into live, testable JavaScript computation engines. Two engines: (1) A Claude SKILL that can build an entire Javascript engine; (2) A Rust-based parallelized transpiler with 60+ predefined Excel functions. Use the Claude SKILL for simple models (100-40,000 cells), and use the Rust transpiler for big models with circular/iterative logic, multi-sheet/file references, and complex formula logic (40,000-6,000,000 cells).
+> Point Claude (preferably Claude Code, 'bypass permissions' highly recommended as this calls A LOT of tools) at this repo and tell it to read up, 'git clone' and execute on your preferred method. Ensure it has access to your target XLSX files in the same folder.
+> Once it is done building, you have a fully functioning code-based mathematicall replica of your target model with a 99% reduced context window and 5-10x the processing speed with AI agents and applications.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -11,11 +13,14 @@ Takes a `.xlsx` financial model (PE fund models, real estate waterfalls, DCF ana
 1. **Per-sheet JS modules** — Each Excel sheet becomes a self-contained `.mjs` file with all formulas transpiled to JavaScript
 2. **An orchestrator** (`engine.js`) — Wires sheets together in dependency order, handles circular references with convergence loops
 3. **Ground truth** — Every cell value from Excel, for automated accuracy testing
-4. **A blind eval system** — Independent validation using Claude API with zero knowledge of the engine's internals
-
+4. **A blind eval system** — Independent validation using Claude API with zero knowledge of the engine's internals; can run as a simple script, or can point a Claude or OpenAI API key to it and generate random queries for the model with progressive difficulty (good for production runs where others will blindly accept your outputs)
 Tested across 9 financial models from 3KB to 84MB (2–82 sheets, up to 6M cells). Blind eval accuracy: **99.3%** (149/150 questions across 15.5M cells).
 
 ## Quick Start
+
+### For Agents
+
+- Read CLAUDE.md and guide your user through the repo clone, dependency installs, and choosing the right engine creator per this README file. Utilize eval tools to ensure accuracy (script-based, blind agent-based eval with token, and iterative Docker instance all available)
 
 ### Prerequisites
 
