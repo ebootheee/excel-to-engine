@@ -523,15 +523,32 @@ When building a dashboard or sensitivity tool on top of a parsed engine, **ancho
 **Pattern** (proven on 6 production vehicles — 0.0% error at base case on all 6):
 
 ```javascript
-// Store EXACT values from ground truth
-const base = {
-  totalCarry: 41_613_251,     // From model ground truth
-  grossMOIC: 2.026,           // From model ground truth
-  prefHurdleMOIC: 1.469,      // 1.08^holdYears (or extract from model)
-  tiers: {                    // Tier breakdown from model
-    catchUp: 0,
-    tier3GP: 18_327_170,
-    tier4GP: 23_286_081,
+// Store EXACT values from ground truth with _sources metadata for validation
+export const MY_VEHICLE = {
+  _sources: {
+    groundTruth: 'output-dir',              // directory containing _ground-truth.json
+    cells: {
+      totalCarry: 'Waterfall!D86',          // direct cell lookup
+      grossMOIC: 'Summary!C15',
+      'tiers.tier3GP': 'Waterfall!D77',     // dot-path into nested objects
+      'tiers.tier4GP': 'Waterfall!D85',
+    },
+    aggregates: {                            // optional: sum across multiple cells/classes
+      totalCarry: {
+        cells: ['ClassA!D86', 'ClassB!D86'],
+        op: 'sum',
+      },
+    },
+  },
+  base: {
+    totalCarry: 41_613_251,     // Waterfall!D86
+    grossMOIC: 2.026,           // Summary!C15
+    prefHurdleMOIC: 1.469,      // 1.08^holdYears (or extract from model)
+    tiers: {
+      catchUp: 0,
+      tier3GP: 18_327_170,      // Waterfall!D77
+      tier4GP: 23_286_081,      // Waterfall!D85
+    },
   },
 };
 
@@ -553,6 +570,14 @@ function computeCarrySensitized(targetMOIC) {
 - Below hurdle: correctly drops to $0
 - No compounding errors, no interim-distribution timing issues
 - Per-tier breakdowns scale proportionally, preserving the waterfall structure
+
+**Always validate after building.** Run the validation script to check every `_sources.cells` entry against ground truth:
+
+```bash
+node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/
+```
+
+This catches wrong-sheet, wrong-model, wrong-column, and arithmetic-estimate errors before deployment. Exit code 1 = failures found. Use `--strict` for 0.01% tolerance, `--json` for CI output.
 
 **When NOT to use this:** If you need the engine to run with completely different input assumptions (new assets, changed debt structure, etc.), you need the full transpiled engine. Model-anchored sensitization only works for sensitivity analysis around a known base case.
 
@@ -1100,14 +1125,18 @@ This is opt-in only — do NOT generate Python by default.
 For validating any engine (JS reasoning or Rust pipeline):
 
 1. **Parse the model** → produces ground truth + chunked modules
-2. **Run blind eval** → fresh Claude API session answers business questions (independent test)
-3. **Take the eval report** → give to a NEW Claude Code session
-4. **That session reads failures, fixes the engine/transpiler, pushes code**
-5. **Re-parse and re-eval** (blind again — clean context)
+2. **Validate engine values** → checks `_sources` metadata against ground truth (catches wrong-sheet/wrong-model errors)
+3. **Run blind eval** → fresh Claude API session answers business questions (independent test)
+4. **Take the eval report** → give to a NEW Claude Code session
+5. **That session reads failures, fixes the engine/transpiler, pushes code**
+6. **Re-parse and re-eval** (blind again — clean context)
 
 This separation is critical: the builder has full context, the evaluator has zero context. This prevents overfitting and catches real usability issues.
 
 ```bash
+# Validate engine base case values against ground truth (do this FIRST):
+node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/
+
 # One-command eval (local, no Docker needed):
 node eval/run-all.mjs model.xlsx --questions 50
 
@@ -1127,3 +1156,5 @@ node eval/per-sheet-eval.mjs output/chunked --output output/per-sheet-report.jso
 - **Ask the user.** Financial models have nuances that automated detection can't capture. Always confirm the model map with the user.
 - **Never approximate IRR from MOIC.** Extract actual cash flow series from ground truth. The MOIC^(1/n)-1 shortcut diverges for long holds with interim distributions.
 - **Check for waterfall structure helpers.** `extractWaterfallStructure(groundTruth)` and `extractCashFlowSeries(groundTruth)` in `lib/excel-parser.mjs` auto-detect multi-tier waterfalls and distribution series.
+- **Always add `_sources` metadata** when storing ground truth values in an engine. Map every base case field to its exact cell reference. Run `node eval/validate-engine.mjs` before deploying — it catches wrong-sheet, wrong-model, and wrong-column errors automatically.
+- **Watch for multi-model sourcing.** If a vehicle has both standalone and combined deployment models, use the combined model (it's the base case). Document which ground truth directory each vehicle sources from in `_sources.groundTruth`.
