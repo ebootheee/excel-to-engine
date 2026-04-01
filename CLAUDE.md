@@ -22,6 +22,7 @@ excel-to-engine/
 │   ├── blind-eval.mjs           # Blind Claude API eval (50/50 on test model)
 │   ├── generate-questions.mjs   # Generate test questions from ground truth
 │   ├── analyze-report.mjs       # Analyze eval results, recommend fixes
+│   ├── validate-engine.mjs      # Validate engine _sources against ground truth
 │   ├── pipeline.mjs             # Pipeline orchestrator (parse → validate → eval)
 │   ├── Dockerfile               # Container for running eval (Rust + Node)
 │   ├── run.sh                   # Runner script for Docker
@@ -126,8 +127,65 @@ Located at `pipelines/js-reasoning/templates/`:
 - `eval-template.mjs` — Eval suite template
 - `dashboard/` — HTML dashboard (Tailwind + Chart.js, zero build step)
 
+## Engine Validation
+
+When building engines that consume ground truth values (carry calculators, scenario dashboards, etc.), use `_sources` metadata and the validation script to prevent wrong-sheet/wrong-model errors.
+
+### The _sources pattern
+
+Add a `_sources` block to any exported object that stores values from ground truth:
+
+```javascript
+export const MY_VEHICLE = {
+  _sources: {
+    groundTruth: 'output-dir',          // directory containing _ground-truth.json
+    cells: {
+      totalCarry: 'Sheet!D86',          // direct cell reference
+      'tiers.catchUp': 'Sheet!D61',     // dot-path into nested base object
+    },
+    aggregates: {                        // optional: sum across multiple cells
+      totalCarry: {
+        cells: ['ClassA!D86', 'ClassB!D86'],
+        op: 'sum',
+      },
+    },
+  },
+  base: {
+    totalCarry: 49_287_893,
+    tiers: { catchUp: 16_152_014 },
+  },
+};
+```
+
+### Validate before deploying
+
+```bash
+node eval/validate-engine.mjs path/to/engine.js --gt-root path/to/engines/
+node eval/validate-engine.mjs path/to/engine.js --strict   # 0.01% tolerance
+```
+
+The script reads `_sources.cells` and checks every value against `_ground-truth.json`. Exits non-zero on failure.
+
+### Common errors this catches
+
+- **Wrong model**: Using a standalone A-1 ground truth when a combined A-2 exists
+- **Wrong sheet**: Looking up a value from the wrong investor class or waterfall tab
+- **Wrong column**: Ground truth column M contains a label string, column N has the value
+- **Arithmetic estimates**: Computing carry as `(grossMOIC - netMOIC) × equity` instead of using the model's actual waterfall cell
+- **Multi-class understatement**: Forgetting to sum carry across multiple investor classes
+
 ## Important Notes
 
 - Public open-source project — never include proprietary data, real financials, or participant names
 - All examples use synthetic/dummy data
 - Licensed under MIT
+
+## Mandatory: Update Project Files on Every Change
+
+After ANY code change, deploy, or meaningful work session:
+1. **CHANGELOG.md** — Add entry with today's date and what changed
+2. **PLAN.md** — Update status/phase if it changed
+3. **ROADMAP.md** — Move completed items, add discovered work
+4. **README.md** — Update if architecture/setup/structure changed
+
+These updates are NOT optional. The daily code review reads these files.

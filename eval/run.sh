@@ -17,6 +17,11 @@
 #   TARGET_ACCURACY     — Stop threshold (default: 0.85)
 #   MAX_ITERATIONS      — Max improvement loops (default: 30)
 #   MODEL_NAME          — Claude model (default: claude-sonnet-4-6)
+#   EVAL_CONCURRENCY    — Sheets evaluated in parallel (default: 6)
+#   NODE_HEAP_MB        — Node.js heap per child process in MB (default: 16384)
+#   MAX_SHEET_SIZE_MB   — Skip sheet modules larger than this (default: 150)
+#   DOCKER_MEMORY       — Container memory limit (default: 16g)
+#   DOCKER_CPUS         — Container CPU limit (default: 4)
 
 set -uo pipefail
 
@@ -87,6 +92,9 @@ fi
 
 echo ""
 EVAL_CONCURRENCY="${EVAL_CONCURRENCY:-6}"
+NODE_HEAP_MB="${NODE_HEAP_MB:-16384}"
+DOCKER_MEMORY="${DOCKER_MEMORY:-16g}"
+DOCKER_CPUS="${DOCKER_CPUS:-4}"
 
 echo "═══════════════════════════════════════════════════════"
 echo "  Auto-Iterate Pipeline"
@@ -95,6 +103,8 @@ TARGET_PCT=$(awk "BEGIN { printf \"%.0f\", ${TARGET_ACCURACY:-0.85} * 100 }")
 echo "  Target: ${TARGET_PCT}%"
 echo "  Max iterations: ${MAX_ITERATIONS:-30}"
 echo "  Eval concurrency: ${EVAL_CONCURRENCY} sheets"
+echo "  Node heap: ${NODE_HEAP_MB} MB"
+echo "  Docker: ${DOCKER_MEMORY} RAM, ${DOCKER_CPUS} CPUs"
 echo "  Output: ${OUTPUT_DIR}"
 echo "═══════════════════════════════════════════════════════"
 echo ""
@@ -127,14 +137,18 @@ for MODEL in "${MODELS[@]}"; do
   # MSYS_NO_PATHCONV prevents Git Bash on Windows from mangling /data/... paths
   if ! MSYS_NO_PATHCONV=1 docker run -d \
     --name "$CONTAINER_NAME" \
+    --memory="${DOCKER_MEMORY}" \
+    --cpus="${DOCKER_CPUS}" \
     -v "${MODEL_DIR}:/data/models:ro" \
     -v "${OUTPUT_DIR}:/data/output" \
     -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
     -e TARGET_ACCURACY="${TARGET_ACCURACY:-0.90}" \
     -e MAX_ITERATIONS="${MAX_ITERATIONS:-30}" \
     -e MODEL_NAME="${MODEL_NAME:-claude-sonnet-4-6}" \
-    -e NODE_OPTIONS="--max-old-space-size=16384" \
+    -e NODE_HEAP_MB="${NODE_HEAP_MB}" \
     -e EVAL_CONCURRENCY="${EVAL_CONCURRENCY}" \
+    -e MAX_SHEET_SIZE_MB="${MAX_SHEET_SIZE_MB:-150}" \
+    ${RAYON_NUM_THREADS:+-e RAYON_NUM_THREADS="${RAYON_NUM_THREADS}"} \
     "$IMAGE_NAME" \
     "/data/models/${MODEL_FILE}" \
     > /dev/null; then

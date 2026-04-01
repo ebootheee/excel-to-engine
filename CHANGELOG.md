@@ -1,5 +1,21 @@
 # excel-to-engine — Changelog
 
+## 2026-03-31 — Engine Validation Script + _sources Pattern
+
+### New: `eval/validate-engine.mjs`
+- Generic pre-deploy validation: checks engine base case values against `_ground-truth.json`
+- Supports `_sources` metadata pattern: `cells` (direct lookups) and `aggregates` (multi-cell sums)
+- Default 0.5% tolerance, `--strict` for 0.01%, `--json` for CI output
+- Catches wrong-sheet, wrong-model, wrong-column, and arithmetic-estimate errors
+- Exits non-zero on failure — use as a deploy gate
+
+### Documentation
+- Added Engine Validation section to CLAUDE.md with `_sources` pattern, common errors, and usage
+- Added Step 5 (Validate Engine Values) to README with `_sources` example and CLI usage
+- Updated project structure in both files to include `validate-engine.mjs`
+
+---
+
 ## 2026-03-29 — Security Hardening + Root Cause Accuracy Fixes
 
 ### E2E Test 2 Results (Outpost A-2, 80MB, 21 sheets, 6M cells)

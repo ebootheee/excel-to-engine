@@ -47,6 +47,8 @@ const MODEL_NAME = process.env.MODEL_NAME || 'claude-sonnet-4-6';
 const RUST_PARSER_BIN = process.env.RUST_PARSER_BIN || defaultPath('/usr/local/bin/rust-parser', '../pipelines/rust/target/release/rust-parser');
 const RUST_SRC_DIR = process.env.RUST_SRC_DIR || defaultPath('/app/rust-parser', '../pipelines/rust');
 const MODELS_DIR = process.env.MODELS_DIR || defaultPath('/data/models', './models');
+const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '28672');
+const MAX_SHEET_SIZE_MB = parseInt(process.env.MAX_SHEET_SIZE_MB || '150');
 
 // ── Logging ─────────────────────────────────────────────────────────────────
 const LOG_ENTRIES = [];
@@ -334,7 +336,7 @@ process.stdout.write(JSON.stringify({ accuracy, correct, total, failures: top30 
     const tmpScript = join(outputDir, '_eval_tmp.mjs');
     await writeFile(tmpScript, evalScript);
 
-    const { stdout: evalOut } = await execAsync('node', ['--max-old-space-size=28672', tmpScript], {
+    const { stdout: evalOut } = await execAsync('node', [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript], {
       timeout: 600000, // 10 min for large models
       maxBuffer: 100 * 1024 * 1024,
     });
@@ -431,12 +433,12 @@ async function evalPerSheet(outputDir, chunkedDir, gtPath, totalKnown) {
       continue;
     }
 
-    // Skip sheets with massive modules (>150MB) — they'll OOM Node
+    // Skip sheets with massive modules — they'll OOM Node
     try {
       const moduleStat = await stat(sheetModulePath);
       const moduleSizeMB = moduleStat.size / (1024 * 1024);
-      if (moduleSizeMB > 150) {
-        log(`    ⏭️  ${sheetName}: skipped (module ${moduleSizeMB.toFixed(0)}MB > 150MB limit)`);
+      if (moduleSizeMB > MAX_SHEET_SIZE_MB) {
+        log(`    ⏭️  ${sheetName}: skipped (module ${moduleSizeMB.toFixed(0)}MB > ${MAX_SHEET_SIZE_MB}MB limit)`);
         continue;
       }
     } catch { /* file doesn't exist — will be caught later */ }
@@ -536,7 +538,7 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
     await writeFile(tmpScript, evalScript);
 
     try {
-      const { stdout: evalOut, stderr: evalErr } = await execAsync('node', ['--max-old-space-size=28672', tmpScript], {
+      const { stdout: evalOut, stderr: evalErr } = await execAsync('node', [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript], {
         timeout: 300000, // 5 min per sheet
         maxBuffer: 100 * 1024 * 1024,
       });

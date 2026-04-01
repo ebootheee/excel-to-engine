@@ -37,6 +37,7 @@ const OUTPUT_FILE = oIdx >= 0 ? args[oIdx + 1] : join(chunkedDir, '..', 'eval-re
 const API_KEY = process.env.ANTHROPIC_API_KEY;
 const MODEL = process.env.MODEL_NAME || 'claude-sonnet-4-6';
 const CONCURRENCY = parseInt(process.env.CONCURRENCY || '3');
+const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '8192');
 
 if (!API_KEY) {
   console.error('Error: ANTHROPIC_API_KEY is required');
@@ -86,7 +87,7 @@ process.stdout.write(String(Object.keys(result.values).length));
       // SECURITY: Strip secrets from child process environment
       const safeEnvPre = { ...process.env };
       delete safeEnvPre.ANTHROPIC_API_KEY;
-      const { stdout } = await execAsync('node', ['--max-old-space-size=8192', tmpFile], {
+      const { stdout } = await execAsync('node', [`--max-old-space-size=${NODE_HEAP_MB}`, tmpFile], {
         timeout: 120000,
         maxBuffer: 10 * 1024 * 1024,
         env: safeEnvPre,
@@ -348,7 +349,7 @@ try {
     // SECURITY: Strip secrets from child process environment (VULN-9)
     const safeEnv = { ...process.env };
     delete safeEnv.ANTHROPIC_API_KEY;
-    const { stdout, stderr } = await execAsync('node', ['--max-old-space-size=8192', tmpFile], {
+    const { stdout, stderr } = await execAsync('node', [`--max-old-space-size=${NODE_HEAP_MB}`, tmpFile], {
       timeout: 60000, // 1 min (pre-computed values load in ~5s even for large models)
       maxBuffer: 10 * 1024 * 1024,
       env: safeEnv,

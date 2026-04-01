@@ -10,7 +10,7 @@
     "totalCellsTested": 78,
     "totalCellsCorrect": 78,
     "overallAccuracy": 100,
-    "elapsedMs": 55,
+    "elapsedMs": 54,
     "concurrency": 6,
     "sampleSize": 2000
   },
@@ -21,7 +21,7 @@
       "accuracy": 100,
       "correct": 34,
       "total": 34,
-      "elapsedMs": 51,
+      "elapsedMs": 50,
       "error": null,
       "topFailures": []
     },
@@ -31,7 +31,7 @@
       "accuracy": 100,
       "correct": 24,
       "total": 24,
-      "elapsedMs": 50,
+      "elapsedMs": 51,
       "error": null,
       "topFailures": []
     },
