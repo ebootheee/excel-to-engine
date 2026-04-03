@@ -631,7 +631,7 @@ Look in the Excel's "Equity" or "Cash Flow" sheet for the cell that feeds into M
 
 Distribution waterfalls are the #1 source of large deviations. **Do NOT simplify the waterfall.**
 
-1. **Find the waterfall sheet**: Look for tabs named "GPP Promote", "Waterfall", "Distribution", "Carry", or "Promote Structure"
+1. **Find the waterfall sheet**: Look for tabs named "GP Promote", "Waterfall", "Distribution", "Carry", or "Promote Structure"
 2. **Count the tiers**: Most PE waterfalls have 3-5 tiers. Read ALL of them:
    - Tier 1: LP Preferred Return (100% to LP until X% return achieved)
    - Tier 2: GP Catch-Up (50/50 or similar until GP has X% of total profit)
@@ -662,7 +662,7 @@ Calibration is NOT optional. Without it, engines typically deviate 10-30% from E
 const EXCEL_TARGETS = {
   grossMOIC: 2.35,      // from Excel cell N50 (or wherever MOIC is displayed)
   netIRR: 0.1923,       // from Excel cell S50
-  gpCarry: 43_411_674,  // from GPP Promote sheet total carry
+  gpCarry: 43_411_674,  // from GP Promote sheet total carry
   mipPayment: 51_876_337, // from Equity sheet MIP cell
 };
 

@@ -72,9 +72,9 @@ excel-to-engine/
 | Model | Sheets | Cells | Per-Sheet Eval | Blind Eval |
 |-------|--------|-------|---------------|------------|
 | Synthetic | 3 | 78 | 100% (78/78) | 100% (10/10) |
-| Mid-size (Lysara) | 38-60 | 1.7M | 70-76% | 100% (50/50) |
-| Large (Chariot) | 82 | 3.7M | 87.6% (2532/2890) | In progress |
-| Very Large (Outpost) | 21 | 6M | 71.4% (24K/34K) | 98% (49/50) |
+| Mid-size (38-60 sheets) | 38-60 | 1.7M | 70-76% | 100% (50/50) |
+| Large (82 sheets) | 82 | 3.7M | 87.6% (2532/2890) | In progress |
+| Very Large (21 sheets) | 21 | 6M | 71.4% (24K/34K) | 98% (49/50) |
 | 6 production models | 2-60 | 5.7K-5.8M | — | 99.3% (149/150) |
 
 ### Fixes Applied (latest)
@@ -86,7 +86,7 @@ excel-to-engine/
 
 ### Active Improvement Areas
 - [ ] Array formulas (FILTER, UNIQUE, CHOOSEROWS) — Headcount still ~18%
-- [ ] Circular cluster convergence — 17-sheet Outpost cluster needs orchestrator eval
+- [ ] Circular cluster convergence — large circular clusters (17+ sheets) need orchestrator eval
 - [ ] Large sheet eval — Owned Asset PP&E (190MB module) can't be evaluated
 - [ ] Wide sheet column disambiguation for blind eval
 

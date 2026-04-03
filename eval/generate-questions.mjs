@@ -14,7 +14,7 @@
  *      paired with numeric values in the same row on later columns
  *   3. Categorize questions by difficulty:
  *      - "direct": single named cell (e.g., "What is Revenue on the Assumptions sheet?")
- *      - "lookup": value identified by label + sheet (e.g., "What is Total NOI for LYSARA MASTER UK?")
+ *      - "lookup": value identified by label + sheet (e.g., "What is Total NOI for the UK entity?")
  *      - "aggregated": cross-sheet or summary values (e.g., "What is the portfolio net IRR?")
  *   4. Randomize and select N questions across categories
  *   5. Write test-questions.json
@@ -89,9 +89,9 @@ function categorizeLabel(label) {
 function generateQuestion(label, sheet, value, addr, category) {
   // Include the cell address so Claude knows exactly which cell to look up.
   // This isn't "cheating" — it's the same info a human analyst would have
-  // ("look at cell CX413 on the CHARIOT sheet"). The test validates that
+  // ("look at cell D15 on the Summary sheet"). The test validates that
   // the engine HAS the right value, and that Claude can navigate to it.
-  const cellRef = addr; // e.g., "CHARIOT!CX413"
+  const cellRef = addr; // e.g., "Summary!D15"
   const templates = {
     revenue: [
       `What is the value at cell ${cellRef}? (This should be ${label} on the ${sheet} sheet)`,
