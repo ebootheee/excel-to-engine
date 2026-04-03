@@ -72,9 +72,9 @@ excel-to-engine/
 | Model | Sheets | Cells | Per-Sheet Eval | Blind Eval |
 |-------|--------|-------|---------------|------------|
 | Synthetic | 3 | 78 | 100% (78/78) | 100% (10/10) |
-| Mid-size (Lysara) | 38-60 | 1.7M | 70-76% | 100% (50/50) |
-| Large (Chariot) | 82 | 3.7M | 87.6% (2532/2890) | In progress |
-| Very Large (Outpost) | 21 | 6M | 71.4% (24K/34K) | 98% (49/50) |
+| Mid-size | 38-60 | 1.7M | 70-76% | 100% (50/50) |
+| Large | 82 | 3.7M | 87.6% (2532/2890) | In progress |
+| Very Large | 21 | 6M | 71.4% (24K/34K) | 98% (49/50) |
 | 6 production models | 2-60 | 5.7K-5.8M | — | 99.3% (149/150) |
 
 ### Fixes Applied (latest)
