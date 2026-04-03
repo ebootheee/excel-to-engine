@@ -168,7 +168,6 @@ The script reads `_sources.cells` and checks every value against `_ground-truth.
 
 ### Common errors this catches
 
-- **Wrong model**: Using a standalone A-1 ground truth when a combined A-2 exists
 - **Wrong sheet**: Looking up a value from the wrong investor class or waterfall tab
 - **Wrong column**: Ground truth column M contains a label string, column N has the value
 - **Arithmetic estimates**: Computing carry as `(grossMOIC - netMOIC) × equity` instead of using the model's actual waterfall cell
