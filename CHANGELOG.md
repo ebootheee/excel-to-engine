@@ -18,7 +18,7 @@
 
 ## 2026-03-29 — Security Hardening + Root Cause Accuracy Fixes
 
-### E2E Test 2 Results (Outpost A-2, 80MB, 21 sheets, 6M cells)
+### E2E Test 2 Results (80MB corporate model, 21 sheets, 6M cells)
 - **Blind eval: 49/50 (98%)** — 1 failure from column ambiguity on wide sheet
 - **Per-sheet eval: 71.4%** (24,266/33,971 cells) — 4 sheets >95%, 6 sheets <65%
 - **Red team audit: 8 HIGH, 7 MEDIUM** security findings identified and fixed
@@ -80,7 +80,7 @@ Evaluated the toolkit's output quality on a real 6-vehicle carry computation pro
 **What worked well:**
 - All 6 models (5.7K to 5.8M cells) parsed successfully with `--chunked` mode
 - Ground truth extraction captured carry-relevant cells across complex sheet structures
-- GRAF models (2-7 sheets) parsed in <1 second, large models in ~15 minutes
+- Small fund models (2-7 sheets) parsed in <1 second, large models in ~15 minutes
 - Per-sheet module architecture worked without OOM even on 5.8M-cell models
 
 **Accuracy gaps identified in downstream use:**

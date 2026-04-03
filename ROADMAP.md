@@ -75,7 +75,7 @@
 - ExcelDateTime → numeric serial value (3,300+ cells fixed)
 - Convergence: 200 max iterations, 1e-6 tolerance, stale detection
 
-### E2E Test 2 — Outpost A-2 (2026-03-29)
+### E2E Test 2 — Large Corporate Model (2026-03-29)
 - 80MB model, 21 sheets, 6M cells
 - Blind eval: 49/50 (98%), per-sheet: 71.4%
 - Full red team security audit: 8 HIGH + 7 MEDIUM findings → all P0s fixed

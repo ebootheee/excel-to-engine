@@ -18,7 +18,7 @@ _extracted/
 
 # Claude Code session
 .claude/
-tests/uat-lysara/
+tests/uat-*/
 chariot/
 
 # Internal telemetry

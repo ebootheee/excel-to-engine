@@ -86,7 +86,7 @@ excel-to-engine/
 
 ### Active Improvement Areas
 - [ ] Array formulas (FILTER, UNIQUE, CHOOSEROWS) — Headcount still ~18%
-- [ ] Circular cluster convergence — 17-sheet Outpost cluster needs orchestrator eval
+- [ ] Circular cluster convergence — large circular clusters (17+ sheets) need orchestrator eval
 - [ ] Large sheet eval — Owned Asset PP&E (190MB module) can't be evaluated
 - [ ] Wide sheet column disambiguation for blind eval
 

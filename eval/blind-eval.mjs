@@ -375,13 +375,13 @@ You have one tool: execute_js — it runs JavaScript code in a Node.js environme
 
 LOOKUP HELPERS (use these!):
 - \`getCell("SheetName!B12")\` — Get a specific cell value by exact address
-- \`findByLabel("Total NOI", "CHARIOT")\` — Find numeric values in the same row as a label. Returns [{label, labelAddr, valueAddr, value, sheet, col}]. The second arg (sheet name) is optional but recommended.
-- \`getRow("CHARIOT", 413)\` — Get ALL values in a specific row: [{addr, col, value}]
-- \`getSheetLabels("CHARIOT")\` — List all text labels on a sheet (up to 100)
+- \`findByLabel("Total NOI", "Summary")\` — Find numeric values in the same row as a label. Returns [{label, labelAddr, valueAddr, value, sheet, col}]. The second arg (sheet name) is optional but recommended.
+- \`getRow("Summary", 15)\` — Get ALL values in a specific row: [{addr, col, value}]
+- \`getSheetLabels("Summary")\` — List all text labels on a sheet (up to 100)
 
 NAVIGATION:
 - \`listSheets()\` — List all sheet names
-- \`listSheet("CHARIOT", 50)\` — List first 50 cells on a sheet
+- \`listSheet("Summary", 50)\` — List first 50 cells on a sheet
 
 STRATEGY:
 1. Call listSheets() to see available sheets
@@ -391,7 +391,7 @@ STRATEGY:
 5. Always return your answer with: return <number>
 
 IMPORTANT:
-- The model uses Excel-style cell addresses: "SheetName!ColumnRow" (e.g., "CHARIOT!CX413")
+- The model uses Excel-style cell addresses: "SheetName!ColumnRow" (e.g., "Summary!D15")
 - Each row typically has a label in column B or C, with values across columns to the right (one per time period)
 - Do NOT try to iterate over all cells — use the label search helpers instead
 - Return your final answer with \`return <value>\`
@@ -417,7 +417,7 @@ async function evalOneQuestion(question) {
   const tools = [
     {
       name: 'execute_js',
-      description: 'Execute JavaScript code against the financial model. Available helpers: getCell("Sheet!A1"), findByLabel("Total NOI", "CHARIOT"), getRow("CHARIOT", 413), getSheetLabels("CHARIOT"), listSheets(), listSheet("CHARIOT", 50). Use `return <value>` to return results.',
+      description: 'Execute JavaScript code against the financial model. Available helpers: getCell("Sheet!A1"), findByLabel("Total NOI", "Summary"), getRow("Summary", 15), getSheetLabels("Summary"), listSheets(), listSheet("Summary", 50). Use `return <value>` to return results.',
       input_schema: {
         type: 'object',
         properties: {
