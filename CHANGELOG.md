@@ -1,5 +1,25 @@
 # excel-to-engine — Changelog
 
+## 2026-04-13 — Two-Tier Engine Workflow + Ground Truth Delta Approach
+
+### New: Dual-engine workflow documentation
+- Defined Tier 1 (hand-crafted engines, fast) vs Tier 2 (ground truth + chunked modules, cell-level)
+- Added decision logic: use Tier 1 for named-input sensitivity, Tier 2 for segment P&L changes
+- Documented the **ground truth + delta approach** — load `_ground-truth.json`, compute scenario deltas, apply to base case returns. Faster and more reliable than running the full chunked engine.
+- Added complete code examples showing how to search ground truth by label, read annual data by row, and compute MOIC/IRR impact
+
+### Updated: SKILL.md
+- Added TWO-TIER ENGINE WORKFLOW section with decision logic and code examples
+- Instructs agents to always generate both tiers and route queries to the right one at runtime
+- Documents why the ground truth + delta approach is ~6x more accurate than hand-crafted engine approximation for segment-level questions
+
+### Updated: CLAUDE.md, README.md
+- Added "Using Parsed Output" section to CLAUDE.md with workflow and code snippets
+- Added "Two-Tier Engine Workflow" section to README with comparison table and examples
+- Added new Claude prompt example: "Query ground truth for cell-level analysis"
+
+---
+
 ## 2026-03-31 — Engine Validation Script + _sources Pattern
 
 ### New: `eval/validate-engine.mjs`
