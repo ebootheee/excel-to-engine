@@ -112,6 +112,44 @@ and sensitizes carry proportionally to MOIC adjustments.
 
 Claude reads `_ground-truth.json`, identifies the relevant waterfall cells, and builds an engine with `_sources` metadata for validation.
 
+### Query ground truth for cell-level analysis
+
+```
+Load the ground truth for my model in output/chunked/_ground-truth.json.
+What is the Technology segment's total revenue by year? What are the G&A
+allocations to the tech segment? What if G&A consumed 100% of net new ARR?
+```
+
+Claude loads the ground truth JSON, finds labeled rows (e.g., `Technology!H23 = "Total Revenue"`), reads annual data across projection columns, and computes scenario deltas against base case returns. This uses the **ground truth + delta approach** — faster and more precise than the hand-crafted engine for questions that require segment-level P&L changes.
+
+## Two-Tier Engine Workflow
+
+The Rust pipeline produces two outputs that serve different use cases. **Keep both:**
+
+| Tier | Files | Use For | Speed |
+|------|-------|---------|-------|
+| **1: Hand-crafted engine** | `engine.js` + `shared.js` | MOIC/IRR sensitivity, carry, exit year, dashboard sliders | Milliseconds |
+| **2: Ground truth + chunked** | `_ground-truth.json` + `sheets/*.mjs` | Segment P&L, G&A reallocation, cost line items, any cell-level question | Seconds (GT lookup) |
+
+**When to use which:** If the question maps to a named input (exit multiple, carry rate, exit year), Tier 1. If it requires changing something inside a segment P&L that the engine doesn't expose, Tier 2.
+
+**Ground truth + delta** (recommended for Tier 2): Load `_ground-truth.json`, find the cells by label, read the data, compute your scenario delta, and apply it to base case returns. This avoids running the full chunked engine (8GB heap, 10+ minutes).
+
+```javascript
+import { readFileSync } from 'fs';
+const gt = JSON.parse(readFileSync('./output/chunked/_ground-truth.json', 'utf-8'));
+
+// Find cells by label
+const revenueRows = Object.entries(gt)
+  .filter(([k, v]) => typeof v === 'string' && /Total Revenue/i.test(v))
+  .filter(([k]) => k.startsWith('Technology!'));
+
+// Read annual data, compute delta, apply to base MOIC/IRR
+const cols = ['L','M','N','O','P','Q'];
+const techRev = cols.map(c => gt['Technology!' + c + '23'] || 0);
+// ... see SKILL.md for complete example
+```
+
 ## Validate Engine Values
 
 If you build a downstream engine that stores base case values from ground truth (e.g., a carry calculator or scenario dashboard), add `_sources` metadata and validate before deploying:

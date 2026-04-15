@@ -61,6 +61,44 @@ Best for smaller models where you need Claude to understand the financial logic.
 
 The skill is at `pipelines/js-reasoning/skill/SKILL.md`. Triggers on: "Convert this Excel model", "Build an engine from this spreadsheet".
 
+## Using Parsed Output: Two-Tier Engine Workflow
+
+The Rust pipeline produces two complementary outputs. **Always keep both** — they serve different use cases:
+
+### Tier 1: Hand-crafted engines (fast, ~10 inputs)
+Build a JS engine with named inputs/outputs for dashboard use. Stores base case values from ground truth, sensitizes proportionally. Runs in milliseconds, works in browsers.
+
+**Use for:** MOIC/IRR sensitivity, exit year, carry calculations, real-time sliders.
+
+### Tier 2: Ground truth + chunked modules (cell-level, exact)
+`_ground-truth.json` has every cell value from Excel. `sheets/*.mjs` has every formula transpiled.
+
+**Use for:** Segment P&L analysis, changing cost line items, G&A allocation scenarios — anything the hand-crafted engine doesn't expose as a named input.
+
+### How to decide at runtime
+If the user's question maps to a hand-crafted engine input parameter (exit year, exit multiple, carry rate), use Tier 1. If it requires changing something inside a segment P&L (tech headcount, specific G&A line, customer acquisition cost), use Tier 2.
+
+### Ground truth + delta approach (recommended for Tier 2)
+Rather than running the full chunked engine (which requires 8GB+ heap and ~10min for large models), load ground truth and compute deltas:
+
+```javascript
+import { readFileSync } from 'fs';
+const gt = JSON.parse(readFileSync('./output/chunked/_ground-truth.json', 'utf-8'));
+
+// Search for cells by label
+const labels = Object.entries(gt)
+  .filter(([k, v]) => typeof v === 'string' && /Total Revenue/i.test(v));
+
+// Read annual data for a row
+const cols = ['L','M','N','O','P','Q'];
+const revenue = cols.map(c => gt['Technology!' + c + '23'] || 0);
+
+// Compute scenario delta and apply to base case returns
+const baseProfit = gt['Equity!AN346'];
+const baseMOIC = gt['Equity!AN347'];
+// ... (see SKILL.md for full example)
+```
+
 ## How to Run Eval
 
 ### One-Command Full Eval (recommended)

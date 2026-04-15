@@ -581,6 +581,56 @@ This catches wrong-sheet, wrong-model, wrong-column, and arithmetic-estimate err
 
 **When NOT to use this:** If you need the engine to run with completely different input assumptions (new assets, changed debt structure, etc.), you need the full transpiled engine. Model-anchored sensitization only works for sensitivity analysis around a known base case.
 
+### TWO-TIER ENGINE WORKFLOW
+
+When building engines from parsed models, **always generate both tiers** and teach the agent when to use each:
+
+**Tier 1: Hand-crafted engine** (fast, dashboard-friendly)
+- Stores ~10-20 named inputs (exit year, multiples, carry rate)
+- Returns named outputs (grossMOIC, grossIRR, waterfall tiers)
+- Runs in milliseconds, works in browser
+- **Use for:** Dashboard sliders, carry sensitivity, exit year analysis, quick "what's MOIC at X?" questions
+
+**Tier 2: Ground truth + chunked modules** (cell-level, exact)
+- `_ground-truth.json` = every cell value from Excel (millions of cells)
+- `chunked/sheets/*.mjs` = every formula transpiled to JS
+- **Use for:** Segment P&L analysis, "what if G&A increases by $X?", any question that requires changing something INSIDE a segment that the hand-crafted engine doesn't expose as an input
+
+**How to decide at runtime:** If the user's question maps cleanly to one of the hand-crafted engine's named inputs, use Tier 1. If it requires changing something the hand-crafted engine doesn't expose (e.g., tech headcount, specific cost line items, G&A allocation), switch to Tier 2.
+
+**Tier 2: Ground truth + delta approach** (recommended over running the full chunked engine):
+
+```javascript
+import { readFileSync } from 'fs';
+const gt = JSON.parse(readFileSync('./chunked/model/chunked/_ground-truth.json', 'utf-8'));
+
+// 1. Find the cells you need by searching labels
+const labels = Object.entries(gt)
+  .filter(([k, v]) => typeof v === 'string' && /Total Revenue/i.test(v))
+  .filter(([k]) => k.startsWith('Technology!'));
+// → Technology!H23 = "Total Revenue" (annual section)
+
+// 2. Read annual data for that row
+const annualCols = ['L','M','N','O','P','Q'];  // projection years
+const techRev = annualCols.map(c => gt['Technology!' + c + '23'] || 0);
+
+// 3. Compute your scenario delta
+const netNewARR = techRev.map((r, i) => i > 0 ? r - techRev[i-1] : r);
+const additionalGA = netNewARR.map(n => n > 0 ? -n : 0);  // expense
+const cumImpact = additionalGA.reduce((a, b) => a + b, 0);
+
+// 4. Apply delta to base case returns
+const afterTaxHit = cumImpact * (1 - 0.25);  // 25% tax rate
+const baseProfit = gt['Equity!AN346'];
+const baseEquity = gt['Equity!AN345'];
+const baseMOIC = gt['Equity!AN347'];
+const newMOIC = (baseEquity + baseProfit + afterTaxHit) / baseEquity;
+```
+
+This is faster and more reliable than running the full chunked engine (which requires 8GB+ heap and 10+ minutes for large models). The ground truth gives you exact Excel values; you compute only the delta from your scenario.
+
+**Why this matters:** A hand-crafted engine with `techRevenueMultiple` as its only tech lever will overstate impact ~6x for a question like "what if G&A = 100% of net new ARR?" because it bluntly cuts the exit multiple. The ground truth approach gives exact cell-by-cell P&L data showing the actual cumulative impact is much smaller.
+
 6. **MIP (Management Incentive Plan) deductions** should happen BEFORE the carry waterfall, not separately. Check the model's order of operations: typically gross value → MIP deduction → net to LP/GP → waterfall → carry.
 
 ### CRITICAL: Base Case Value Extraction
