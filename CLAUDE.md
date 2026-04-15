@@ -148,6 +148,16 @@ node eval/run-all.mjs model.xlsx --questions 50 --output output/
 node eval/validate-engine.mjs path/to/engine.js --gt-root path/to/models/
 ```
 
+The script reads `_sources.cells` and checks every value against `_ground-truth.json`. Exits non-zero on failure.
+
+### Common errors this catches
+
+- **Wrong sheet**: Looking up a value from the wrong investor class or waterfall tab
+- **Wrong column**: Ground truth column M contains a label string, column N has the value
+- **Arithmetic estimates**: Computing carry as `(grossMOIC - netMOIC) × equity` instead of using the model's actual waterfall cell
+- **Multi-class understatement**: Forgetting to sum carry across multiple investor classes
+
+
 ## Important Notes
 
 - Public open-source project — never include proprietary data, real financials, or participant names
