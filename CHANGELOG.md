@@ -1,5 +1,55 @@
 # excel-to-engine — Changelog
 
+## 2026-04-15 — PLAN V3 Amended: PE-Focused CLI Design
+
+### Amended: PLAN_V3.md
+Thorough redesign of the CLI plan based on deep analysis of 12 downstream projects and role-playing through real PE principal workflows.
+
+**Key additions to the plan:**
+- **Scenario files** (JSON) for complex multi-parameter scenarios (5-15 adjustments), in addition to CLI flags
+- **Line-item adjustments** — row-level deltas (e.g., "reduce tech headcount by $2M"), not just segment-level
+- **Growth rate overrides** — compound growth changes per segment (e.g., "tech grows at 40% instead of 30%")
+- **Sum-of-parts valuation** — per-segment exit multiples (tech at 12x revenue, RE at 15x NOI)
+- **Attribution analysis** — decompose "IRR dropped 7.5pp" into per-driver contributions (revenue -3.2pp, timing -2.8pp, multiple -1.5pp)
+- **Cross-model comparison** — compare returns across different models (e.g., Fund A vs Fund B)
+- **Named scenario management** — save/load/list scenarios per model
+- **CapEx reclassification** — capitalize OpEx over N years (common PE restructuring scenario)
+- **Interim distributions** — model special dividends / recap events
+- **Label-based search** in query command (find cells by financial term, not just by address)
+- **1D sensitivity sweeps** in addition to 2D surfaces
+- **Delta cascade formalization** — explicit financial math for how adjustments flow to returns
+- **PE language translation guide** in SKILL.md — maps real analyst phrasing to CLI parameters across PE, venture, RE, and corporate model types
+- **Expanded parameter set** — ~25 parameters (up from 15), covering the full PE scenario space
+
+**Architecture additions:**
+- `cli/extractors/line-item-resolver.mjs` — row-level adjustment engine
+- `cli/solvers/delta-cascade.mjs` — the core financial computation chain (adjustments → P&L → TV → equity → returns → carry)
+- `scenarios/` directory for saved scenario files
+- `package.json` bin entry for `ete` command
+
+**Estimated scope:** ~2,500 lines JS + ~600 lines SKILL.md (up from ~2,000 + ~400)
+**Implementation steps:** 19 (up from 14), resequenced with delta cascade as the critical path
+
+---
+
+## 2026-04-14 — PLAN V3: Model Analysis CLI + Skill Layer
+
+### New: PLAN_V3.md
+- Designed the consumption layer for converted models: CLI tool + manifest schema + Claude Code skill
+- **Model manifest** — JSON schema (v1.0) that maps generic financial concepts (EBITDA, exit multiple, carry tiers, equity classes) to specific cells in any parsed model's ground truth
+- **Auto-generation pipeline** — heuristic pattern matching (not LLM) scans ground truth for financial structures: date columns, revenue segments, exit multiples, waterfall tiers, equity/debt
+- **CLI commands** — `ete init`, `manifest`, `query`, `pnl`, `scenario`, `sensitivity`, `compare`, `summary`
+- **Scenario parameter suite** — 15+ financial adjustment parameters (exit multiple, revenue adj, cost ratios, magic number, leverage, hold period, etc.) that replicate common Excel model adjustments
+- **SKILL file design** — teaches Claude Code to compose CLI commands for any manifested model
+- **Generic design** — no proprietary model references; works with any Excel model converted by the Rust parser
+- 14-step implementation order with dependency mapping, estimated ~1,500-2,000 lines JS + 400 lines skill
+
+### Context
+- Inspired by a production carry project's scenario analysis script — a bespoke CLI that wraps one model's ground truth into parameterized scenarios with IRR/MOIC/sensitivity
+- V3 generalizes that pattern so any converted model gets the same capability without writing custom code
+
+---
+
 ## 2026-04-13 — Two-Tier Engine Workflow + Ground Truth Delta Approach
 
 ### New: Dual-engine workflow documentation

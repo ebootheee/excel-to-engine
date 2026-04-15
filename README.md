@@ -1,370 +1,337 @@
 # excel-to-engine
 
-> Convert complex financial Excel models into live, testable JavaScript computation engines. Two engines: (1) A Claude SKILL that can build an entire Javascript engine; (2) A Rust-based parallelized transpiler with 60+ predefined Excel functions. Use the Claude SKILL for simple models (100-40,000 cells), and use the Rust transpiler for big models with circular/iterative logic, multi-sheet/file references, and complex formula logic (40,000-6,000,000 cells).
-> Point Claude (preferably Claude Code, 'bypass permissions' highly recommended as this calls A LOT of tools) at this repo and tell it to read up, 'git clone' and execute on your preferred method. Ensure it has access to your target XLSX files in the same folder.
-> Once it is done building, you have a fully functioning code-based mathematicall replica of your target model with a 99% reduced context window and 5-10x the processing speed with AI agents and applications.
+> Turn any Excel financial model into a queryable scenario engine. Three commands from `.xlsx` to IRR sensitivity tables.
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## What It Does
-
-Takes a `.xlsx` financial model (PE fund models, real estate waterfalls, DCF analyses, corporate M&A) and produces:
-
-1. **Per-sheet JS modules** — Each Excel sheet becomes a self-contained `.mjs` file with all formulas transpiled to JavaScript
-2. **An orchestrator** (`engine.js`) — Wires sheets together in dependency order, handles circular references with convergence loops
-3. **Ground truth** — Every cell value from Excel, for automated accuracy testing
-4. **A blind eval system** — Independent validation using Claude API with zero knowledge of the engine's internals; can run as a simple script, or can point a Claude or OpenAI API key to it and generate random queries for the model with progressive difficulty (good for production runs where others will blindly accept your outputs)
-Tested across 9 financial models from 3KB to 84MB (2–82 sheets, up to 6M cells). Blind eval accuracy: **99.3%** (149/150 questions across 15.5M cells).
-
-## Quick Start
-
-### For Agents
-
-- Read CLAUDE.md and guide your user through the repo clone, dependency installs, and choosing the right engine creator per this README file. Utilize eval tools to ensure accuracy (script-based, blind agent-based eval with token, and iterative Docker instance all available)
-
-### Prerequisites
-
-- Node.js 18+
-- Rust toolchain: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-
-### 1. Build the parser
+## From Excel to Scenario Analysis in 60 Seconds
 
 ```bash
-cd pipelines/rust && cargo build --release
+# 1. Build the parser (one-time)
+cd pipelines/rust && cargo build --release && cd ../..
+
+# 2. Parse your model — handles everything: parse, manifest, auto-detect metrics
+node cli/index.mjs init model.xlsx --output ./my-model/
+
+# 3. Ask questions
+node cli/index.mjs summary ./my-model/chunked/
+node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 16 --revenue-adj techGP:-20%
+node cli/index.mjs sensitivity ./my-model/chunked/ --vary exit-multiple:14-22:2 --vary exit-year:2028-2034:1 --metric grossIRR
 ```
 
-### 2. Parse an Excel model
+**That's it.** The CLI auto-generates a model manifest (maps EBITDA, IRR, carry, equity to the right cells), runs a smart refinement pass, and is ready for scenarios immediately.
+
+## What You Get
+
+| Input | Output |
+|-------|--------|
+| A `.xlsx` file (PE fund, RE waterfall, DCF, 3-statement, venture portfolio) | Every cell value as queryable JSON, a semantic manifest mapping financial concepts to cells, and a CLI for scenario analysis |
+
+Works on models from 3KB to 84MB (2–82 sheets, up to 6M cells). Tested across 9 financial models with 99.3% blind eval accuracy (149/150 questions across 15.5M cells).
+
+## Prerequisites
+
+- **Node.js 18+**
+- **Rust toolchain:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 
 ```bash
-./target/release/rust-parser /path/to/model.xlsx ./output --chunked
+git clone https://github.com/ebootheee/excel-to-engine.git
+cd excel-to-engine
+npm install
+cd pipelines/rust && cargo build --release && cd ../..
 ```
 
-Produces `output/chunked/` with per-sheet `.mjs` modules, `engine.js` orchestrator, and `_ground-truth.json` (every cell value from Excel).
+## CLI Commands
 
-### 3. Use the engine
-
-```javascript
-import { run } from './output/chunked/engine.js';
-
-// Run the full model
-const result = run();
-console.log(result.values['Summary!B5']); // Net IRR
-
-// Override an input
-const scenario = run({ 'Assumptions!B8': 15.0 }); // Exit multiple = 15x
-console.log(scenario.values['Summary!B5']); // IRR under new scenario
-```
-
-## Claude Code Prompts
-
-The toolkit is designed to work with Claude Code. Here are the primary workflows:
-
-### Parse a model and explore it
+### `ete summary` — Model Overview
 
 ```
-Parse model.xlsx with the Rust parser and tell me what's in it.
+$ node cli/index.mjs summary ./my-model/chunked/
+
+Model: Example Fund (pe_platform)
+Period: 2024–2030 (6yr, annual) | Exit: 2030 @ 18.5x EBITDA
+
+Revenue Segments                       Start        Exit        CAGR
+  Real Estate NOI                     $45.2M      $52.1M        2.4%
+  Technology Gross Profit              $8.3M      $22.7M       18.3%
+
+Platform EBITDA             $41.4M → $59.0M  (CAGR: 6.1%)
+Terminal Value              $1.1B
+
+Returns                    Gross         Net
+  MOIC                     2.85x       2.45x
+  IRR                      28.4%       24.1%
+
+Carry: $50.3M (3 tiers), 8% pref
+Equity: 1 class (Series A), basis $270.0M
 ```
 
-Claude will build the parser (if needed), run it, and summarize the sheets, cell counts, and key financial metrics found in ground truth.
+### `ete pnl` — Revenue Breakdown
 
-### Convert a model into a computation engine
+```bash
+node cli/index.mjs pnl ./my-model/chunked/ --growth
 
-```
-Convert this Excel model into a JavaScript engine.
-```
-
-Triggers the JS Reasoning pipeline skill (`pipelines/js-reasoning/skill/SKILL.md`). Claude analyzes the model, generates an engine, runs tests, and builds a dashboard — 4-phase pipeline.
-
-### Ask questions about a parsed model
-
-```
-Read the ground truth for my parsed model in output/chunked/ and tell me:
-what is the fund's gross IRR, net MOIC, and total carry?
+# Drill into a specific segment
+node cli/index.mjs pnl ./my-model/chunked/ --segment technology --detail --growth
 ```
 
-Claude looks up specific cells in `_ground-truth.json` to answer. Works with any model, any size.
+Shows annual P&L by segment with YoY growth rates and CAGR. `--detail` drills into subsegment revenue and expense line items.
 
-### Run blind eval
+### `ete query` — Find Anything
 
-```
-Run blind eval on my parsed model in output/chunked/ with 50 questions.
-```
+```bash
+# Search by financial term (find cells by label, not by address)
+node cli/index.mjs query ./my-model/chunked/ --search "headcount"
+node cli/index.mjs query ./my-model/chunked/ --search "Total Revenue"
 
-Claude generates test questions, runs them through a fresh API session with zero engine knowledge, and reports accuracy.
+# Look up a specific cell
+node cli/index.mjs query ./my-model/chunked/ "Valuation!K54"
 
-### Fix eval failures
-
-```
-Read eval/output/analysis.json. It contains failures from our blind eval.
-Read the Rust transpiler at pipelines/rust/src/transpiler.rs.
-Fix the top failure category, rebuild, and re-parse the model.
+# Look up by manifest name
+node cli/index.mjs query ./my-model/chunked/ --name grossIRR
 ```
 
-The builder session (full context) fixes issues identified by the eval session (blind context). They never cross-contaminate — this prevents overfitting.
+### `ete scenario` — What-If Analysis
 
-### Build a downstream app from ground truth
+```bash
+# Simple: change exit multiple
+node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 16
 
-```
-I have a parsed financial model in engines/my-model/chunked/.
-Build a carry calculator that reads base case values from the ground truth
-and sensitizes carry proportionally to MOIC adjustments.
-```
+# Complex: multiple adjustments
+node cli/index.mjs scenario ./my-model/chunked/ \
+  --exit-multiple 14 \
+  --exit-year 2033 \
+  --revenue-adj techGP:-20% \
+  --cost-adj technology:+10%
 
-Claude reads `_ground-truth.json`, identifies the relevant waterfall cells, and builds an engine with `_sources` metadata for validation.
-
-### Query ground truth for cell-level analysis
-
-```
-Load the ground truth for my model in output/chunked/_ground-truth.json.
-What is the Technology segment's total revenue by year? What are the G&A
-allocations to the tech segment? What if G&A consumed 100% of net new ARR?
+# Save and reload scenarios
+node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 14 --save "bear"
+node cli/index.mjs scenario ./my-model/chunked/ --load "bear"
 ```
 
-Claude loads the ground truth JSON, finds labeled rows (e.g., `Technology!H23 = "Total Revenue"`), reads annual data across projection columns, and computes scenario deltas against base case returns. This uses the **ground truth + delta approach** — faster and more precise than the hand-crafted engine for questions that require segment-level P&L changes.
+**Output:**
+```
+Scenario: exit-multiple=16
 
-## Two-Tier Engine Workflow
-
-The Rust pipeline produces two outputs that serve different use cases. **Keep both:**
-
-| Tier | Files | Use For | Speed |
-|------|-------|---------|-------|
-| **1: Hand-crafted engine** | `engine.js` + `shared.js` | MOIC/IRR sensitivity, carry, exit year, dashboard sliders | Milliseconds |
-| **2: Ground truth + chunked** | `_ground-truth.json` + `sheets/*.mjs` | Segment P&L, G&A reallocation, cost line items, any cell-level question | Seconds (GT lookup) |
-
-**When to use which:** If the question maps to a named input (exit multiple, carry rate, exit year), Tier 1. If it requires changing something inside a segment P&L that the engine doesn't expose, Tier 2.
-
-**Ground truth + delta** (recommended for Tier 2): Load `_ground-truth.json`, find the cells by label, read the data, compute your scenario delta, and apply it to base case returns. This avoids running the full chunked engine (8GB heap, 10+ minutes).
-
-```javascript
-import { readFileSync } from 'fs';
-const gt = JSON.parse(readFileSync('./output/chunked/_ground-truth.json', 'utf-8'));
-
-// Find cells by label
-const revenueRows = Object.entries(gt)
-  .filter(([k, v]) => typeof v === 'string' && /Total Revenue/i.test(v))
-  .filter(([k]) => k.startsWith('Technology!'));
-
-// Read annual data, compute delta, apply to base MOIC/IRR
-const cols = ['L','M','N','O','P','Q'];
-const techRev = cols.map(c => gt['Technology!' + c + '23'] || 0);
-// ... see SKILL.md for complete example
+                        Base      Scenario         Delta
+────────────────────────────────────────────────────
+Exit EBITDA           $59.0M        $59.0M       $0 (0%)
+Terminal Value         $1.1B       $944.0M    -$148M (-14%)
+Gross MOIC             2.77x         2.24x      -0.53x
+Gross IRR              18.5%         14.4%      -4.1pp
+Total Carry          $140.6M        $88.6M     -$52M (-37%)
 ```
 
-## Validate Engine Values
+**Full parameter set:**
 
-If you build a downstream engine that stores base case values from ground truth (e.g., a carry calculator or scenario dashboard), add `_sources` metadata and validate before deploying:
+| Category | Parameters |
+|----------|-----------|
+| Exit | `--exit-year`, `--exit-multiple`, `--revenue-multiple` |
+| Revenue | `--revenue-adj seg:±%/$`, `--revenue-growth seg:rate`, `--remove-segment`, `--add-revenue`, `--override-arr` |
+| Cost | `--cost-adj seg:±%/$`, `--line-item id:adj`, `--cost-ratio seg:ratio`, `--capitalize item:years` |
+| Capital | `--leverage ltv`, `--equity-override`, `--distribution year:amount` |
+| Valuation | `--sotp`, `--segment-multiple seg:n`, `--discount-rate` |
+| Returns | `--pref-return rate`, `--hold-period years` |
+| Scenarios | `--file scenario.json`, `--save name`, `--load name`, `--list` |
+| Output | `--metric list`, `--format table\|json\|csv\|markdown`, `--attribution` |
 
-```javascript
-export const VEHICLE_A = {
-  _sources: {
-    groundTruth: 'my-model',             // directory containing _ground-truth.json
-    cells: {
-      totalCarry: 'Waterfall!D86',       // direct cell lookup
-      grossMOIC: 'Summary!C15',
-      'tiers.catchUp': 'Waterfall!D61',  // dot-path into nested objects
-    },
-    aggregates: {                         // optional: sum across multiple cells
-      totalCarry: {
-        cells: ['ClassA!D86', 'ClassB!D86'],
-        op: 'sum',
-      },
-    },
-  },
-  base: {
-    totalCarry: 49_287_893,
-    grossMOIC: 2.56,
-    tiers: { catchUp: 16_152_014 },
-  },
-};
+### `ete sensitivity` — IRR/MOIC Surfaces
+
+```bash
+# 1D sweep: IRR across exit multiples
+node cli/index.mjs sensitivity ./my-model/chunked/ \
+  --vary exit-multiple:14-22:2 --metric grossIRR,grossMOIC
+
+# 2D surface: IRR matrix across multiples and exit years
+node cli/index.mjs sensitivity ./my-model/chunked/ \
+  --vary exit-multiple:14-22:2 \
+  --vary exit-year:2028-2034:1 \
+  --metric grossIRR
+```
+
+**Output (2D):**
+```
+Gross IRR: exitMultiple (rows) x exitYear (columns)
+
+                2028      2029      2030      2031
+14.0x          12.3%     11.3%     10.4%      9.7%
+16.0x          18.7%     16.2%     14.4%     13.0%
+18.0x          24.3%     20.4%     17.8%     15.9%
+20.0x          29.1%     24.1%     20.7%     18.3%
+22.0x          33.5%     27.4%     23.4%     20.5%
+```
+
+### `ete compare` — Side-by-Side Analysis
+
+```bash
+# Base vs scenario with attribution (shows what drove the change)
+node cli/index.mjs compare ./my-model/chunked/ \
+  --base "" --alt "exit-multiple=14,revenue-adj=techGP:-20%" --attribution
+
+# Bear / base / bull comparison
+node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 14 --save "bear"
+node cli/index.mjs scenario ./my-model/chunked/ --save "base"
+node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 22 --save "bull"
+node cli/index.mjs compare ./my-model/chunked/ --scenarios "bear,base,bull"
+
+# Cross-model comparison
+node cli/index.mjs compare --models ./fund-a/chunked/ ./fund-b/chunked/ --metric grossIRR,grossMOIC
+```
+
+### `ete manifest` — Model Configuration
+
+The manifest maps financial concepts (EBITDA, IRR, carry tiers) to specific cells in each model. It's auto-generated and auto-refined — you rarely need to touch it.
+
+```bash
+# Auto-generate (done automatically by `ete init`)
+node cli/index.mjs manifest generate ./my-model/chunked/
+
+# Smart refinement — searches for IRR, MOIC, carry, equity across all cells
+node cli/index.mjs manifest refine ./my-model/chunked/ --apply
+
+# Validate all cell references resolve correctly
+node cli/index.mjs manifest validate ./my-model/chunked/manifest.json
+```
+
+## Use with Claude Code
+
+The toolkit includes a Claude Code skill (`skill/SKILL.md`) that translates natural language into CLI commands. You don't need to know the CLI syntax — just ask questions:
+
+```
+"What happens to returns if tech grows at 40% instead of 30%?"
+→ ete scenario --revenue-growth techGP:0.40
+
+"Show me a sensitivity table for exit multiples and timing"
+→ ete sensitivity --vary exit-multiple:14-22:1 --vary exit-year:2028-2034:1
+
+"Capitalize the dev headcount over 5 years — what does that do to IRR?"
+→ ete scenario --capitalize tech_headcount:5
+
+"Build me bear, base, and bull cases for the board deck"
+→ ete scenario --save "bear" ... → --save "base" ... → --save "bull" ... → ete compare --scenarios "bear,base,bull"
+
+"What if we value tech at 12x revenue and RE at 15x NOI separately?"
+→ ete scenario --sotp --segment-multiple techGP:12 --segment-multiple reNOI:15
+```
+
+The skill handles manifest creation transparently — the PE user never needs to know about manifests, cell references, or ground truth files.
+
+## Scenario Files
+
+For complex multi-parameter scenarios, use JSON files:
+
+```json
+{
+  "name": "downside-q4",
+  "description": "Conservative: tech headwinds, delayed exit, multiple compression",
+  "adjustments": {
+    "exit": { "year": 2033, "multiple": 14 },
+    "revenue": [
+      { "segment": "techGP", "adj": "-20%" }
+    ],
+    "cost": [
+      { "segment": "technology", "adj": "+10%" }
+    ],
+    "capital": { "leverage": 0.50 }
+  }
+}
 ```
 
 ```bash
-# Validate all exports with _sources against ground truth
-node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/
-
-# Strict mode (0.01% tolerance — catches display rounding)
-node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/ --strict
-
-# JSON output for CI integration
-node eval/validate-engine.mjs ./my-engine.js --gt-root ./parsed-models/ --json
+node cli/index.mjs scenario ./my-model/chunked/ --file scenarios/downside.json
 ```
 
-The validator reads each `_sources.cells` entry, looks it up in `_ground-truth.json`, and flags mismatches beyond tolerance. Catches wrong-sheet, wrong-model, and arithmetic-estimate errors before they ship.
+## How It Works
 
-## Eval Pipeline
-
-### Blind eval
-
-A fresh Claude API session with zero knowledge of the engine answers randomized financial questions using only ground truth as a lookup tool.
-
-```bash
-cd eval
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
-node generate-questions.mjs ../output/chunked --count 50 --output ../output/test-questions.json
-node blind-eval.mjs ../output/chunked --questions ../output/test-questions.json
-node analyze-report.mjs ../output/eval-report.json ../output/analysis.json
-```
-
-### One-command full eval
-
-```bash
-node eval/run-all.mjs model.xlsx --questions 50 --output output/
-```
-
-Runs: parse → generate questions → blind eval → per-sheet eval → combined report.
-
-### Containerized auto-iteration (overnight, hands-free)
-
-```bash
-cd eval
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
-cp /path/to/models/*.xlsx models/
-./run.sh
-```
-
-Processes all models: parse → eval → Claude API diagnosis → patch transpiler → rebuild → re-eval → loop until 90% accuracy or 30 iterations.
-
-## Two Pipelines
-
-### Rust Pipeline (fast, automated) — `pipelines/rust/`
-
-Best for large models. Parses Excel with calamine (10-50x faster than SheetJS), transpiles formulas to JS, generates per-sheet modules. Handles 3.7M cells in ~3 minutes.
-
-```bash
-cd pipelines/rust && cargo build --release
-./target/release/rust-parser model.xlsx output-dir --chunked
-```
-
-**Outputs:** `chunked/sheets/*.mjs` + `engine.js` + `_ground-truth.json` + `_graph.json`
-
-### JS Reasoning Pipeline (Claude-driven) — `pipelines/js-reasoning/`
-
-Best for smaller models where Claude should understand the financial logic. Uses the `excel-to-engine` skill to orchestrate: Analyze → Generate → Test → Dashboard.
+### The Pipeline
 
 ```
-Open in Claude Code → "Convert this Excel model into a JavaScript engine"
+Excel (.xlsx)
+  → Rust parser (calamine, 10-50x faster than SheetJS)
+    → Per-sheet JS modules (formulas transpiled to JavaScript)
+    → Ground truth JSON (every cell value from Excel)
+    → Model manifest (semantic mapping of financial concepts to cells)
+      → CLI scenario engine (delta cascade: adjustments → P&L → TV → equity → returns → carry)
 ```
 
-## Project Structure
+### The Delta Cascade
+
+When you run a scenario, the CLI doesn't re-execute the full engine (which can take 10+ minutes on large models). Instead, it:
+
+1. Reads base case values from ground truth (instant — JSON lookup)
+2. Applies your adjustments to the annual P&L
+3. Recomputes the chain: **exit EBITDA → terminal value → exit equity → MOIC → IRR → carry**
+4. Uses `lib/irr.mjs` (Newton-Raphson) and `lib/waterfall.mjs` (American/European PE structures) for returns
+
+This is a first-order approximation — accurate for linear sensitivities (revenue %, cost %, multiple changes, exit timing, leverage). For highly non-linear scenarios (MIP triggers, complex pref compounding), use the full chunked engine.
+
+### Project Structure
 
 ```
 excel-to-engine/
+├── cli/                         # The `ete` command
+│   ├── index.mjs                # Entry point + arg parsing
+│   ├── commands/                # init, summary, query, pnl, scenario, sensitivity, compare, manifest
+│   ├── extractors/              # date-detector, annual-aggregator, segment-detector, waterfall-detector, line-item-resolver
+│   └── solvers/                 # delta-cascade (financial math), scenario-engine (orchestrator)
+├── skill/SKILL.md               # Claude Code skill (PE language → CLI translation)
 ├── pipelines/
-│   ├── rust/                    # Rust parser + formula transpiler
-│   │   ├── src/                 # parser, transpiler, chunked_emitter, dependency, formula_ast, etc.
-│   │   ├── tests/               # Synthetic model (78/78 = 100%)
-│   │   └── Cargo.toml
-│   └── js-reasoning/            # Claude-reasoning pipeline
-│       ├── skill/SKILL.md       # Claude Code skill definition
-│       ├── templates/           # Engine, eval, dashboard templates
-│       └── eval-framework/      # Blind testing tools
-├── eval/                        # Unified eval (works with both pipelines)
-│   ├── iterate.mjs              # Auto-iteration loop with Claude API
-│   ├── blind-eval.mjs           # Blind Claude API eval (tool_use)
-│   ├── generate-questions.mjs   # Question generator from ground truth
-│   ├── analyze-report.mjs       # Analysis reporter with fix recommendations
-│   ├── validate-engine.mjs      # Validate engine _sources against ground truth
-│   ├── pipeline.mjs             # Pipeline orchestrator
-│   ├── Dockerfile               # Container (Rust + Node)
-│   └── run.sh                   # Docker runner (Mac + Windows)
-├── lib/                         # Shared JS financial libraries
-│   ├── irr.mjs                  # IRR/XIRR solver
-│   ├── waterfall.mjs            # PE distribution waterfall
-│   ├── calibration.mjs          # Auto-calibration
-│   ├── sensitivity.mjs          # Sensitivity surface analysis
-│   └── excel-parser.mjs         # Excel reader + fingerprinting
-├── tests/synthetic-pe-model/    # Integration test
-└── docs/                        # Historical pipeline logs
+│   ├── rust/                    # Excel → JS transpiler (8 Rust modules, ~60 Excel functions)
+│   └── js-reasoning/            # Claude-driven pipeline for smaller models
+├── eval/                        # Blind eval, per-sheet eval, auto-iteration
+├── lib/                         # Financial libraries (IRR, waterfall, calibration, sensitivity, manifest)
+└── tests/cli/                   # 166 tests (34 integration + 132 use-case scenarios)
 ```
 
-## Libraries
+### Libraries
 
 | Library | Purpose |
 |---------|---------|
+| `lib/manifest.mjs` | Manifest schema, auto-generation, validation, cell resolvers, label search |
 | `lib/irr.mjs` | Newton-Raphson IRR with bisection fallback, XIRR for irregular dates |
 | `lib/waterfall.mjs` | American + European PE waterfall structures |
 | `lib/calibration.mjs` | Scale factor calibration against Excel targets |
-| `lib/sensitivity.mjs` | Surface extraction, slope comparison, breakpoint detection, multi-point calibration |
+| `lib/sensitivity.mjs` | Surface extraction, slope comparison, breakpoint detection |
 | `lib/excel-parser.mjs` | Cell reading, sheet fingerprinting, year detection, field mapping |
 
 ## Accuracy
 
 ### Blind Eval (99.3%)
 
-A fresh Claude API session with zero knowledge of the engine's internals gets ground truth as a lookup tool and 25 randomized natural-language financial questions per model:
+A fresh Claude API session with zero knowledge of the engine answers 25 randomized financial questions per model:
 
-| Model | Sheets | Cells | Blind Eval | Avg Tool Calls | Avg Time/Q |
-|-------|--------|-------|------------|----------------|------------|
-| Fund model A (2 sheets) | 2 | 5.7K | **25/25 (100%)** | 3.4 | 4.3s |
-| Fund model B (7 sheets) | 7 | 96K | **25/25 (100%)** | 3.3 | 4.2s |
-| Platform model A (51 sheets) | 51 | 1.8M | **25/25 (100%)** | 3.3 | 5.3s |
-| Platform model B (60 sheets) | 60 | 1.8M | **25/25 (100%)** | 3.6 | 5.9s |
-| Corporate model A (20 sheets) | 20 | 5.8M | **25/25 (100%)** | 3.5 | 5.0s |
-| Corporate model B (21 sheets) | 21 | 6.1M | **24/25 (96%)** | 3.7 | 5.2s |
-| **Total** | | **15.5M cells** | **149/150 (99.3%)** | 3.5 | 5.0s |
+| Model | Sheets | Cells | Blind Eval |
+|-------|--------|-------|------------|
+| Fund model A | 2 | 5.7K | **25/25 (100%)** |
+| Fund model B | 7 | 96K | **25/25 (100%)** |
+| Platform model A | 51 | 1.8M | **25/25 (100%)** |
+| Platform model B | 60 | 1.8M | **25/25 (100%)** |
+| Corporate model A | 20 | 5.8M | **25/25 (100%)** |
+| Corporate model B | 21 | 6.1M | **24/25 (96%)** |
+| **Total** | | **15.5M cells** | **149/150 (99.3%)** |
 
-### Per-Sheet Cell Eval
+### Scale
 
-Tests every formula cell against Excel's computed value (mechanical, no LLM):
+| Model Size | Sheets | Cells | Parse Time |
+|------------|--------|-------|------------|
+| 3 KB | 3 | 78 | 1ms |
+| 332 KB | 2 | 5.7K | 56ms |
+| 1.5 MB | 7 | 96K | 718ms |
+| 21 MB | 38 | 1.7M | 12s |
+| 52 MB | 82 | 3.7M | 3.5min |
+| 84 MB | 21 | 6.1M | ~15min |
 
-| Model | Per-Sheet Eval |
-|-------|---------------|
-| Synthetic (3-sheet PE) | 100% (78/78) |
-| Mid-size (38 sheets) | 75.9% |
-| Large (82 sheets) | 87.6% (2532/2890) |
+~60 Excel functions transpiled: `SUM`, `IF`, `VLOOKUP`, `INDEX/MATCH`, `IRR`, `XIRR`, `NPV`, `PMT`, `SUMIFS`, `COUNTIFS`, `INDIRECT`, `OFFSET`, and more.
 
-### Scale Progression
+## Eval Pipeline
 
-Tested across 9 financial models:
+```bash
+# One-command full eval
+node eval/run-all.mjs model.xlsx --questions 50 --output output/
 
-| Model Size | Sheets | Cells | Formulas | Parse Time |
-|------------|--------|-------|----------|------------|
-| 3 KB (synthetic) | 3 | 78 | 27 | 1ms |
-| 332 KB | 2 | 5,684 | 5,271 | 56ms |
-| 1.5 MB | 7 | 96,390 | 86,812 | 718ms |
-| 21 MB | 38 | 1.7M | 1.3M | 12s |
-| 23 MB | 34–50 | 1.4–1.5M | 1.2–1.3M | 3–4min |
-| 52 MB | 82 | 3.7M | 3.0M | 3.5min |
-| 77–84 MB | 20–21 | 5.6–5.8M | 5.4–5.6M | ~15min |
-
-### Excel Functions Transpiled (~60)
-
-`SUM`, `IF`, `MIN`, `MAX`, `ABS`, `ROUND`, `ROUNDUP`, `ROUNDDOWN`, `IRR`, `XIRR`, `NPV`, `PMT`, `PV`, `FV`, `RATE`, `NPER`, `VLOOKUP`, `HLOOKUP`, `INDEX`, `MATCH`, `SUMIF`, `SUMIFS`, `COUNTIF`, `COUNTIFS`, `SUMPRODUCT`, `SUBTOTAL`, `OFFSET`, `INDIRECT`, `AND`, `OR`, `NOT`, `IFERROR`, `ISERROR`, `ISBLANK`, `CONCATENATE`, `LEFT`, `RIGHT`, `MID`, `LEN`, `TRIM`, `UPPER`, `LOWER`, `TEXT`, `VALUE`, `DATE`, `YEAR`, `MONTH`, `DAY`, `EOMONTH`, `EDATE`, `LARGE`, `SMALL`, `RANK`, `AVERAGE`, `COUNT`, `COUNTA`, `INT`, `MOD`, `POWER`, `SQRT`, `LOG`, `LN`, `EXP`
-
-## Design
-
-### Architecture: Game Engine Parallels
-
-The Rust transpiler shares core design patterns with video game engines — both evaluate a massive graph of interdependent computations efficiently, handling cycles through iterative convergence while keeping memory bounded by modularizing the workload.
-
-| Concept | Game Engine | Excel-to-Engine |
-|---------|-------------|-----------------|
-| **Asset Pipeline** | Raw assets → compiled runtime formats | Raw Excel formulas → transpiled JS modules |
-| **Scene Graph** | Directed graph; parent transforms propagate | Cell dependency graph; upstream values propagate |
-| **Physics Solver** | Iterative constraint solving for feedback loops, ~10-20 iterations/frame | Convergence loops for circular refs (interest ↔ debt ↔ cash flow), ~5-200 iterations |
-| **Per-Asset Modules** | Each mesh/shader/texture self-contained | Each sheet a self-contained `.mjs` module |
-| **Deterministic Simulation** | Same inputs → same frame, every tick | Same inputs → same cell values, every evaluation |
-
-### Key Technical Decisions
-
-1. **Chunked compilation over monolithic** — Solved the 5.4GB JSON / OOM problem. Each sheet is a self-contained module. No single file exceeds a few MB.
-2. **Ground truth from Excel, not engine** — Blind eval uses Excel's computed values directly, validating engine accuracy independently.
-3. **Blind eval with fresh Claude context** — The testing Claude has zero knowledge of the engine. This prevents overfitting.
-4. **Convergence loops for circular refs** — Financial models intentionally have circular references. The transpiler detects cycles via Tarjan's SCC and wraps them in iterative convergence loops.
-5. **Per-sheet eval for memory safety** — Large models can't be evaluated monolithically (16GB+ heap). Eval runs each sheet independently.
-
-### Token Economics
-
-A real-world example: querying a 23MB model (21 sheets, 6M cells).
-
-| Approach | Feasible? | Tokens | Accuracy |
-|----------|-----------|--------|----------|
-| **Rust parse → ground truth query** | **Yes** | **~165K** | **Exact Excel values** |
-| Load full XLSX into context | No | ~500M+ | N/A |
-| Load key sheets as CSV | Barely | ~5-40M | Partial |
-| Load just summary sheet | Yes | ~5K | Missing detail |
-
-The ground truth JSON is 201MB / ~6M entries. A typical query pulls 20-30KB into context (~$3-5 at Opus rates). **~3,000x smaller than loading the raw model.**
+# Containerized auto-iteration (overnight, hands-free)
+cd eval && echo "ANTHROPIC_API_KEY=sk-ant-..." > .env && cp /path/to/*.xlsx models/ && ./run.sh
+```
 
 ## License
 

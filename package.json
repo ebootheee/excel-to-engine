@@ -1,9 +1,12 @@
 {
   "name": "excel-to-engine",
-  "version": "0.1.0",
-  "description": "Convert complex financial Excel models into JavaScript computation engines with auto-generated test suites and interactive dashboards",
+  "version": "0.2.0",
+  "description": "Convert complex financial Excel models into JavaScript computation engines with scenario analysis CLI",
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "ete": "./cli/index.mjs"
+  },
   "keywords": [
     "excel",
     "financial-model",
@@ -25,7 +28,8 @@
     "./lib/irr": "./lib/irr.mjs",
     "./lib/waterfall": "./lib/waterfall.mjs",
     "./lib/calibration": "./lib/calibration.mjs",
-    "./lib/excel-parser": "./lib/excel-parser.mjs"
+    "./lib/excel-parser": "./lib/excel-parser.mjs",
+    "./lib/manifest": "./lib/manifest.mjs"
   },
   "dependencies": {
     "xlsx": "^0.18.5"

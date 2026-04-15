@@ -1,6 +1,51 @@
 # excel-to-engine — Roadmap
 
-## Now — Accuracy Improvement + Production Learnings
+## Now — V3 Polish + Production Validation
+
+### CLI Field Testing
+- Run `ete` against all 6 production models (2-82 sheets)
+- Compare CLI scenario outputs to existing bespoke analysis scripts
+- Validate manifest auto-generation accuracy on real models
+- Test scenario file workflow end-to-end with PE team
+
+### Manifest Refinement
+- Improve auto-generation heuristics based on production model patterns
+- Add manual manifest editing guidance
+- Consider manifest migration tooling for model updates
+
+---
+
+## Done — V3: Model Analysis CLI + Skill Layer (2026-04-15)
+
+### CLI Tool (`cli/`)
+- 8 commands: `init`, `manifest`, `query`, `pnl`, `scenario`, `sensitivity`, `compare`, `summary`
+- 25+ scenario parameters (exit multiple/year, revenue adj/growth, cost adj, line-item, capitalize, leverage, distributions, sum-of-parts, pref return, hold period)
+- Delta cascade engine: adjustments → P&L → TV → equity → MOIC → IRR → carry
+- Scenario file support (JSON), save/load/list, attribution analysis
+- 1D sweeps and 2D sensitivity surfaces
+- Cross-model comparison
+- 4 output formats: table, json, csv, markdown
+- 34/34 integration tests pass
+
+### Model Manifest (`lib/manifest.mjs`)
+- Schema v1.0 with segments, equity classes, carry tiers, line items, custom cells
+- Heuristic auto-generation from ground truth (no LLM required)
+- Validation against ground truth with confidence scores
+- Base case output resolution from manifest + ground truth
+
+### Extractors (`cli/extractors/`)
+- Date detector, annual aggregator, segment detector, waterfall detector, line-item resolver
+- Growth rate computation (YoY, CAGR)
+
+### Claude Code Skill (`skill/SKILL.md`)
+- PE language → CLI parameter translation guide
+- Command chaining patterns (discovery → analysis → scenario → comparison)
+- Model type templates (PE fund, platform, RE, SaaS, venture)
+- Interpretation guidance with benchmarks
+
+---
+
+## Ongoing — Accuracy Improvement + Production Learnings
 
 ### Transpiler Coverage
 - Implement INDIRECT function (dynamic cell references)

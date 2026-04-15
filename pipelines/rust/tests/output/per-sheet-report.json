@@ -1,6 +1,6 @@
 {
   "summary": {
-    "chunkedDir": "/Users/ericboothe/Documents/Claude Projects/Coding Projects/excel-to-engine/pipelines/rust/tests/output/chunked",
+    "chunkedDir": "./pipelines/rust/tests/output/chunked",
     "totalGroundTruthCells": 78,
     "sheetsEvaluated": 3,
     "sheetsSkipped": 0,
