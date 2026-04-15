@@ -1,0 +1,143 @@
+{
+  "$schema": "manifest-v1.0",
+  "model": {
+    "name": "Synthetic PE Platform",
+    "type": "pe_platform",
+    "source": "synthetic-model.xlsx",
+    "generatedAt": "2026-04-15T00:00:00Z",
+    "groundTruth": "./_ground-truth.json",
+    "engineDir": "./"
+  },
+  "timeline": {
+    "dateRow": 7,
+    "dateSheet": "Valuation",
+    "investmentYear": 2024,
+    "exitYear": 2030,
+    "exitYearRange": [2027, 2033],
+    "periodicity": "annual",
+    "columnMap": {
+      "E": 2024,
+      "F": 2025,
+      "G": 2026,
+      "H": 2027,
+      "I": 2028,
+      "J": 2029,
+      "K": 2030
+    }
+  },
+  "segments": [
+    {
+      "id": "reNOI",
+      "label": "Real Estate NOI",
+      "type": "revenue",
+      "sheet": "Valuation",
+      "row": 14,
+      "aggregation": "annual_sum"
+    },
+    {
+      "id": "techGP",
+      "label": "Technology Gross Profit",
+      "type": "revenue",
+      "sheet": "Valuation",
+      "row": 28,
+      "aggregation": "annual_sum"
+    },
+    {
+      "id": "sgaNet",
+      "label": "SG&A Net of Capitalized Fees",
+      "type": "expense",
+      "sheet": "Valuation",
+      "row": 29,
+      "aggregation": "annual_sum"
+    }
+  ],
+  "outputs": {
+    "ebitda": {
+      "label": "Platform EBITDA",
+      "cells": { "annual": { "sheet": "Valuation", "row": 30 } },
+      "exitValue": "Valuation!K53"
+    },
+    "terminalValue": {
+      "cell": "Valuation!K55"
+    },
+    "exitMultiple": {
+      "cell": "Valuation!K54",
+      "type": "ebitda_multiple"
+    }
+  },
+  "equity": {
+    "classes": [
+      {
+        "id": "series-a",
+        "label": "Series A",
+        "basisCell": "Equity!AN885",
+        "grossMOIC": "Equity!AN887",
+        "grossIRR": "Equity!AN888",
+        "netMOIC": "Equity!AN896",
+        "netIRR": "Equity!AN897"
+      }
+    ]
+  },
+  "carry": {
+    "totalCell": "GP Promote!D88",
+    "tiers": [
+      { "name": "catchUp", "cell": "GP Promote!D77" },
+      { "name": "tier3_8to12pct", "cell": "GP Promote!D85" },
+      { "name": "tier4_above12pct", "cell": "GP Promote!D88" }
+    ],
+    "waterfall": {
+      "prefReturn": 0.08,
+      "carryRate": 0.20,
+      "catchUpType": "standard"
+    }
+  },
+  "debt": {
+    "exitBalance": "Valuation!K71",
+    "exitCash": "Valuation!K72"
+  },
+  "subsegments": {
+    "technology": {
+      "sheet": "Technology",
+      "revenueRow": 23,
+      "expenseRow": 28,
+      "profitRow": 30,
+      "revenueTypes": [
+        { "id": "recurring", "label": "Ongoing Fee", "row": 21 },
+        { "id": "setup", "label": "Gate Set-up Fee", "row": 20 },
+        { "id": "intercompany", "label": "Intercompany", "row": 22 }
+      ],
+      "expenseTypes": [
+        { "id": "cac", "label": "Customer Acquisition", "row": 25 },
+        { "id": "setup_cost", "label": "Gate Set-up Costs", "row": 26 },
+        { "id": "ongoing_opex", "label": "Ongoing Opex", "row": 27 }
+      ]
+    }
+  },
+  "lineItems": {
+    "tech_cac": {
+      "label": "Customer Acquisition",
+      "sheet": "Technology",
+      "row": 25,
+      "type": "expense",
+      "parent": "techGP"
+    }
+  },
+  "customCells": {
+    "wacc": "Valuation!K57",
+    "transactionCostRate": "Valuation!V36",
+    "sharesOutstanding": "Valuation!K81",
+    "pricePerShare": "Valuation!K82"
+  },
+  "baseCaseOutputs": {
+    "exitEBITDA": 59000000,
+    "terminalValue": 1091500000,
+    "exitMultiple": 18.5,
+    "grossMOIC": 2.85,
+    "grossIRR": 0.284,
+    "netMOIC": 2.45,
+    "netIRR": 0.241,
+    "totalCarry": 50287893,
+    "equityBasis": 270000000,
+    "pricePerShare": 1823.45
+  }
+}

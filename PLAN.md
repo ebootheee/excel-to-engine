@@ -1,6 +1,6 @@
 # excel-to-engine — Plan
 
-## Status: Rust Pipeline Complete, Eval Loop Validated, Improving Accuracy
+## Status: V3 Implemented — Model Analysis CLI + Skill Layer (see PLAN_V3.md for design)
 
 ## Objective
 
