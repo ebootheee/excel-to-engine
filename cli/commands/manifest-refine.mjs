@@ -17,6 +17,12 @@ import { loadManifest, loadGroundTruth, resolveCell, MANIFEST_VERSION } from '..
 // Required fields and their search strategies
 // ---------------------------------------------------------------------------
 
+// Sheet-name hints: labels on these sheets get scored higher during refinement.
+// The pattern here is common across PE models — a dedicated summary/comparison
+// tab holds the clean, "final" number, while the same label on operational
+// tabs may point to a sub-total or per-period figure.
+const SUMMARY_SHEET_PATTERN = /^(cheat\s*sheet|uw\s*comparison|summary|valuation|cover|returns|dashboard|exec\s*summary)/i;
+
 const REQUIRED_FIELDS = [
   {
     key: 'equity.classes[0].grossIRR',
@@ -34,22 +40,27 @@ const REQUIRED_FIELDS = [
   },
   {
     key: 'equity.classes[0].grossMOIC',
+    // Accept MOIC, MoC, MoIC, MOC. Historical regex only matched `mo[ic]` which
+    // excluded `MOC` (no trailing IC). PE models frequently label this as
+    // "Gross MOC" or "Gross Multiple".
     label: 'Gross MOIC',
-    patterns: [/gross.*mo[ic]|mo[ic].*pre.*promot|multiple.*pre|pre.*promot.*mo[ic]|tvpi.*pre|moc.*pre/i],
+    patterns: [/gross.*mo(i?c|ic)\b|gross.*multiple|mo(i?c|ic).*pre.*promot|multiple.*pre|pre.*promot.*mo(i?c|ic)|tvpi.*pre/i],
     valueRange: [0.5, 20],
     valueHint: 'number 0.5-20 (e.g., 2.85)',
   },
   {
     key: 'equity.classes[0].netMOIC',
     label: 'Net MOIC',
-    patterns: [/net.*mo[ic]|mo[ic].*post.*promot|multiple.*post|post.*promot.*mo[ic]|tvpi.*post|moc.*post|lp.*mo[ic]/i],
+    patterns: [/net.*mo(i?c|ic)\b|net.*multiple|mo(i?c|ic).*post.*promot|multiple.*post|post.*promot.*mo(i?c|ic)|tvpi.*post|lp.*mo(i?c|ic)\b/i],
     valueRange: [0.5, 20],
     valueHint: 'number 0.5-20',
   },
   {
     key: 'equity.classes[0].basisCell',
+    // Broadened to catch "Peak Net Equity" and "Fund Size / Peak Net Equity"
+    // patterns that appear on Comparison/Summary tabs.
     label: 'Equity Basis / Peak Equity',
-    patterns: [/peak.*equity|equity.*basis|equity.*invested|total.*equity|committed.*capital|capital.*committed|equity.*drawn/i],
+    patterns: [/peak.*(net.*)?equity|fund.*size.*(\/|\s)\s*peak|equity.*basis|equity.*invested|total.*equity|committed.*capital|capital.*committed|equity.*drawn|max.*equity.*invested/i],
     valueRange: [1e6, 50e9],   // $1M to $50B
     valueHint: 'large number (equity invested)',
   },
@@ -159,10 +170,21 @@ export function runManifestRefine(modelDir, args) {
       report.found[field.label] = candidates[0];
       lines.push(`  + ${field.label}: ${candidates[0].cell} = ${formatVal(candidates[0].value)} (from "${candidates[0].labelText}")`);
     } else {
-      report.ambiguous[field.label] = candidates;
-      lines.push(`  ? ${field.label}: ${candidates.length} candidates`);
-      for (const c of candidates.slice(0, 3)) {
-        lines.push(`      ${c.cell} = ${formatVal(c.value)} (from "${c.labelText}")`);
+      // Multiple candidates: accept the top one when it's the single
+      // summary-sheet entry (the classic PE shape: Cheat Sheet / UW
+      // Comparison has one clean row with the final number, operational
+      // tabs have repeated partial versions). Otherwise keep it ambiguous.
+      const summaryHits = candidates.filter(c => c.onSummarySheet);
+      if (summaryHits.length === 1) {
+        report.found[field.label] = summaryHits[0];
+        lines.push(`  + ${field.label}: ${summaryHits[0].cell} = ${formatVal(summaryHits[0].value)} (from "${summaryHits[0].labelText}" on summary tab; ${candidates.length - 1} other candidates declined)`);
+      } else {
+        report.ambiguous[field.label] = candidates;
+        lines.push(`  ? ${field.label}: ${candidates.length} candidates`);
+        for (const c of candidates.slice(0, 3)) {
+          const tag = c.onSummarySheet ? ' [summary]' : '';
+          lines.push(`      ${c.cell} = ${formatVal(c.value)} (from "${c.labelText}"${tag})`);
+        }
       }
     }
   }
@@ -207,6 +229,11 @@ export function runManifestRefine(modelDir, args) {
 
 /**
  * Search for a field using the pre-built index (O(labels) instead of O(gt^2)).
+ *
+ * Candidates on summary/comparison sheets (Cheat Sheet, UW Comparison,
+ * Summary, Valuation, etc.) are preferred. Without this preference the
+ * refiner often binds to an operational-tab cell that contains the same label
+ * but a sub-total or per-period figure rather than the final summary number.
  */
 function searchForFieldIndexed(index, field) {
   const candidates = [];
@@ -250,17 +277,24 @@ function searchForFieldIndexed(index, field) {
         labelAddr: lm.addr,
         labelText: lm.text.trim(),
         sheet: lm.sheet,
+        onSummarySheet: SUMMARY_SHEET_PATTERN.test(lm.sheet),
       });
     }
   }
 
-  // Deduplicate by cell
+  // Deduplicate by cell; then rank with summary-sheet candidates first.
   const seen = new Set();
-  return candidates.filter(c => {
+  const deduped = candidates.filter(c => {
     if (seen.has(c.cell)) return false;
     seen.add(c.cell);
     return true;
   });
+  deduped.sort((a, b) => {
+    if (a.onSummarySheet && !b.onSummarySheet) return -1;
+    if (!a.onSummarySheet && b.onSummarySheet) return 1;
+    return 0;
+  });
+  return deduped;
 }
 
 // ---------------------------------------------------------------------------

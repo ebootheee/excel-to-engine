@@ -211,7 +211,7 @@ console.log('Testing: carry detection rejects pre-carry CF labels');
 {
   // GT with a "Total Cash Flows (pre-carry)" label next to a number — auto-gen
   // must NOT pick this as carry.totalCell (it's a per-year pre-carry CF, not
-  // GP carry). Same failure mode as the Outpost manifests.
+  // GP carry). Regression guard for the pre-carry-CF detection trap.
   const gt = {
     'GPP Promote!A25': 'Total Cash Flows (pre-carry)',
     'GPP Promote!AF25': 16_800_000, // plausible dollar amount but WRONG concept

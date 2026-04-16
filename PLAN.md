@@ -1,5 +1,18 @@
 # excel-to-engine — Plan
 
+## Status: Post-SESSION_LOG-4 workflow pass — landed 2026-04-17
+
+A third end-to-end run against two PE platform models surfaced a workflow
+stall (60+ cell-coordinate probes trying to pick a scenario column) and a
+cluster of auto-gen/auto-apply friction points. All closed in this pass.
+Key changes: `--search` is literal by default, `--case <col>` picks a
+scenario column, `ete init` soft-fails (quarantines suspect fields), the
+refiner prefers summary tabs and accepts "Peak Net Equity" / "Gross MOC",
+templates can auto-apply on strong signature matches, and `ete carry`
+falls back to label search. `skill/SKILL.md` now opens with an explicit
+anti-stall "never walk cell coordinates" rule. See `CHANGELOG.md` for the
+full list.
+
 ## Status: V4 AI Interface Layer — landed 2026-04-17
 
 V4 reframes the tool as an **AI-navigable index over complex Excel models**
@@ -13,8 +26,8 @@ and `CHANGELOG.md` for the complete list.
 
 The CLI, manifest system, and skill layer are in production use. Two
 production-driven improvement passes on 2026-04-16 closed real pain points
-surfaced by live end-to-end sessions against two 76–83 MB Outpost Corporate
-Models — see CHANGELOG.md for the complete list.
+surfaced by live end-to-end sessions against two 76–83 MB PE platform
+models — see CHANGELOG.md for the complete list.
 
 **AM pass** — manifest robustness: value-range validation at auto-gen time
 (blocking the cascade where a label artifact like `5` produced a 7.2M× MOIC),

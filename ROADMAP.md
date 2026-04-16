@@ -8,9 +8,8 @@
 - Test scenario file workflow end-to-end with PE team
 
 ### Manifest Refinement (continuing)
-- Model-family templates (Outpost-like sheet templates: Version Tracker,
-  Assumptions, Financial Statements, Equity, Debt, Valuation, GPP Promote,
-  Cheat Sheet) — recognize the family and pick known cells directly.
+- Model-family templates — recognize a family by its sheet signature and pick
+  known cells directly (summary tabs, promote tab, etc.).
 - Pre-indexed label→cell map built once during parsing (the session log noted
   `manifest refine` took 2.5 min CPU on a 200 MB ground truth; a pre-index
   from the Rust parser would cut this 10–100×).
@@ -112,6 +111,17 @@
 
 ## Done
 
+### Post-SESSION_LOG-4 workflow + auto-gen fixes (2026-04-17)
+- `--search` literal substring by default, `--regex` opt-in; invalid regex falls back to literal
+- `--case <col>` scenario-column selection on `ete query` (and surfaced to `ete carry`)
+- Soft-fail `ete init` — bad fields are quarantined, chunked dir is written, exit 0; `--strict` for CI
+- Template auto-apply on strong signature match with `signature.autoApply` + `matchThreshold` flags
+- Templates carry a `hints` block (summary-sheet preference, default scenario column, peak-equity vocabulary)
+- Refiner — new patterns for "Peak Net Equity" / "Gross MOC", summary-sheet preference in candidate ranking
+- `ete carry` label-search fallback when the manifest lacks `basisCell`/`grossMOIC`
+- `skill/SKILL.md` opens with explicit anti-stall rules (never walk cell coordinates, assume + verify)
+- Public-release hygiene: proprietary identifiers removed from templates/docs
+
 ### V4 AI Interface Layer (2026-04-17)
 - Rust parser emits `chunked/_labels.json` — O(1) label search (30s → <100ms on
   200MB GT models)
@@ -125,7 +135,7 @@
   `equity.classes[i].shares/ownershipPct`, `debt.principal/rate/maturity`,
   `carry.tiers`
 - 7 new detectors: fund-level, schedules, cap-table, debt-details, carry tiers, covenants
-- Model-family templates (`templates/outpost-platform.json`, `pe-fund-generic`,
+- Model-family templates (`templates/pe-platform-summary.json`, `pe-fund-generic`,
   `re-fund-generic`) with auto-suggestion + `--template` application +
   `ete manifest export` to build new ones
 - Doctor-gated init (exits non-zero on errors; `--force` to bypass)

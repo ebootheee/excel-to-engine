@@ -382,7 +382,7 @@ ete sensitivity ./my-model/ \
 # Compare scenarios, saved results, or different models
 ete compare ./my-model/ --base "" --alt "exit-multiple=16"
 ete compare ./my-model/ --scenarios "base,bear-case,bull-case"
-ete compare --models ./outpost-a1/ ./outpost-a2/ --metric irr,moic
+ete compare --models ./fund-v1/ ./fund-v2/ --metric irr,moic
 ete compare ./my-model/ --base "" --alt "exit-multiple=16" --attribution
 
 # One-shot summary
@@ -527,7 +527,7 @@ For complex multi-parameter scenarios, a JSON file is cleaner than 10+ CLI flags
 {
   "name": "downside-q4-2026",
   "description": "Conservative exit: tech headwinds, delayed timeline, multiple compression",
-  "baseModel": "./outpost-a2/",
+  "baseModel": "./fund-v2/",
   "adjustments": {
     "exit": { "year": 2033, "multiple": 14 },
     "revenue": [
@@ -610,7 +610,7 @@ ete compare ./my-model/ --scenarios "bear-case,management-case,bull-case"
 
 **3. Cross-model comparison:**
 ```bash
-ete compare --models ./outpost-a1/ ./outpost-a2/ ./lysara/ --metric irr,moic,carry
+ete compare --models ./fund-v1/ ./fund-v2/ ./platform-c/ --metric irr,moic,carry
 # → Table comparing base case returns across different models
 ```
 

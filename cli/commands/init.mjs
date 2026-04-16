@@ -121,10 +121,16 @@ export function runInit(excelPath, args) {
     lines.push(`  (Refinement skipped: ${e.message})`);
   }
 
-  // Step 3b: Apply template if specified
-  // Also auto-detect when a template matches this model's sheet names and
-  // suggest it (prints a hint, no automatic apply).
-  if (args.template) {
+  // Step 3b: Apply template if specified, or auto-apply on a strong match.
+  //
+  // A template can declare `signature.autoApply: true` and (optionally) a
+  // `matchThreshold`. When the model's sheet-name set satisfies the threshold
+  // (default 0.75), the template is applied automatically — no extra run
+  // needed. `--no-template` opts out for the session; `--template <name>`
+  // forces a specific one.
+  if (args.noTemplate) {
+    // skip entirely
+  } else if (args.template) {
     lines.push('');
     lines.push(`Applying template: ${args.template}`);
     const templateResult = applyTemplate(chunkedDir, args.template);
@@ -134,19 +140,38 @@ export function runInit(excelPath, args) {
       lines.push(`  Applied ${templateResult.applied} cell mappings from ${templateResult.path}`);
     }
   } else {
-    const suggestion = detectMatchingTemplate(chunkedDir);
-    if (suggestion) {
+    const match = detectMatchingTemplate(chunkedDir);
+    if (match) {
       lines.push('');
-      lines.push(`  Template suggestion: this model matches "${suggestion}" — re-run with --template ${suggestion} to apply known cell mappings.`);
+      if (match.autoApply) {
+        lines.push(`Template auto-applied: ${match.name} (${match.hits}/${match.required} signature sheets matched)`);
+        const templateResult = applyTemplate(chunkedDir, match.name);
+        if (templateResult.error) {
+          lines.push(`  Warning: ${templateResult.error}`);
+        } else {
+          lines.push(`  Applied ${templateResult.applied} cell mappings from ${templateResult.path}`);
+          lines.push(`  (override with --no-template, or pick a different one with --template <name>)`);
+        }
+      } else {
+        lines.push(`  Template suggestion: this model matches "${match.name}" — re-run with --template ${match.name} to apply known cell mappings.`);
+      }
     }
   }
 
   // Step 3c: Doctor-gated validation
-  // See PLAN_V4.md Phase 4b. Doctor runs after refine+template. Errors abort
-  // init unless --force (CI / known-quirky models) is passed.
+  // Default behavior (changed 2026-04-17 post-SESSION_LOG-4): soft-fail. A
+  // single bad basisCell or exitMultiple mapping should NOT block the whole
+  // init — it wastes an 8-minute parse and leaves the user without a working
+  // directory. Instead, we quarantine (null out) the offending field in the
+  // manifest, print the doctor output inline, and exit 0. The user can re-run
+  // `ete manifest set` to fix the field against the working chunked dir.
+  //
+  // `--strict` opts back in to hard-fail (CI / agent pipelines).
+  // `--force` is preserved as a no-op alias (old sessions may still pass it).
   lines.push('');
   lines.push('Step 4/5: Doctor validation...');
   let doctorResult;
+  let quarantined = [];
   try {
     doctorResult = runManifestCommand('doctor', chunkedDir, {});
     const errors = (doctorResult.issues || []).filter(i => i.severity === 'error');
@@ -157,13 +182,21 @@ export function runInit(excelPath, args) {
         lines.push(`    ${e.field}: ${e.message}`);
         if (e.fix) lines.push(`      fix: ${e.fix}`);
       }
-      if (!args.force) {
+      if (args.strict) {
         return {
-          error: `Manifest validation failed with ${errors.length} error(s). Fix the issues above or re-run with --force.`,
-          _formatted: lines.join('\n') + '\n\nManifest validation failed. Pass --force to continue anyway.',
+          error: `Manifest validation failed with ${errors.length} error(s) (strict mode).`,
+          _formatted: lines.join('\n') + '\n\nManifest validation failed. Omit --strict to soft-fail (quarantine offending fields and proceed).',
         };
-      } else {
-        lines.push('  (proceeding with --force despite errors)');
+      }
+      // Soft-fail: quarantine the offending fields so downstream commands
+      // won't silently consume a cell that doctor flagged.
+      if (!args.keepSuspect) {
+        quarantined = quarantineSuspectFields(chunkedDir, errors);
+        if (quarantined.length > 0) {
+          lines.push(`  Quarantined (set to null): ${quarantined.join(', ')}`);
+          lines.push(`  Fix with: ete manifest set ${chunkedDir} <field> <cellRef>`);
+          lines.push(`  Or run:   ete query ${chunkedDir} --search "<label>" --sheet "<summary tab>"`);
+        }
       }
     } else if (warnings.length > 0) {
       lines.push(`  ${warnings.length} warning(s); run 'ete manifest doctor ${chunkedDir}' for details`);
@@ -269,9 +302,14 @@ function applyTemplate(chunkedDir, templateName) {
 }
 
 /**
- * Detect whether the model matches a known template signature by checking
- * if manifest.model.sheets (or the derived set) contains all of the
- * template's signature.sheetNames. Returns the template name or null.
+ * Detect whether the model matches a known template signature by checking the
+ * sheet-name set derived from ground truth against each template's
+ * `signature.sheetNames`. Returns the best match descriptor
+ * `{ name, hits, required, autoApply }` or null if nothing crosses the
+ * per-template threshold (default 0.75).
+ *
+ * When multiple templates match, the one with the highest hit fraction wins.
+ * Ties go to the template with the larger signature (more specific match).
  */
 function detectMatchingTemplate(chunkedDir) {
   if (!existsSync(TEMPLATES_DIR)) return null;
@@ -280,7 +318,6 @@ function detectMatchingTemplate(chunkedDir) {
   if (!existsSync(gtPath)) return null;
   const gt = JSON.parse(readFileSync(gtPath, 'utf-8'));
 
-  // Extract unique sheet names from GT addresses
   const sheetSet = new Set();
   for (const addr of Object.keys(gt)) {
     const bang = addr.lastIndexOf('!');
@@ -288,24 +325,41 @@ function detectMatchingTemplate(chunkedDir) {
   }
 
   const files = readdirSync(TEMPLATES_DIR).filter(f => f.endsWith('.json'));
+  let best = null;
   for (const f of files) {
     try {
       const template = JSON.parse(readFileSync(join(TEMPLATES_DIR, f), 'utf-8'));
       const required = template.signature?.sheetNames || [];
       if (required.length === 0) continue;
-      const hitCount = required.filter(n => sheetSet.has(n)).length;
-      // Match if at least 75% of the signature sheet names are present.
-      if (hitCount / required.length >= 0.75) {
-        return template.name;
+      const threshold = typeof template.signature?.matchThreshold === 'number'
+        ? template.signature.matchThreshold
+        : 0.75;
+      const hits = required.filter(n => sheetSet.has(n)).length;
+      const fraction = hits / required.length;
+      if (fraction < threshold) continue;
+
+      const candidate = {
+        name: template.name,
+        hits,
+        required: required.length,
+        fraction,
+        autoApply: template.signature?.autoApply === true,
+      };
+
+      if (!best) {
+        best = candidate;
+        continue;
       }
+      if (candidate.fraction > best.fraction) best = candidate;
+      else if (candidate.fraction === best.fraction && candidate.required > best.required) best = candidate;
     } catch { /* skip malformed templates */ }
   }
-  return null;
+  return best;
 }
 
 function findTemplate(name) {
   if (!existsSync(TEMPLATES_DIR)) return null;
-  // Allow both "outpost-platform" and "outpost-platform.json"
+  // Accept both bare names ("pe-platform-summary") and filenames with .json
   const candidates = [
     join(TEMPLATES_DIR, name),
     join(TEMPLATES_DIR, `${name}.json`),
@@ -323,4 +377,54 @@ function setNested(obj, path, value) {
     cur = cur[key];
   }
   cur[parts[parts.length - 1]] = value;
+}
+
+function getNested(obj, path) {
+  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  let cur = obj;
+  for (const p of parts) {
+    if (cur == null) return undefined;
+    cur = cur[p];
+  }
+  return cur;
+}
+
+/**
+ * Quarantine manifest fields that doctor flagged as errors. Sets each path to
+ * null (preserving the manifest shape) and also removes the matching entry from
+ * baseCaseOutputs so downstream commands can't silently consume the bad value.
+ * Returns the list of paths that were actually quarantined.
+ */
+function quarantineSuspectFields(chunkedDir, errors) {
+  const manifestPath = join(chunkedDir, 'manifest.json');
+  if (!existsSync(manifestPath)) return [];
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  } catch {
+    return [];
+  }
+
+  const quarantined = [];
+  for (const err of errors) {
+    const path = err.field;
+    if (!path) continue;
+    // Skip non-cell paths (e.g., "segments.<id>" describes a row, not a cell ref).
+    if (path.startsWith('segments.')) continue;
+    const existing = getNested(manifest, path);
+    if (existing == null) continue;
+    setNested(manifest, path, null);
+    quarantined.push(path);
+
+    // Also clear the mirrored baseCaseOutputs shorthand key if present.
+    const shortKey = path.split('.').pop().replace(/^\[\d+\]$/, '').replace(/Cell$/, '');
+    if (manifest.baseCaseOutputs && shortKey in manifest.baseCaseOutputs) {
+      delete manifest.baseCaseOutputs[shortKey];
+    }
+  }
+
+  if (quarantined.length > 0) {
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  }
+  return quarantined;
 }

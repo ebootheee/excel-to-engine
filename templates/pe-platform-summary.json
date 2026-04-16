@@ -1,0 +1,35 @@
+{
+  "$schema": "template-v1.0",
+  "name": "pe-platform-summary",
+  "description": "Generic PE platform template for models that organize returns around a dedicated Comparison/Summary tab plus a separate Promote/Waterfall tab. Activates when all three signature tabs are present.",
+  "signature": {
+    "sheetNames": [
+      "UW Comparison",
+      "Cheat Sheet",
+      "GPP Promote"
+    ],
+    "matchThreshold": 1.0,
+    "autoApply": true
+  },
+  "mappings": {
+    "_comment": "This template does not bind cell refs by default — cell addresses vary across deployments of this shape. The template's value is in the `hints` block: summary-sheet preference, scenario-column convention, and a vocabulary for peak-equity labels. The refiner uses those hints to find the right cells automatically."
+  },
+  "hints": {
+    "summarySheets": ["UW Comparison", "Cheat Sheet"],
+    "scenarioColumns": {
+      "UW Comparison": ["H", "I"],
+      "default": ["H"]
+    },
+    "peakEquityLabels": [
+      "Peak Net Equity",
+      "Fund Size / Peak Net Equity",
+      "Peak Equity"
+    ]
+  },
+  "notes": [
+    "Scenarios are laid out as columns (H, I, ...) on the Comparison tab. The leftmost scenario (usually H) is the conventional base case. Use --case H on query/summary to target it directly.",
+    "The promote tab typically stacks several scenario blocks vertically (e.g. rows 1-92, 93-184, ...). Use `ete summary` to see detected scenario blocks.",
+    "carry.totalCell typically lives near the summary on the Summary tab — cells on the Promote tab labeled 'Total Cash Flows (pre-carry)' are a common auto-detection trap; doctor catches this.",
+    "basisCell is peak equity invested in dollars — reject decimals (cap rates) or single-digit integers that appear in label rows."
+  ]
+}

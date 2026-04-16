@@ -215,8 +215,9 @@ Commands:
 
 Query modes (add --sheet "Name" to restrict scope and speed up 10-50×):
   ete query ./m/ "Sheet!A1"                      Cell lookup
-  ete query ./m/ --search "revenue"              Label search (regex)
-  ete query ./m/ --search "Total (Carry|Promote)" --sheet "GPP Promote"
+  ete query ./m/ --search "revenue"              Label search (literal substring, case-insensitive)
+  ete query ./m/ --search "revenue" --case H     Prefer column H's value (scenario columns)
+  ete query ./m/ --search "Gross.*IRR" --regex   Opt in to regex
   ete query ./m/ --name exitMultiple             Manifest name
 
 Carry flags (falls back to manifest values when not provided):

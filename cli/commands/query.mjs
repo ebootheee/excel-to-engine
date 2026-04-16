@@ -32,6 +32,8 @@ export function runQuery(modelDir, args) {
       maxResults: args.limit || 20,
       context: args.context || 2,
       format: args.format,
+      regex: !!args.regex,
+      caseColumn: args.case || null,
       index,
     });
   }
@@ -153,6 +155,8 @@ function queryBySearch(gt, pattern, options = {}) {
     sheet: options.sheet,
     maxResults: options.maxResults,
     index: options.index,
+    regex: options.regex,
+    caseColumn: options.caseColumn,
   });
 
   // Enrich with context rows
@@ -223,6 +227,12 @@ function formatSearchResults(matches, format) {
   const lines = [];
   for (const m of matches) {
     lines.push(`${m.sheet}!${m.col}${m.row}: "${m.label}"`);
+    if (m.caseColumn) {
+      const caseStr = m.caseValue !== null && m.caseValue !== undefined
+        ? `${m.caseColumn}=${formatValue(m.caseValue)}`
+        : `${m.caseColumn}=(none on this row)`;
+      lines.push(`  Case ${m.caseColumn}: ${caseStr}`);
+    }
     if (m.values.length > 0) {
       const vals = m.values.slice(0, 8).map(v => `${v.col}=${formatValue(v.value)}`).join(', ');
       lines.push(`  Values: ${vals}`);

@@ -1,5 +1,79 @@
 # excel-to-engine — Changelog
 
+## 2026-04-17 — Post-SESSION_LOG-4 workflow + auto-gen fixes
+
+A fresh-instance end-to-end session against two PE platform models surfaced
+a cluster of friction points, headlined by a mid-session workflow stall
+where the agent ran 60+ sequential cell-coordinate probes trying to reverse-
+engineer a scenario column. This pass closes each one.
+
+### Workflow stall prevention
+- **`skill/SKILL.md`** — new "Core rules" block at the top: never walk cell
+  coordinates, assume + verify beats probe + prove, templates do the guessing
+  when they match, ask the user when unsure, `--search` is literal by default.
+  This is the first block a new session reads and it names the anti-pattern
+  explicitly.
+- **`--search` is literal substring (case-insensitive) by default.** Users
+  can paste phrases like `--search "Gross (portfolio)"` without triggering
+  an unterminated-regex crash. Opt in to regex with `--regex`. Invalid
+  regex silently falls back to literal rather than throwing.
+- **`--case <column>` on `ete query`.** Comparison sheets with multiple
+  scenario columns (H, I, J...) can now be targeted directly — matches show
+  the named column's value as the primary hit. `hints.scenarioColumns` in
+  templates suggest the conventional base-case column.
+
+### Soft-fail init (no more abort-on-first-bad-field)
+- **`ete init` quarantines bad fields and exits 0 by default.** A single
+  `basisCell`/`exitMultiple` mis-bind used to abort the full 8-minute parse.
+  Now each error-level finding is set to null in the manifest, the user
+  sees the exact fix command, and the chunked directory is written.
+- **`--strict`** re-enables hard-fail (for CI / agent pipelines).
+- **`--force`** preserved as a no-op alias so old scripts still work.
+
+### Refiner hardening
+- **Peak Net Equity / Gross MOC patterns** added to refiner's
+  `REQUIRED_FIELDS`. Previous patterns missed "Peak Net Equity",
+  "Fund Size / Peak Net Equity", and "Gross MOC" (no trailing IC). Both
+  failed to bind on the production-session models.
+- **Summary-sheet preference** in the refiner: candidates on
+  `Cheat Sheet` / `UW Comparison` / `Summary` / `Valuation` / `Cover` /
+  `Returns` / `Dashboard` / `Exec Summary` tabs rank above the same label
+  on operational tabs. Ambiguous matches collapse to the single
+  summary-sheet entry when exactly one exists.
+
+### Template auto-apply on strong signature match
+- **`templates/pe-platform-summary.json`** — replaces the previous file with
+  a generic PE platform template keyed by a 3-tab signature (the common
+  shape of PE models that separate summary and promote tabs).
+- `signature.autoApply` + `matchThreshold` fields let a template declare
+  when it wants `ete init` to apply it automatically vs. just suggest it.
+- **`--no-template`** opts out of auto-apply per-run.
+- `detectMatchingTemplate()` returns a best-match descriptor with hit
+  counts; ties break toward the larger signature (more specific).
+- Template now carries a `hints` block: summary-sheet list, per-sheet
+  scenario-column defaults, peak-equity label vocabulary.
+
+### `ete carry` label-search fallback
+- When `--peak` / `--moc` aren't provided and the manifest hasn't bound
+  them, `ete carry` now searches the ground truth by label (uses the
+  Phase-1 label index) and either adopts the single unambiguous candidate
+  or lists candidates with the exact `ete manifest set` fix command.
+- The formatted output reports "via label lookup at <cell>" when a value
+  was resolved this way so the user knows where the number came from.
+- Works with `--case` to prefer a specific scenario column's value.
+
+### Public-release hygiene
+- All proprietary identifiers (private-company and vendor names) scrubbed
+  from templates, docs, plans, changelog, and inline comments. The previous
+  PE-platform template file has been renamed to
+  `templates/pe-platform-summary.json`; any call sites passing an older
+  template name to `--template` must migrate to this generic name.
+
+### Tests
+- +23 assertions in new `tests/cli/test-e2e4-fixes.mjs` (297 total across
+  the suite; all green).
+- Rust smoke 78/78.
+
 ## 2026-04-17 — V4 AI Interface Layer
 
 Reframe: this tool is an **AI-navigable index over complex Excel models**
@@ -38,10 +112,10 @@ Use: `ete explain <modelDir> totalCarry` or `ete explain <modelDir> "Equity!AN12
 ### Phase 4 — Doctor-gated init + model-family templates
 - **Doctor gate:** `ete init` now runs `manifest doctor` after refine.
   Errors abort init with non-zero exit. `--force` bypasses.
-- **Templates:** new `templates/` directory with `outpost-platform.json`,
+- **Templates:** new `templates/` directory with `pe-platform-summary.json`,
   `pe-fund-generic.json`, `re-fund-generic.json`. Each is a partial manifest
-  with pre-mapped cell references and a signature regex.
-- **`--template <name>`:** `ete init model.xlsx --template outpost-platform`
+  with layout hints and optional pre-mapped cell references.
+- **`--template <name>`:** `ete init model.xlsx --template pe-platform-summary`
   applies the template after auto-generation, overriding detected cells with
   known-good mappings for the family.
 - **Auto-suggest:** when no template is specified, `init` checks whether the
@@ -122,9 +196,9 @@ label scans over a 200 MB ground truth had to be done outside the CLI.
   specific scenario without row arithmetic.
 - **`manifest doctor` carry-label sanity check** — inspects the adjacent
   B/A-column label of `carry.totalCell` and flags disqualifying descriptors
-  ("pre-carry", "cash flow", "receivable", "payable"). Catches the exact bug
-  where both Outpost manifests had `carry.totalCell = GPP Promote!AF25` =
-  "Total Cash Flows (pre-carry)".
+  ("pre-carry", "cash flow", "receivable", "payable"). Catches the common
+  bug where `carry.totalCell` auto-binds to a Promote-tab cell whose adjacent
+  label says "Total Cash Flows (pre-carry)".
 
 ### Fixed
 - **`carry.totalCell` auto-detection rejected pre-carry CF labels.** Added
@@ -161,7 +235,7 @@ CLI friction points this pass addresses.
 
 ## 2026-04-16 — Manifest Robustness Pass (informed by 3-E2E-test session log)
 
-End-to-end run on two 76–83 MB Outpost Corporate Models surfaced a cluster of
+End-to-end run on two 76–83 MB PE platform models surfaced a cluster of
 auto-detection failures that cascaded into garbage scenarios. All addressed here.
 
 ### Fixed
@@ -174,10 +248,10 @@ auto-detection failures that cascaded into garbage scenarios. All addressed here
   `detectCarry` (total carry, pref return), `detectDebt`, and `detectCustomCells`
   (WACC, shares outstanding, price per share). The existing refiner reused the
   same ranges.
-- **Equity class dedupe by `(sheet, row)`.** `detectEquity` produced 5 identical
-  `class-N` entries on both Outpost models because multiple "Equity Basis" /
-  "Capital Committed" labels on the same row each triggered a new class. Now
-  collapses to one class per row.
+- **Equity class dedupe by `(sheet, row)`.** `detectEquity` produced multiple
+  identical `class-N` entries because several "Equity Basis" / "Capital
+  Committed" labels on the same row each triggered a new class. Now collapses
+  to one class per row.
 - **Segment time-series validation.** `ete summary` showed "30 segments of $94K
   repeats" because `detectSegments` grabbed any revenue/expense labeled row,
   including scalar assumption rows that just replicated one number across year
