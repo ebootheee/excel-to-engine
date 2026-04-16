@@ -34,9 +34,60 @@ export function runManifestCommand(subcommand, targetPath, args, extraArgs = [])
       return runDoctor(targetPath, args);
     case 'set':
       return runSet(targetPath, extraArgs[0], extraArgs[1], args);
+    case 'export':
+      return runExport(targetPath, args);
     default:
-      return { error: 'Usage: ete manifest <generate|validate|refine|doctor|set> <path>' };
+      return { error: 'Usage: ete manifest <generate|validate|refine|doctor|set|export> <path>' };
   }
+}
+
+/**
+ * Export a manifest as a reusable template. Strips base-case values (model-
+ * specific) and keeps the structural cell-ref mappings. User then writes the
+ * result to templates/<name>.json.
+ */
+function runExport(modelDir, args) {
+  const manifest = loadManifest(modelDir);
+
+  const gt = loadGroundTruth(manifest, modelDir);
+  const sheetSet = new Set();
+  for (const addr of Object.keys(gt)) {
+    const bang = addr.lastIndexOf('!');
+    if (bang > 0) sheetSet.add(addr.substring(0, bang));
+  }
+
+  // Collect all leaf cell references (Sheet!A1 shaped strings) from manifest
+  const mappings = {};
+  function walk(obj, path) {
+    if (!obj || typeof obj !== 'object') return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === 'baseCaseOutputs' || k === 'customCells') continue; // stripped per convention
+      const p = path ? `${path}.${k}` : k;
+      if (typeof v === 'string' && v.includes('!') && /^[^!]+!\$?[A-Z]+\$?\d+$/.test(v)) {
+        mappings[p] = v;
+      } else if (Array.isArray(v)) {
+        v.forEach((item, i) => walk(item, `${p}[${i}]`));
+      } else if (typeof v === 'object') {
+        walk(v, p);
+      }
+    }
+  }
+  walk(manifest, '');
+
+  const template = {
+    $schema: 'template-v1.0',
+    name: args.name || 'exported-template',
+    description: args.description || `Exported from ${manifest.model?.source || modelDir}`,
+    signature: {
+      sheetNames: Array.from(sheetSet),
+    },
+    mappings,
+  };
+
+  return {
+    template,
+    _formatted: JSON.stringify(template, null, 2),
+  };
 }
 
 /**

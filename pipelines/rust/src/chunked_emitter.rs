@@ -7,7 +7,7 @@ use crate::dependency::extract_refs;
 use crate::formula_ast::parse_formula;
 use crate::parser::{CellValue, WorkbookData};
 use crate::sheet_partition::{
-    build_sheet_graph, extract_ground_truth, partition_sheets, SheetGraph, SheetPartition,
+    build_sheet_graph, extract_ground_truth, extract_labels_index, partition_sheets, SheetGraph, SheetPartition,
 };
 use crate::transpiler::{transpile, TranspileConfig};
 use rayon::prelude::*;
@@ -140,7 +140,26 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
         t0.elapsed().as_millis()
     );
 
-    // 4. Emit engine.js orchestrator
+    // 4. Emit _labels.json — label → [{sheet, col, row, text}]
+    //    Enables O(1) label search in the CLI (replaces 30s GT scans per
+    //    query --search call). See PLAN_V4.md Phase 1.
+    eprint!("[chunked] Building label index...");
+    std::io::stderr().flush().ok();
+    let t_lbl = Instant::now();
+    let labels = extract_labels_index(workbook);
+    let labels_json = serde_json::to_string(&labels)
+        .map_err(|e| format!("Failed to serialize labels: {}", e))?;
+    fs::write(output_dir.join("_labels.json"), &labels_json)
+        .map_err(|e| format!("Failed to write _labels.json: {}", e))?;
+    let label_count = labels.as_object().map(|o| o.len()).unwrap_or(0);
+    eprintln!(
+        " done — {} unique labels ({}) in {}ms",
+        label_count,
+        human_size(labels_json.len()),
+        t_lbl.elapsed().as_millis()
+    );
+
+    // 5. Emit engine.js orchestrator
     eprint!("[chunked] Writing engine.js orchestrator...");
     std::io::stderr().flush().ok();
     let engine_js = generate_orchestrator(&sheet_graph, &partitions);

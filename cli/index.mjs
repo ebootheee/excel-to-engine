@@ -30,11 +30,17 @@ const COMMANDS = {
   sensitivity: { desc: 'Generate sensitivity surface', module: './commands/sensitivity.mjs' },
   compare: { desc: 'Compare scenarios or models', module: './commands/compare.mjs' },
   carry: { desc: 'Compute GP carry under a waterfall', module: './commands/carry.mjs' },
+  extract: { desc: 'Pull time-series schedules from the model', module: './commands/extract.mjs' },
+  explain: { desc: 'Audit trail for a manifest name or cell', module: './commands/explain.mjs' },
+  eval: { desc: 'Evaluate a cell via the chunked engine', module: './commands/eval.mjs' },
   manifest: { desc: 'Generate or validate manifest', module: './commands/manifest.mjs' },
 };
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+
+  // --compact is shorthand for --format compact (AI consumer mode)
+  if (args.compact && !args.format) args.format = 'compact';
 
   if (args.help || args._.length === 0) {
     printHelp();
@@ -95,6 +101,21 @@ async function main() {
         result = runCarryCommand(args._[1], args);
         break;
       }
+      case 'extract': {
+        const { runExtract } = mod;
+        result = runExtract(args._[1], args);
+        break;
+      }
+      case 'explain': {
+        const { runExplain } = mod;
+        result = runExplain(args._[1], args._[2], args);
+        break;
+      }
+      case 'eval': {
+        const { runEval } = mod;
+        result = await runEval(args._[1], { ...args, cells: args._.slice(2) });
+        break;
+      }
       case 'manifest': {
         const { runManifestCommand } = mod;
         // ete manifest <subcommand> <path> [extraArgs...]
@@ -113,7 +134,7 @@ async function main() {
 
       const output = args.format && args.format !== 'table'
         ? formatOutput(result, args.format)
-        : result._formatted || JSON.stringify(result, null, 2);
+        : result._formatted || formatOutput(result, 'json');
 
       console.log(output);
     }

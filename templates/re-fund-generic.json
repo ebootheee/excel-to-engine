@@ -1,0 +1,15 @@
+{
+  "$schema": "template-v1.0",
+  "name": "re-fund-generic",
+  "description": "Generic RE fund — Rent Roll, NOI Buildup, Cap Rate, Debt Schedule, Waterfall",
+  "signature": {
+    "sheetNames": ["Rent Roll", "NOI", "Cap Rate", "Debt", "Waterfall"]
+  },
+  "mappings": {
+    "_comment": "Generic skeleton for real estate funds. Fill with your specific cells."
+  },
+  "notes": [
+    "RE models typically use cap rate rather than EBITDA multiple for exit valuation.",
+    "outputs.exitMultiple.type should be set to 'cap_rate_inverse' — the CLI handles the 1/x conversion internally."
+  ]
+}
