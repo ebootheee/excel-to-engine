@@ -1,5 +1,131 @@
 # excel-to-engine — Changelog
 
+## 2026-04-16 (PM) — Carry Command + Label Hardening (SESSION_LOG_02_carry.md)
+
+Follow-on pass driven by a second 3-E2E-test session: computing "carry at 2.8×
+MoC with 6% ownership" across A-1 + A-2 deployments. The investigation took
+~7 min and relied on manual Python scripts because the toolkit didn't expose
+the waterfall math, the `carry.totalCell` auto-detection was wrong, and bulk
+label scans over a 200 MB ground truth had to be done outside the CLI.
+
+### Added
+- **`ete carry`** — compute GP carry under an American or European waterfall.
+  Falls back to manifest values for peak equity / MoC / pref / carry%; accepts
+  explicit overrides. Solves hold period from IRR via `n = ln(MoC)/ln(1+IRR)`
+  when timeline data is missing. Supports `--ownership` for per-holder share,
+  `--combined` to sum multi-class equity basis, `--no-catchup` for
+  pure 80/20-above-pref, and `--structure european` for multi-hurdle aggregate
+  waterfalls. Wraps the pre-existing `lib/waterfall.mjs` which was previously
+  only callable from JS code.
+- **Scenario-block detection** — `lib/manifest.mjs` now detects stacked
+  repeating blocks on a sheet (e.g. 5 scenarios at rows 1-92, 93-184, ... on a
+  PE "GPP Promote" tab) and emits them to `manifest.scenarioBlocks`. `ete
+  summary` surfaces them with block labels and stride so users can target a
+  specific scenario without row arithmetic.
+- **`manifest doctor` carry-label sanity check** — inspects the adjacent
+  B/A-column label of `carry.totalCell` and flags disqualifying descriptors
+  ("pre-carry", "cash flow", "receivable", "payable"). Catches the exact bug
+  where both Outpost manifests had `carry.totalCell = GPP Promote!AF25` =
+  "Total Cash Flows (pre-carry)".
+
+### Fixed
+- **`carry.totalCell` auto-detection rejected pre-carry CF labels.** Added
+  `disqualifyingPatterns` to the refiner's field spec and equivalent logic
+  to the detector in `lib/manifest.mjs`. Labels containing "pre-carry",
+  "cash flow", "receivable", "payable", "fee", "operating", "capital",
+  "equity", or "profit" no longer satisfy the carry regex even if the rest
+  of the label matches.
+- **Carry regex matches "Total Carried Interest".** Previous regex required
+  the literal substring "carry" which `carried` does not contain (differ by
+  5th letter y/i). Now accepts `carry|carried|promot`.
+
+### Documentation
+- **`skill/SKILL.md`** — added "Validate the Manifest Before Trusting It"
+  (run doctor once per session), "When to Use Python Over the CLI" (bulk
+  scans shouldn't go through `ete query`), expanded Returns & Carry table
+  with `ete carry` examples, and added carry caveats (catch-up semantics,
+  IRR-solved hold period limits, `--combined` for multi-class).
+- **README.md** — added `ete carry` section with examples + output.
+
+### Tests
+- +20 assertions added to `tests/cli/test-manifest-improvements.mjs` (now 51
+  assertions total, 217 across the full suite): carry detection accepts/rejects
+  labels correctly, doctor flags manually-set bad carry cells, scenario-block
+  detection on repeating vs non-repeating sheets, `ete carry` against fixture
+  + parametric mode + IRR-solved-life + error handling.
+
+### Session log reference
+See `3-E2E-test/SESSION_LOG_02_carry.md` for the full investigation, the two
+first-principles math methods that bracketed the answer, and the specific
+CLI friction points this pass addresses.
+
+---
+
+## 2026-04-16 — Manifest Robustness Pass (informed by 3-E2E-test session log)
+
+End-to-end run on two 76–83 MB Outpost Corporate Models surfaced a cluster of
+auto-detection failures that cascaded into garbage scenarios. All addressed here.
+
+### Fixed
+- **`basisCell` value-range validation on initial auto-generation.** Auto-gen
+  previously accepted the first numeric on an equity-labeled row regardless of
+  magnitude, so a `5` on `Assumptions!AI48` got written to manifest and produced
+  `MOIC = terminalValue / 5 = 7.2M×` on scenarios. Introduced shared
+  `FIELD_RANGES` + `inFieldRange()` in `lib/manifest.mjs` and enforced on
+  `detectEquity`, `detectOutputs` (terminal value, exit multiple, cap rate),
+  `detectCarry` (total carry, pref return), `detectDebt`, and `detectCustomCells`
+  (WACC, shares outstanding, price per share). The existing refiner reused the
+  same ranges.
+- **Equity class dedupe by `(sheet, row)`.** `detectEquity` produced 5 identical
+  `class-N` entries on both Outpost models because multiple "Equity Basis" /
+  "Capital Committed" labels on the same row each triggered a new class. Now
+  collapses to one class per row.
+- **Segment time-series validation.** `ete summary` showed "30 segments of $94K
+  repeats" because `detectSegments` grabbed any revenue/expense labeled row,
+  including scalar assumption rows that just replicated one number across year
+  columns. Added a timeline-aware check: segments must have ≥3 numeric values in
+  the timeline columns AND those values must vary by ≥0.1%.
+- **Rust build: 13 dead-code warnings → 0.** Cleaned up unused variable
+  destructures (`sheet_name`, `n_inputs`, `finished_v`, `loop_var`, `start`,
+  `saved_pos`, `input_cells`, dead `parse_errors` assignment). Marked
+  intentionally-retained helpers with `#[allow(dead_code)]` + reason comments
+  (`convert_vars_to_ctx_get`, `extract_cell_addr_from_var`, `ClusterCode` fields,
+  `ArrayLiteral` AST variant, `expect_comma`).
+
+### Added
+- **`ete manifest doctor <modelDir>`** — diagnoses suspect cell mappings after
+  the fact. Runs value-range checks on every scalar field, per-equity-class
+  metric, and time-series check on every segment. For each issue, reports the
+  bad cell + value + expected range, and suggests a corrective `ete query` /
+  `ete manifest set` command.
+- **`ete manifest set <modelDir> <path> <cellRef>`** — targeted single-cell
+  override for when auto-detection misses. Verifies the cell exists in ground
+  truth before writing, refreshes `baseCaseOutputs` when applicable, and
+  preserves manifest formatting. Replaces the "hand-patch JSON with Python"
+  workflow used in the session log.
+- **`ete summary` suspect-segment warnings.** Segments whose values are constant
+  across all years are marked inline with `⚠` and a footer note directs the
+  user to `ete manifest doctor`. Added `--terse` flag to hide suspect segments
+  for clean headline output.
+- **`ete init --quiet`** — machine-readable JSON summary instead of narrative
+  logs. For CI / agent contexts where init's 600+ lines of per-sheet progress
+  are noise.
+- **`ete init` now cleans up redundant root `model-map.json` + `formulas.json`.**
+  In chunked mode these files at the output root (up to 636 MB on large models)
+  are redundant — the CLI reads exclusively from `chunked/`. Opt out with
+  `--keep-model-map` for the eval pipeline.
+- **`tests/cli/test-manifest-improvements.mjs`** — 31 assertions covering range
+  validation edge cases, equity dedupe, segment time-series rejection, and
+  doctor/set end-to-end.
+- **`npm test`** runs the full suite: 34 CLI integration + 31 manifest + 132
+  use-case scenarios = 197 assertions, all green.
+
+### Session log reference
+See `3-E2E-test/SESSION_LOG.md` for the production workflow that exposed each
+of the above issues and what took manual intervention to work around.
+
+---
+
 ## 2026-04-15 — PLAN V3 Amended: PE-Focused CLI Design
 
 ### Amended: PLAN_V3.md

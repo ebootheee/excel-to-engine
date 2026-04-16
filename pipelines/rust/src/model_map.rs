@@ -119,7 +119,7 @@ pub fn generate_raw_engine(
 
     // Collect input cells (non-formula numeric cells on first sheet)
     let first_sheet = workbook.sheets.first();
-    let input_cells: Vec<(String, f64)> = first_sheet
+    let _input_cells: Vec<(String, f64)> = first_sheet
         .map(|s| {
             s.cells.iter()
                 .filter(|c| c.formula.is_none())

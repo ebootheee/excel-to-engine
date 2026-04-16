@@ -1,6 +1,23 @@
 # excel-to-engine — Plan
 
-## Status: V3 Implemented — Model Analysis CLI + Skill Layer (see PLAN_V3.md for design)
+## Status: V3 Implemented + Manifest Robustness Pass + Carry Command (2026-04-16)
+
+The CLI, manifest system, and skill layer are in production use. Two
+production-driven improvement passes on 2026-04-16 closed real pain points
+surfaced by live end-to-end sessions against two 76–83 MB Outpost Corporate
+Models — see CHANGELOG.md for the complete list.
+
+**AM pass** — manifest robustness: value-range validation at auto-gen time
+(blocking the cascade where a label artifact like `5` produced a 7.2M× MOIC),
+equity class dedupe, segment time-series check, `manifest doctor`/`set`
+subcommands, `--terse`/`--quiet` flags, redundant `model-map.json` cleanup.
+
+**PM pass** — carry + label hardening: `ete carry` command wrapping
+`lib/waterfall.mjs` (collapses the 7-min manual investigation to one CLI call),
+`carry.totalCell` detector refuses pre-carry CF labels, scenario-block
+detection for stacked PE promote sheets, skill docs teach new sessions to
+validate the manifest before trusting it and to reach for Python over the CLI
+for bulk scans.
 
 ## Objective
 

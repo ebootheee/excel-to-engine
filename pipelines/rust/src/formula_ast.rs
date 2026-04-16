@@ -80,6 +80,7 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     // For array/range arguments that expand to a list
+    #[allow(dead_code)] // constructed by future array-formula support
     ArrayLiteral(Vec<Expr>),
 }
 
@@ -300,7 +301,7 @@ impl<'a> Tokenizer<'a> {
 
     /// Read a cell reference (and optional range) given we already know the sheet name
     fn read_cell_ref_part(&mut self, sheet: Option<String>) -> Token {
-        let start = self.pos;
+        let _start = self.pos;
         // Optional $
         let abs_col = if self.peek() == Some('$') {
             self.advance();
@@ -423,7 +424,7 @@ impl<'a> Tokenizer<'a> {
                 // Treat same as uppercase identifier
                 let lc = c.to_ascii_uppercase();
                 let mut s = lc.to_string();
-                let saved_pos = self.pos;
+                let _saved_pos = self.pos;
                 while let Some(nc) = self.peek() {
                     if nc.is_alphanumeric() || nc == '_' {
                         s.push(nc.to_ascii_uppercase());
@@ -544,6 +545,7 @@ impl Parser {
         tok
     }
 
+    #[allow(dead_code)] // retained for future arg-list parsing helpers
     fn expect_comma(&mut self) {
         match self.peek() {
             Token::Comma | Token::Semicolon => { self.advance(); }

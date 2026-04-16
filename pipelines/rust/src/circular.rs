@@ -10,6 +10,7 @@
 
 use crate::dependency::ConvergenceCluster;
 
+#[allow(dead_code)] // cluster_id and cells held for diagnostic/future use
 pub struct ClusterCode {
     pub cluster_id: usize,
     pub cells: Vec<String>,
@@ -25,7 +26,7 @@ pub fn generate_cluster_loop(
 ) -> ClusterCode {
     let id = cluster.id;
     let cells = &cluster.cells;
-    let loop_var = &cluster.loop_var;
+    let _loop_var = &cluster.loop_var; // reserved for future convergence hinting
 
     let mut lines = Vec::new();
 

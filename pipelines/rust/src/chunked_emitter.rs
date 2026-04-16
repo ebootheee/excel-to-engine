@@ -98,7 +98,7 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
     let mut sheet_files: Vec<String> = Vec::new();
     let mut total_formulas_emitted: usize = 0;
     let mut total_bytes_emitted: usize = 0;
-    for (sheet_name, file_name, code, n_formulas, n_inputs, code_len) in &sheet_results {
+    for (_sheet_name, file_name, code, n_formulas, _n_inputs, code_len) in &sheet_results {
         let file_path = sheets_dir.join(file_name);
         fs::write(&file_path, code)
             .map_err(|e| format!("Failed to write {}: {}", file_name, e))?;
@@ -378,6 +378,7 @@ fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -
 }
 
 /// Convert flat variable references (s_SheetName_A1) to ctx.get("SheetName!A1") calls.
+#[allow(dead_code)] // retained for optional cross-sheet emission mode
 fn convert_vars_to_ctx_get(js: &str, _default_sheet: &str) -> String {
     // Match pattern: s_<SheetName>_<ColRow>
     // We use a simple scan approach since the variable names follow a strict pattern
@@ -423,6 +424,7 @@ fn convert_vars_to_ctx_get(js: &str, _default_sheet: &str) -> String {
 
 /// Try to extract a cell address (like "A1", "B12", "AA100") from the end of a variable body.
 /// Returns the cell address if found.
+#[allow(dead_code)] // companion to convert_vars_to_ctx_get
 fn extract_cell_addr_from_var(var_body: &str) -> Option<String> {
     // Scan from the end: digits first, then uppercase letters
     let bytes = var_body.as_bytes();
@@ -807,7 +809,6 @@ fn detect_intra_sheet_cycles(partition: &SheetPartition, sheet_name: &str) -> Ve
                         }
                     }
                 }
-                let finished_v = v;
                 let finished_low = lowlinks[v];
                 call_stack.pop();
                 // Update parent's lowlink

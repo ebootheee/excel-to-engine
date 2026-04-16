@@ -32,16 +32,24 @@ node cli/index.mjs manifest refine ./my-model/chunked/ --apply
 Generate creates the base manifest. Refine searches the ground truth for key financial metrics (IRR, MOIC, equity basis, carry) using broad pattern matching and patches the manifest.
 
 ### If the manifest is missing key fields after auto-generation:
-Use `ete query --search` to find the cells manually, then patch the manifest:
+First, run the doctor to pinpoint exactly what's wrong:
+```bash
+node cli/index.mjs manifest doctor ./my-model/chunked/
+```
+Doctor flags each suspect mapping with its specific failure ("value 5 outside
+expected range [1e6, 5e10]") and prints the corrective query/set command.
+
+Then use `ete query --search` to locate the right cell and `ete manifest set`
+to patch the field (no hand-editing JSON required):
 ```bash
 # Find where IRR lives
 node cli/index.mjs query ./my-model/chunked/ --search "IRR"
-# Find carry
-node cli/index.mjs query ./my-model/chunked/ --search "Carry"
-# Find equity
-node cli/index.mjs query ./my-model/chunked/ --search "Equity"
+
+# Override the bad cell reference
+node cli/index.mjs manifest set ./my-model/chunked/ equity.classes[0].grossIRR "Cheat Sheet!F15"
 ```
-Then edit `manifest.json` to add the correct cell references to `equity.classes[0].grossIRR`, `carry.totalCell`, etc.
+`manifest set` verifies the cell exists in ground truth before writing, so a
+typo can't brick the manifest.
 
 ### Manifest is model-specific
 Each model gets its own `manifest.json` because cell addresses differ across spreadsheets. The manifest maps generic financial concepts (EBITDA, IRR, carry tiers) to specific cells in that model's ground truth. Once created, it's reused for all future queries and scenarios.
@@ -59,13 +67,41 @@ Each model gets its own `manifest.json` because cell addresses differ across spr
 
 | User Intent | Command |
 |---|---|
-| "What is X?" / "Find X" | `ete query --search "X"` or `ete query --name X` |
+| "What is X?" / "Find X" | `ete query --search "X" --sheet "Name"` (always use `--sheet` when you know where to look — 10-50× faster than scanning the whole model) |
 | "Show the P&L" / "Revenue breakdown" | `ete pnl [--segment id] [--detail] [--growth]` |
 | "What if X changes?" | `ete scenario --param value` |
 | "How sensitive is IRR to X?" | `ete sensitivity --vary param:range:step` |
 | "Compare A vs B" | `ete compare --base "" --alt "params"` |
-| "Summarize the model" | `ete summary` |
+| "Summarize the model" | `ete summary` (shows scenario blocks + suspect segments) |
+| "What's the carry at X MoC?" | `ete carry --moc X [--ownership Y]` (falls back to manifest values for peak, pref, carry%) |
+| "Carry on $500M combined at 2.8x with 6% ownership?" | `ete carry --peak 500e6 --moc 2.8 --life 4.7 --ownership 0.06` |
 | "Build me bear/base/bull cases" | `ete scenario --save` for each, then `ete compare --scenarios` |
+
+### 2a. Validate the Manifest Before Trusting It
+
+Before answering a PE question, run `ete manifest doctor <modelDir>` once per session. It flags:
+- `carry.totalCell` pointing at a pre-carry CF or cash-flow cell (common auto-detection failure)
+- `equity.classes[0].basisCell` with an out-of-range value (label artifacts)
+- Segments whose values are constant across all years (scalar assumptions masquerading as P&L)
+
+If doctor reports issues, fix them with `ete manifest set <path> <cellRef>` before trusting `--name totalCarry` or `ete carry` output.
+
+### 2b. When to Use Python Over the CLI
+
+The CLI is the right tool for targeted questions. It's the wrong tool for bulk scans — each `ete query --search` reloads the ground truth (~200 MB on large models). If you need to sweep more than 5 cells or walk label patterns across many rows:
+
+```python
+# /scripts/scan.py (keep in project folder, not /tmp)
+import json
+gt = json.loads(open('models/my-model/chunked/_ground-truth.json').read())
+# O(1) lookups, sweep rows in ms
+for r in range(1, 100):
+    label = gt.get(f'GPP Promote!B{r}')
+    val = gt.get(f'GPP Promote!C{r}')
+    if label and val: print(f'row {r}: {label!r} = {val}')
+```
+
+Write bulk-scan scripts in `scripts/` (not `/tmp/`) so they're reusable for the next "what's carry at X MoC?" question.
 
 ### 3. Translate PE Language to CLI Parameters
 
@@ -114,10 +150,19 @@ Each model gets its own `manifest.json` because cell addresses differ across spr
 
 | PE Principal Says | CLI Translation |
 |---|---|
-| "What's carry at 2.5x MOIC?" | Run scenario that produces ~2.5x, read carry |
-| "Override pref to 10%" | `--pref-return 0.10` |
-| "Show me carry by tier" | `--metric carry-detail` or read `carryDetail` from JSON output |
+| "What's carry at 2.5x MOIC?" | `ete carry --moc 2.5` (uses manifest's peak, pref, carry%) |
+| "Carry on $500M combined at 2.8x with 6% ownership?" | `ete carry --peak 500e6 --moc 2.8 --life 4.7 --ownership 0.06` |
+| "Compare European vs American waterfall" | `ete carry --structure european` and `--structure american` |
+| "No catch-up — just 80/20 above pref" | `ete carry --no-catchup` |
+| "Hold period from 16% IRR at 2.8x" | `ete carry --irr 0.16 --moc 2.8` (solves `n = ln(MoC)/ln(1+IRR)`) |
+| "Override pref to 10%" | `--pref-return 0.10` (for `scenario`) or `--pref 0.10` (for `carry`) |
+| "Show me carry by tier" | `ete carry` table output has per-tier LP/GP breakdown |
 | "What discount rate brings NPV to zero?" | `--discount-rate X` (iterate via sensitivity) |
+
+**Carry caveats:**
+- Default uses American waterfall with catch-up. Session log #2 showed this can produce effective 28-30% GP share (not 20%) due to residual 80/20 above catch-up. If the user expects "exactly 20%" carry, use `--no-catchup`.
+- When `--life` isn't given and `--irr` is, the command solves hold period from `ln(MoC)/ln(1+IRR)` — accurate for scaling but not for irregular capital calls. Flagged in output.
+- When the manifest has multiple equity classes and the user asks about a "combined" scenario, pass `--combined` to sum all class basis cells.
 
 ### 4. Run Commands
 
