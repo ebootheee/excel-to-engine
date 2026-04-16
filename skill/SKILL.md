@@ -1,18 +1,41 @@
 # excel-to-engine CLI Skill
 
+This tool is an **AI-navigable index over complex Excel models**. The value
+prop is that an AI agent can answer ~20-30 stakeholder questions across the
+PE chain (analyst, VP, partner, LP, portfolio CFO, IR) without loading the
+whole model into context.
+
+Use the compact output mode (`--compact` or `--format compact`) whenever you're
+consuming output yourself rather than presenting to the user — it cuts tokens
+~60% compared to `--format json`.
+
 ## Triggers
 
+General:
 - "What if [financial adjustment]?"
-- "Run a scenario on this model"
-- "What's the IRR if we change the exit multiple?"
-- "Show me the P&L breakdown"
-- "Compare base case vs downside"
-- "Generate a sensitivity table"
-- "What's the carry at 2.5x?"
 - "Find [metric] in the model"
 - "Summarize this model"
 - "Analyze this financial model"
 - "Query a cell from the model"
+- "Why did [metric] change?"  →  use `ete explain`
+
+Scenarios:
+- "What's the IRR if we change the exit multiple?"
+- "Show me the P&L breakdown"
+- "Compare base case vs downside"
+- "Generate a sensitivity table"
+
+Carry & returns:
+- "What's the carry at 2.5x?"
+- "What's TVPI/DPI/RVPI?"
+- "Net IRR after fees?"
+
+Schedules & breadth:
+- "Capital call schedule"
+- "Debt amortization"
+- "Distribution schedule"
+- "Management fee stream"
+- "Covenant compliance"
 
 ## First Contact with a New Model
 
@@ -22,7 +45,20 @@ When the user points you at a model for the first time, the CLI handles manifest
 ```bash
 node cli/index.mjs init model.xlsx --output ./my-model/
 ```
-This runs: parse → auto-generate manifest → refine (smart search for IRR/MOIC/carry/equity) → summary. The model is ready to query immediately.
+This runs: parse → auto-generate manifest → refine (smart search for IRR/MOIC/carry/equity) → **doctor validation** → summary.
+
+As of V4, `init` exits non-zero if `doctor` finds errors (bad basisCell,
+suspect carry.totalCell, etc.). Pass `--force` to override. This prevents
+downstream scenarios from running against a broken manifest.
+
+If the model matches a known family, init prints a template suggestion. Apply
+it explicitly:
+```bash
+node cli/index.mjs init model.xlsx --output ./my-model/ --template outpost-platform
+```
+Templates pre-map cells for known model families — skip auto-detection guesswork
+for fields the template already knows. See `templates/` for available templates
+and `templates/README.md` for building your own.
 
 ### If a chunked directory exists but no manifest:
 ```bash
@@ -65,17 +101,56 @@ Each model gets its own `manifest.json` because cell addresses differ across spr
 
 ### 2. Identify Intent → Map to Command
 
-| User Intent | Command |
+Use `--compact` on anything whose output you'll process yourself (not show to
+the user). Use `--sheet "Name"` on search when you know where to look — the
+label index makes it effectively free and avoids irrelevant matches.
+
+**Finding things:**
+| Intent | Command |
 |---|---|
-| "What is X?" / "Find X" | `ete query --search "X" --sheet "Name"` (always use `--sheet` when you know where to look — 10-50× faster than scanning the whole model) |
+| "What is X?" / "Find X" | `ete query --search "X" --sheet "Name"` |
+| "Why is this number X?" / "Where does X come from?" | `ete explain <name-or-cell>` (shows manifest path, cell, value, adjacent label, formula) |
+| "Summarize the model" | `ete summary` |
+| "List all the scenario blocks on this sheet" | `ete summary` (section at bottom) |
+
+**Stakeholder schedules (LP, CFO, analyst roll-ups):**
+| Intent | Command |
+|---|---|
+| "Capital call schedule" | `ete extract --type capital_call` |
+| "Distribution schedule" | `ete extract --type distribution` |
+| "Debt amortization / balance schedule" | `ete extract --type debt_balance` |
+| "Interest expense over time" | `ete extract --type interest_expense` |
+| "Management fee stream" | `ete extract --type fee` |
+| "NOI buildup by year" | `ete extract --type noi` |
+| "Free cash flow schedule" | `ete extract --type cash_flow` |
+| "List all detected schedules" | `ete extract --list` |
+
+**P&L and scenarios:**
+| Intent | Command |
+|---|---|
 | "Show the P&L" / "Revenue breakdown" | `ete pnl [--segment id] [--detail] [--growth]` |
 | "What if X changes?" | `ete scenario --param value` |
 | "How sensitive is IRR to X?" | `ete sensitivity --vary param:range:step` |
 | "Compare A vs B" | `ete compare --base "" --alt "params"` |
-| "Summarize the model" | `ete summary` (shows scenario blocks + suspect segments) |
-| "What's the carry at X MoC?" | `ete carry --moc X [--ownership Y]` (falls back to manifest values for peak, pref, carry%) |
-| "Carry on $500M combined at 2.8x with 6% ownership?" | `ete carry --peak 500e6 --moc 2.8 --life 4.7 --ownership 0.06` |
 | "Build me bear/base/bull cases" | `ete scenario --save` for each, then `ete compare --scenarios` |
+
+**Carry, returns, LP metrics:**
+| Intent | Command |
+|---|---|
+| "What's the carry at X MoC?" | `ete carry --moc X [--ownership Y]` |
+| "Carry on $500M combined at 2.8x with 6% ownership?" | `ete carry --peak 500e6 --moc 2.8 --life 4.7 --ownership 0.06` |
+| "TVPI / DPI / RVPI" | `ete query --name tvpi` (etc.) — populated from `manifest.fundLevel` |
+| "Vintage year" / "Fund size" | `ete query --name vintageYear` / `--name fundSize` |
+
+**Exact formula evaluation (when linear approximation breaks):**
+| Intent | Command |
+|---|---|
+| "Run the actual Excel formula on cell X with input Y" | `ete eval <cell> --inputs '{"Sheet!A1": value}'` |
+| "What's the cell value under the actual engine (not delta cascade)?" | `ete eval <cell>` |
+
+Delta cascade (`scenario`) is the default for speed, but for non-linear
+questions (covenants, MIP triggers, pref compounding with irregular calls,
+FX hedges) use `ete eval` to invoke the transpiled formulas.
 
 ### 2a. Validate the Manifest Before Trusting It
 

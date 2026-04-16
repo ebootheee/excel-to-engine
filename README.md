@@ -244,6 +244,40 @@ rows whose values are constant across the timeline (scalar assumptions rather
 than P&L streams). When something still looks wrong, `ete manifest doctor`
 flags the specific field and suggests the fix command.
 
+## What AI agents can ask this tool
+
+The CLI is an **AI-navigable index over complex Excel models**. An agent can
+answer questions across the PE stakeholder chain without loading the whole
+model into context:
+
+**Analyst / VP:**
+- "Show the P&L by segment with YoY growth" → `ete pnl --growth`
+- "What's IRR if exit multiple drops 2 turns?" → `ete scenario --exit-multiple X`
+- "Sensitivity of MOIC to exit timing and multiple" → `ete sensitivity --vary ...`
+- "Find the Peak Equity on the Cheat Sheet tab" → `ete query --search "Peak Equity" --sheet "Cheat Sheet"`
+
+**Partner / Principal:**
+- "Summarize for the IC memo" → `ete summary`
+- "Attribution — why did IRR drop 5pp?" → `ete compare --attribution`
+- "Bear / base / bull in one view" → `ete scenario --save` + `ete compare --scenarios`
+
+**LP / IR:**
+- "TVPI / DPI / RVPI / net IRR" → `ete query --name tvpi` (and friends)
+- "Vintage year, fund size, paid-in" → `ete query --name vintageYear`
+- "Capital call schedule" → `ete extract --type capital_call`
+- "Distribution schedule" → `ete extract --type distribution`
+
+**Portfolio CFO:**
+- "Debt amortization / interest expense over time" → `ete extract --type debt_balance`
+- "Covenant ratios" → `ete query --name dscr` (and `ltv`, `icr`, `leverage`)
+- "What's FCF if rates go up 100bps?" → `ete eval <cell> --inputs '{"Assumptions!Rate": 0.08}'`
+
+**Audit / "why" questions:**
+- "Where does totalCarry come from?" → `ete explain totalCarry`
+- "What formula computes Equity!AN125?" → `ete explain "Equity!AN125"`
+
+Use `--compact` on any agent-consumed output — ~60% fewer tokens than `--format json`.
+
 ## Use with Claude Code
 
 The toolkit includes a Claude Code skill (`skill/SKILL.md`) that translates natural language into CLI commands. You don't need to know the CLI syntax — just ask questions:

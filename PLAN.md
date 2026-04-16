@@ -1,5 +1,14 @@
 # excel-to-engine — Plan
 
+## Status: V4 AI Interface Layer — landed 2026-04-17
+
+V4 reframes the tool as an **AI-navigable index over complex Excel models**
+covering ~20-30 PE stakeholder use cases. All six V4 phases landed: label
+index, compact output, `ete explain`, `ete eval` (chunked-engine bridge),
+doctor-gated init + model-family templates, and the breadth pass (new
+detectors + manifest schema + `ete extract`). See `PLAN_V4.md` for design
+and `CHANGELOG.md` for the complete list.
+
 ## Status: V3 Implemented + Manifest Robustness Pass + Carry Command (2026-04-16)
 
 The CLI, manifest system, and skill layer are in production use. Two
