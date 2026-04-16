@@ -29,6 +29,7 @@ const COMMANDS = {
   scenario: { desc: 'Run scenario analysis', module: './commands/scenario.mjs' },
   sensitivity: { desc: 'Generate sensitivity surface', module: './commands/sensitivity.mjs' },
   compare: { desc: 'Compare scenarios or models', module: './commands/compare.mjs' },
+  carry: { desc: 'Compute GP carry under a waterfall', module: './commands/carry.mjs' },
   manifest: { desc: 'Generate or validate manifest', module: './commands/manifest.mjs' },
 };
 
@@ -87,6 +88,11 @@ async function main() {
       case 'compare': {
         const { runCompareCommand } = mod;
         result = runCompareCommand(args._[1], args);
+        break;
+      }
+      case 'carry': {
+        const { runCarryCommand } = mod;
+        result = runCarryCommand(args._[1], args);
         break;
       }
       case 'manifest': {
@@ -183,12 +189,25 @@ Commands:
   scenario <modelDir>        Run scenario analysis
   sensitivity <modelDir>     Generate sensitivity surface
   compare <modelDir>         Compare scenarios or models
+  carry [modelDir]           Compute GP carry under a waterfall
   manifest <sub> <path>      generate | validate | refine | doctor | set
 
-Query modes:
-  ete query ./m/ "Sheet!A1"           Cell lookup
-  ete query ./m/ --search "revenue"   Label search
-  ete query ./m/ --name exitMultiple  Manifest name
+Query modes (add --sheet "Name" to restrict scope and speed up 10-50×):
+  ete query ./m/ "Sheet!A1"                      Cell lookup
+  ete query ./m/ --search "revenue"              Label search (regex)
+  ete query ./m/ --search "Total (Carry|Promote)" --sheet "GPP Promote"
+  ete query ./m/ --name exitMultiple             Manifest name
+
+Carry flags (falls back to manifest values when not provided):
+  --peak <dollars>           Peak equity committed
+  --moc <multiple>           Gross MoC (2.8 = 2.8×)
+  --life <years>             Hold period
+  --irr <rate>               IRR, used to solve hold: n = ln(MoC)/ln(1+IRR)
+  --pref <rate>              Preferred return (0.08 = 8%)
+  --carry <rate>             GP carry percent (0.20 = 20%)
+  --ownership <frac>         Your share of GP carry (0.06 = 6%)
+  --structure <a|e>          american | european waterfall
+  --combined                 Sum all equity classes (for multi-class funds)
 
 Scenario flags:
   --exit-year <year>                 Override exit year

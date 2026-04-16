@@ -14,7 +14,7 @@ A toolkit for converting complex financial Excel models (.xlsx) into JavaScript 
 excel-to-engine/
 ├── cli/                             # Analysis CLI (the `ete` command)
 │   ├── index.mjs                    # Entry point + arg parsing
-│   ├── commands/                    # 8 commands: init, manifest, query, pnl, scenario, sensitivity, compare, summary
+│   ├── commands/                    # 9 commands: init, manifest, query, pnl, scenario, sensitivity, compare, carry, summary
 │   ├── extractors/                  # Date detector, annual aggregator, segment detector, waterfall detector, line-item resolver
 │   ├── solvers/                     # Delta cascade (financial math chain), scenario engine
 │   └── format.mjs                   # Output formatting (table, json, csv, markdown)
@@ -81,7 +81,8 @@ node cli/index.mjs compare ./my-model/chunked/ --base "" --alt "exit-multiple=16
 | `scenario` | Run scenario with 25+ adjustment parameters |
 | `sensitivity` | 1D sweep or 2D surface across any parameter |
 | `compare` | Base vs alt, named scenarios, cross-model, attribution analysis |
-| `manifest` | Generate or validate model manifest |
+| `carry` | GP carry under waterfall (American/European, catch-up/no-catch-up, IRR-solved life) |
+| `manifest` | generate / validate / refine / **doctor** / **set** — always doctor first when trusting `totalCarry` / `basisCell` |
 
 ### Scenario Parameters (Full Set)
 

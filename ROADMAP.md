@@ -112,6 +112,21 @@
 
 ## Done
 
+### Carry Command + Label Hardening (2026-04-16 PM)
+- `ete carry` — waterfall GP carry command wrapping `lib/waterfall.mjs`
+  (American + European structures, `--ownership`, `--combined`, `--no-catchup`,
+  IRR-solved hold period)
+- Scenario-block detection in `lib/manifest.mjs` — recognizes stacked repeating
+  blocks (PE promote sheets with 5 scenarios on one tab), emits to
+  `manifest.scenarioBlocks`, surfaced in `ete summary`
+- `manifest doctor` carry-label sanity check — flags pre-carry CF /
+  cash flow / capital / equity / profit labels adjacent to `carry.totalCell`
+- Carry detection regex accepts "Carried Interest" (previously missed)
+- `disqualifyingPatterns` in refiner field specs — labels describing another
+  concept can no longer satisfy field patterns
+- SKILL.md + README updated with ete carry examples and "validate manifest
+  before trusting" workflow
+
 ### Manifest Robustness Pass (2026-04-16)
 - Enforced `FIELD_RANGES` value-range validation in manifest auto-generation
   (`basisCell`, terminal value, exit multiple, carry, debt, WACC, shares, etc.)

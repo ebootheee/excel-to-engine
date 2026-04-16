@@ -52,6 +52,7 @@ export function runSummary(modelDir, args) {
     equityClasses,
     carry: null,
     debt: null,
+    scenarioBlocks: manifest.scenarioBlocks || [],
   };
 
   // Segments with first/last year values and CAGR
@@ -206,6 +207,21 @@ function formatSummaryTable(s, opts = {}) {
   // Custom
   if (s.outputs.pricePerShare) {
     lines.push(`Price per share: $${s.outputs.pricePerShare.toLocaleString('en-US', { maximumFractionDigits: 2 })}`);
+  }
+
+  // Scenario blocks (stacked scenarios on a single sheet, e.g. PE promote sheets)
+  if (s.scenarioBlocks && s.scenarioBlocks.length > 0) {
+    lines.push('');
+    lines.push('Scenario blocks (stacked on same sheet):');
+    for (const sb of s.scenarioBlocks) {
+      lines.push(`  ${sb.sheet} — ${sb.blocks.length} blocks (stride ${sb.stride} rows, anchor "${sb.anchorLabel}")`);
+      for (let i = 0; i < Math.min(sb.blocks.length, 5); i++) {
+        const b = sb.blocks[i];
+        const label = b.label ? ` — ${b.label}` : '';
+        lines.push(`    block ${i + 1}: rows ${b.startRow}–${b.endRow}${label}`);
+      }
+      if (sb.blocks.length > 5) lines.push(`    (+${sb.blocks.length - 5} more)`);
+    }
   }
 
   return lines.join('\n');

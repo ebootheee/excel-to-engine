@@ -245,6 +245,33 @@ function runDoctor(modelDir, args) {
     }
   }
 
+  // Carry-specific label sanity check. Historically `carry.totalCell` has been
+  // mapped to cells whose adjacent B-column label is "Total Cash Flows
+  // (pre-carry)" or similar — any value above zero looks plausible without this
+  // check. See SESSION_LOG_02_carry.md.
+  if (manifest.carry?.totalCell) {
+    const cell = manifest.carry.totalCell;
+    const bang = cell.lastIndexOf('!');
+    const sheet = cell.substring(0, bang);
+    const rowMatch = cell.substring(bang + 1).match(/^([A-Z]+)(\d+)$/);
+    if (rowMatch) {
+      const row = parseInt(rowMatch[2], 10);
+      const labelText = findRowLabel(gt, sheet, row);
+      const lower = (labelText || '').toLowerCase();
+      const isDisqualified = /pre.?(carry|promot)|cash.?flow|receivable|payable/.test(lower);
+      if (isDisqualified) {
+        issues.push({
+          severity: 'error',
+          field: 'carry.totalCell',
+          cell,
+          value: resolveCell(gt, cell),
+          message: `adjacent label "${labelText}" describes a non-carry concept`,
+          fix: `ete query ${modelDir} --search "Total (Carry|Promote|Carried Interest)" --sheet "${sheet}"  →  ete manifest set ${modelDir} carry.totalCell <goodCell>`,
+        });
+      }
+    }
+  }
+
   // Segment time-series check — each segment row should vary across timeline cols
   const yearCols = manifest.timeline?.columnMap ? Object.keys(manifest.timeline.columnMap) : [];
   for (const seg of manifest.segments || []) {
@@ -381,6 +408,17 @@ function setNested(obj, path, value) {
     cur = cur[key];
   }
   cur[parts[parts.length - 1]] = value;
+}
+
+// Given a cell reference, find the human-readable label on its row — typically
+// in column A or B. Returns null if no string label is on that row.
+function findRowLabel(gt, sheet, row) {
+  const prefix = sheet + '!';
+  for (const col of 'ABCDEFGH'.split('')) {
+    const v = gt[`${prefix}${col}${row}`];
+    if (typeof v === 'string' && v.trim().length > 2) return v.trim();
+  }
+  return null;
 }
 
 function formatVal(val) {

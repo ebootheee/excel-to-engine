@@ -1,5 +1,66 @@
 # excel-to-engine — Changelog
 
+## 2026-04-16 (PM) — Carry Command + Label Hardening (SESSION_LOG_02_carry.md)
+
+Follow-on pass driven by a second 3-E2E-test session: computing "carry at 2.8×
+MoC with 6% ownership" across A-1 + A-2 deployments. The investigation took
+~7 min and relied on manual Python scripts because the toolkit didn't expose
+the waterfall math, the `carry.totalCell` auto-detection was wrong, and bulk
+label scans over a 200 MB ground truth had to be done outside the CLI.
+
+### Added
+- **`ete carry`** — compute GP carry under an American or European waterfall.
+  Falls back to manifest values for peak equity / MoC / pref / carry%; accepts
+  explicit overrides. Solves hold period from IRR via `n = ln(MoC)/ln(1+IRR)`
+  when timeline data is missing. Supports `--ownership` for per-holder share,
+  `--combined` to sum multi-class equity basis, `--no-catchup` for
+  pure 80/20-above-pref, and `--structure european` for multi-hurdle aggregate
+  waterfalls. Wraps the pre-existing `lib/waterfall.mjs` which was previously
+  only callable from JS code.
+- **Scenario-block detection** — `lib/manifest.mjs` now detects stacked
+  repeating blocks on a sheet (e.g. 5 scenarios at rows 1-92, 93-184, ... on a
+  PE "GPP Promote" tab) and emits them to `manifest.scenarioBlocks`. `ete
+  summary` surfaces them with block labels and stride so users can target a
+  specific scenario without row arithmetic.
+- **`manifest doctor` carry-label sanity check** — inspects the adjacent
+  B/A-column label of `carry.totalCell` and flags disqualifying descriptors
+  ("pre-carry", "cash flow", "receivable", "payable"). Catches the exact bug
+  where both Outpost manifests had `carry.totalCell = GPP Promote!AF25` =
+  "Total Cash Flows (pre-carry)".
+
+### Fixed
+- **`carry.totalCell` auto-detection rejected pre-carry CF labels.** Added
+  `disqualifyingPatterns` to the refiner's field spec and equivalent logic
+  to the detector in `lib/manifest.mjs`. Labels containing "pre-carry",
+  "cash flow", "receivable", "payable", "fee", "operating", "capital",
+  "equity", or "profit" no longer satisfy the carry regex even if the rest
+  of the label matches.
+- **Carry regex matches "Total Carried Interest".** Previous regex required
+  the literal substring "carry" which `carried` does not contain (differ by
+  5th letter y/i). Now accepts `carry|carried|promot`.
+
+### Documentation
+- **`skill/SKILL.md`** — added "Validate the Manifest Before Trusting It"
+  (run doctor once per session), "When to Use Python Over the CLI" (bulk
+  scans shouldn't go through `ete query`), expanded Returns & Carry table
+  with `ete carry` examples, and added carry caveats (catch-up semantics,
+  IRR-solved hold period limits, `--combined` for multi-class).
+- **README.md** — added `ete carry` section with examples + output.
+
+### Tests
+- +20 assertions added to `tests/cli/test-manifest-improvements.mjs` (now 51
+  assertions total, 217 across the full suite): carry detection accepts/rejects
+  labels correctly, doctor flags manually-set bad carry cells, scenario-block
+  detection on repeating vs non-repeating sheets, `ete carry` against fixture
+  + parametric mode + IRR-solved-life + error handling.
+
+### Session log reference
+See `3-E2E-test/SESSION_LOG_02_carry.md` for the full investigation, the two
+first-principles math methods that bracketed the answer, and the specific
+CLI friction points this pass addresses.
+
+---
+
 ## 2026-04-16 — Manifest Robustness Pass (informed by 3-E2E-test session log)
 
 End-to-end run on two 76–83 MB Outpost Corporate Models surfaced a cluster of

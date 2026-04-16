@@ -56,7 +56,12 @@ const REQUIRED_FIELDS = [
   {
     key: 'carry.totalCell',
     label: 'Total Carry / Promote',
-    patterns: [/total.*(carry|promot)|carried.*interest.*total|(carry|promot).*total|gp.*(carry|promot)/i],
+    patterns: [/total.*(carry|carried|promot)|carried.*interest.*total|(carry|carried|promot).*total|gp.*(carry|carried|promot)/i],
+    // Reject labels that clearly describe something else. Historically the
+    // refiner mapped `carry.totalCell` to `GPP Promote!AF25` = "Total Cash Flows
+    // (pre-carry)" — a single-year pre-carry CF, not GP carry. See
+    // 3-E2E-test/SESSION_LOG_02_carry.md.
+    disqualifyingPatterns: [/pre.?(carry|promot)|cash.?flow|receivable|payable|fee|operating|capital|equity|profit/i],
     valueRange: [0, 10e9],
     valueHint: 'number (total GP carry)',
   },
@@ -209,6 +214,15 @@ function searchForFieldIndexed(index, field) {
   // Pass 1: Find label matches (scan pre-extracted labels only)
   const labelMatches = [];
   for (const label of index.labels) {
+    // Disqualifying patterns take precedence: reject labels that clearly
+    // describe a different concept even if they incidentally contain carry/promote.
+    if (field.disqualifyingPatterns) {
+      let disq = false;
+      for (const p of field.disqualifyingPatterns) {
+        if (p.test(label.text)) { disq = true; break; }
+      }
+      if (disq) continue;
+    }
     for (const pattern of field.patterns) {
       if (pattern.test(label.text)) {
         labelMatches.push(label);

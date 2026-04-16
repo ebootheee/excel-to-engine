@@ -205,6 +205,138 @@ console.log('Testing: manifest set — overrides a cell');
 }
 
 // ---------------------------------------------------------------------------
+// Carry-totalCell detection hardening (SESSION_LOG_02_carry.md)
+// ---------------------------------------------------------------------------
+console.log('Testing: carry detection rejects pre-carry CF labels');
+{
+  // GT with a "Total Cash Flows (pre-carry)" label next to a number — auto-gen
+  // must NOT pick this as carry.totalCell (it's a per-year pre-carry CF, not
+  // GP carry). Same failure mode as the Outpost manifests.
+  const gt = {
+    'GPP Promote!A25': 'Total Cash Flows (pre-carry)',
+    'GPP Promote!AF25': 16_800_000, // plausible dollar amount but WRONG concept
+    'GPP Promote!A50': 'Preferred Return',
+    'GPP Promote!C50': 0.08,
+  };
+  const { manifest } = generateManifest(gt, { source: 'test.xlsx' });
+  assert(!manifest.carry?.totalCell, 'pre-carry CF label did not capture carry.totalCell');
+}
+
+console.log('Testing: carry detection accepts real carry labels');
+{
+  const gt = {
+    'GPP Promote!A25': 'Total Carried Interest',
+    'GPP Promote!C25': 50_300_000,
+  };
+  const { manifest } = generateManifest(gt, { source: 'test.xlsx' });
+  assert(manifest.carry?.totalCell === 'GPP Promote!C25', '"Total Carried Interest" captured');
+}
+
+console.log('Testing: doctor flags pre-carry label even if manually set');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ete-test-'));
+  cpSync(FIXTURES, tmp, { recursive: true });
+  const mPath = join(tmp, 'manifest.json');
+  const gtPath = join(tmp, '_ground-truth.json');
+  const m = JSON.parse(readFileSync(mPath, 'utf-8'));
+  const gt = JSON.parse(readFileSync(gtPath, 'utf-8'));
+  // Inject a pre-carry label next to a plausible number, point carry.totalCell at it
+  gt['Valuation!A199'] = 'Total Cash Flows (pre-carry)';
+  gt['Valuation!C199'] = 16_800_000;
+  m.carry = m.carry || {};
+  m.carry.totalCell = 'Valuation!C199';
+  writeFileSync(gtPath, JSON.stringify(gt, null, 2));
+  writeFileSync(mPath, JSON.stringify(m, null, 2));
+
+  const out = execSync(`node "${CLI}" manifest doctor "${tmp}"`, { cwd: ROOT, encoding: 'utf-8' });
+  assert(out.includes('carry.totalCell'), 'doctor flags carry.totalCell');
+  assert(out.includes('pre-carry') || out.includes('non-carry concept'), 'doctor identifies label issue');
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// Scenario-block detection
+// ---------------------------------------------------------------------------
+console.log('Testing: scenario-block detection');
+{
+  const gt = {};
+  // 5 scenario blocks, stride 92, on a sheet with common summary labels
+  for (let block = 0; block < 5; block++) {
+    const offset = block * 92;
+    for (let r = 1; r <= 80; r++) gt[`GPP Promote!B${offset + r}`] = `Detail ${block}-${r}`;
+    gt[`GPP Promote!B${offset + 1}`] = `Scenario ${block + 1}`;
+    gt[`GPP Promote!B${offset + 85}`] = 'Pre-Promote CF';
+    gt[`GPP Promote!B${offset + 86}`] = 'Post-Promote CF';
+    gt[`GPP Promote!B${offset + 87}`] = 'IRR';
+    gt[`GPP Promote!B${offset + 88}`] = 'Profit';
+    gt[`GPP Promote!B${offset + 89}`] = 'Peak Equity';
+    gt[`GPP Promote!B${offset + 90}`] = 'MoC';
+  }
+  const { manifest } = generateManifest(gt, { source: 'test.xlsx' });
+  const blocks = manifest.scenarioBlocks?.[0];
+  assert(blocks, 'scenarioBlocks populated');
+  assert(blocks?.blocks?.length === 5, `expected 5 blocks, got ${blocks?.blocks?.length}`);
+  assert(blocks?.stride === 92, 'stride = 92');
+  assert(blocks?.blocks?.[0]?.startRow === 1 && blocks?.blocks?.[0]?.endRow === 92,
+    `block 1 bounds: expected [1, 92], got [${blocks?.blocks?.[0]?.startRow}, ${blocks?.blocks?.[0]?.endRow}]`);
+  assert(blocks?.blocks?.[1]?.startRow === 93, 'block 2 starts at 93');
+  assert(blocks?.blocks?.[0]?.label === 'Scenario 1', `block 1 label: ${blocks?.blocks?.[0]?.label}`);
+}
+
+console.log('Testing: scenario-block detection skips non-repeating sheets');
+{
+  const gt = {};
+  // Flat sheet with no repeating pattern
+  for (let r = 1; r <= 100; r++) gt[`Flat!B${r}`] = `Unique label ${r}`;
+  const { manifest } = generateManifest(gt, { source: 'test.xlsx' });
+  assert((manifest.scenarioBlocks || []).length === 0, 'no false positives on flat sheet');
+}
+
+// ---------------------------------------------------------------------------
+// ete carry — smoke tests
+// ---------------------------------------------------------------------------
+console.log('Testing: ete carry against fixture');
+{
+  const out = run(`carry "${FIXTURES}"`);
+  assert(out.includes('Carry estimate'), 'carry renders header');
+  assert(out.includes('Peak equity'), 'carry shows peak');
+  assert(out.includes('MoC'), 'carry shows MoC');
+  assert(out.includes('GP carry'), 'carry shows GP total');
+}
+
+console.log('Testing: ete carry pure parametric mode');
+{
+  const out = run(`carry --peak 500000000 --moc 2.8 --life 4.7 --pref 0.08 --carry 0.20 --ownership 0.06 --no-catchup`);
+  // Expected: $136M total carry, $8.2M at 6% (session log's "direct formula")
+  assert(out.includes('$136'), `expected ~$136M total carry (session log), got: ${out.match(/GP carry:\s*\$[\d.]+[MBK]/)?.[0]}`);
+  assert(out.includes('$8.2M'), 'ownership share lands at $8.2M (6% of $136M)');
+}
+
+console.log('Testing: ete carry with catch-up');
+{
+  const out = run(`carry --peak 500000000 --moc 2.8 --life 4.7 --pref 0.08 --carry 0.20 --ownership 0.06`);
+  // With catch-up, GP total is higher (~$280M)
+  assert(out.includes('GP Catch-Up'), 'catch-up tier present by default');
+}
+
+console.log('Testing: ete carry errors on missing inputs');
+{
+  let errored = false;
+  try {
+    execSync(`node "${CLI}" carry`, { cwd: ROOT, encoding: 'utf-8' });
+  } catch (e) {
+    errored = true;
+  }
+  assert(errored, 'errors when no manifest and no --peak/--moc');
+}
+
+console.log('Testing: ete carry --irr solves hold period');
+{
+  const out = run(`carry --peak 500000000 --moc 2.8 --irr 0.165 --pref 0.08 --carry 0.20`);
+  assert(out.includes('solved from IRR'), 'indicates life solved from IRR');
+}
+
+// ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
 console.log('');

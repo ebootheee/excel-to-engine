@@ -161,6 +161,44 @@ Gross IRR: exitMultiple (rows) x exitYear (columns)
 22.0x          33.5%     27.4%     23.4%     20.5%
 ```
 
+### `ete carry` — Waterfall GP Carry Calculation
+
+```bash
+# Uses manifest's peak equity, pref, carry%, MoC
+node cli/index.mjs carry ./my-model/chunked/
+
+# Fully parametric (no manifest needed)
+node cli/index.mjs carry --peak 500e6 --moc 2.8 --life 4.7 --pref 0.08 --carry 0.20 --ownership 0.06
+
+# Solve hold period from IRR when cash flows are irregular
+node cli/index.mjs carry --peak 500e6 --moc 2.8 --irr 0.165 --ownership 0.06
+```
+
+**Output:**
+```
+Carry estimate (American waterfall)
+──────────────────────────────────────────────────
+Inputs:
+  Peak equity:    $500.0M
+  MoC (gross):    2.80×
+  Hold period:    4.70yr
+  Pref return:    8.0%
+  GP carry:       20.0%
+  Ownership:      6.00%
+
+Waterfall:
+  Return of Capital                    dist $500.0M   LP $500.0M   GP       $0
+  Preferred Return (8.0%)              dist $217.9M   LP $217.9M   GP       $0
+  GP Catch-Up                          dist $180.0M   LP       $0   GP $180.0M
+  Residual 80/20                       dist $502.1M   LP $401.7M   GP $100.4M
+
+Totals:
+  GP carry:       $280.4M   (31.2% of profit)
+  Your share:     $16.8M   (at 6.00% of GP carry)
+```
+
+Pass `--no-catchup` for pure 80/20-above-pref (no catch-up tier). Pass `--structure european` for aggregate-fund European waterfall.
+
 ### `ete compare` — Side-by-Side Analysis
 
 ```bash
