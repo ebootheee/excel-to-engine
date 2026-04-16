@@ -38,8 +38,10 @@ export function compute(ctx) {
   ctx.set("Cashflows!B5", ((ctx.get("Cashflows!B2") - ctx.get("Cashflows!B3")) - ctx.get("Cashflows!B4")));
 
   // ── Convergence loop (3 circular cells) ──
-  const _maxIter = 100;
-  const _tol = 1e-8;
+  const _maxIter = 200;
+  const _tol = 1e-6;
+  let _staleCount = 0;
+  let _prevDelta = Infinity;
   for (let _ci = 0; _ci < _maxIter; _ci++) {
     const _prev = [ctx.get("Cashflows!B6"), ctx.get("Cashflows!B7"), ctx.get("Cashflows!B9")];
     ctx.set("Cashflows!B6", (ctx.get("Cashflows!B9") * ctx.get("Assumptions!B5")));
@@ -47,7 +49,11 @@ export function compute(ctx) {
     ctx.set("Cashflows!B9", (ctx.get("Cashflows!B8") - (ctx.get("Cashflows!B7") * ctx.get("Assumptions!B9"))));
     ctx.set("Cashflows!B8", ctx.get("Assumptions!B6"));
     const _curr = [ctx.get("Cashflows!B6"), ctx.get("Cashflows!B7"), ctx.get("Cashflows!B9")];
-    if (_prev.every((v, i) => Math.abs(v - (_curr[i] || 0)) < _tol)) break;
+    const _delta = _prev.reduce((mx, v, i) => Math.max(mx, Math.abs(v - (_curr[i] || 0))), 0);
+    if (_delta < _tol) break;
+    _staleCount = (Math.abs(_delta - _prevDelta) < _tol * 0.01) ? _staleCount + 1 : 0;
+    if (_staleCount >= 5) break; // stale — values stopped improving
+    _prevDelta = _delta;
   }
 
   // ── Formula cells (post-cycle) ──

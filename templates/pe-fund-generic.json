@@ -1,0 +1,15 @@
+{
+  "$schema": "template-v1.0",
+  "name": "pe-fund-generic",
+  "description": "Generic PE fund model — Assumptions, Cash Flows, Waterfall, IRR, Summary tabs",
+  "signature": {
+    "sheetNames": ["Assumptions", "Cash Flows", "Waterfall", "IRR"]
+  },
+  "mappings": {
+    "_comment": "Generic skeleton — cell refs should be filled in per-fund. These are examples only."
+  },
+  "notes": [
+    "For PE funds, fund-level metrics (TVPI, DPI, netIRR, vintageYear) typically sit on a Summary or Cover sheet.",
+    "Use 'ete manifest doctor' after init to catch missing fields, then 'ete manifest set' to fill them."
+  ]
+}

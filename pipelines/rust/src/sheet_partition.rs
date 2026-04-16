@@ -347,6 +347,59 @@ pub fn extract_ground_truth(workbook: &WorkbookData) -> BTreeMap<String, serde_j
     gt
 }
 
+/// Extract a label index from the workbook. Maps lowercased label text to
+/// the list of cells containing that text. Enables O(1) label lookup instead
+/// of O(N) ground-truth scanning.
+///
+/// Output shape:
+///   { "total revenue": [ { "sheet": "Valuation", "col": "A", "row": 23,
+///                          "text": "Total Revenue" }, ... ], ... }
+pub fn extract_labels_index(workbook: &WorkbookData) -> serde_json::Value {
+    let mut index: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
+
+    for sheet in &workbook.sheets {
+        for cell in &sheet.cells {
+            if let Some(CellValue::Text(s)) = &cell.value {
+                let trimmed = s.trim();
+                // Skip near-empty and very long strings (unlikely to be labels)
+                if trimmed.len() < 2 || trimmed.len() > 200 {
+                    continue;
+                }
+                let key = trimmed.to_lowercase();
+                // Parse address into col + row
+                let (col, row) = split_address(&cell.address);
+                index.entry(key).or_default().push(serde_json::json!({
+                    "sheet": sheet.name,
+                    "col": col,
+                    "row": row,
+                    "text": trimmed,
+                }));
+            }
+        }
+    }
+
+    serde_json::to_value(index).unwrap_or(serde_json::Value::Object(Default::default()))
+}
+
+/// Split a cell address like "AA125" into ("AA", 125). Returns ("", 0) on parse failure.
+fn split_address(addr: &str) -> (String, u32) {
+    let mut col = String::new();
+    let mut row_str = String::new();
+    let mut in_row = false;
+    for c in addr.chars() {
+        if in_row {
+            row_str.push(c);
+        } else if c.is_ascii_alphabetic() {
+            col.push(c);
+        } else if c.is_ascii_digit() {
+            in_row = true;
+            row_str.push(c);
+        }
+    }
+    let row = row_str.parse::<u32>().unwrap_or(0);
+    (col, row)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

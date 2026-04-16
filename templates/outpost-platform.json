@@ -1,0 +1,29 @@
+{
+  "$schema": "template-v1.0",
+  "name": "outpost-platform",
+  "description": "8-sheet PE platform template (Version Tracker / Assumptions / Financial Statements / Equity / Debt / Valuation / GPP Promote / Cheat Sheet)",
+  "signature": {
+    "sheetNames": [
+      "Version Tracker",
+      "Assumptions",
+      "Financial Statements",
+      "Equity",
+      "Debt",
+      "Valuation",
+      "GPP Promote",
+      "Cheat Sheet"
+    ]
+  },
+  "mappings": {
+    "_comment": "Replace these placeholder cell refs with the actual cells for your deployment. Discover via: ete query <dir> --search 'Gross IRR' --sheet 'Cheat Sheet'",
+    "equity.classes[0].grossIRR": "Cheat Sheet!F15",
+    "equity.classes[0].grossMOIC": "Cheat Sheet!F14",
+    "equity.classes[0].netIRR": "Cheat Sheet!F18",
+    "equity.classes[0].netMOIC": "Cheat Sheet!F17"
+  },
+  "notes": [
+    "GPP Promote sheet typically has 5 stacked scenario blocks at rows 1-92, 93-184, 185-276, 277-368, 369-460.",
+    "carry.totalCell sits on the 'Cheat Sheet' near the IRR/MOIC summary — NOT on GPP Promote!AF25 (that cell is 'Total Cash Flows (pre-carry)').",
+    "basisCell is peak equity invested (in $M) — not the '5' label row on Assumptions."
+  ]
+}

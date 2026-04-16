@@ -1,5 +1,103 @@
 # excel-to-engine — Changelog
 
+## 2026-04-17 — V4 AI Interface Layer
+
+Reframe: this tool is an **AI-navigable index over complex Excel models**
+covering ~20-30 PE stakeholder use cases (analyst, VP, partner, LP,
+portfolio CFO, IR), not just carry/scenarios. Six priorities — all landed.
+See `PLAN_V4.md` for the full design.
+
+### Phase 1 — Label index (infrastructure)
+- **Rust parser** (`chunked_emitter.rs`, `sheet_partition.rs`) now emits
+  `chunked/_labels.json` during chunked emission: `{ labelLower → [{sheet, col, row, text}] }`.
+  One extra pass over string cells (~1% of total parse time).
+- **CLI** (`lib/manifest.mjs`) exports `loadLabelIndex()` and `buildLabelIndex()`.
+  `searchByLabel()` uses the index when present — eliminates the 30s-per-search
+  cost flagged in SESSION_LOG_02_carry.md. Fallback to GT scan when legacy engines
+  don't have the index file.
+
+### Phase 2 — Token-efficient output (`--compact`)
+- `cli/format.mjs` exports `toCompact()`. New `--compact` / `--format compact`
+  routes all commands through a compressor:
+  - Numbers rounded to 4 sig figs
+  - Null/undefined dropped
+  - Value-record objects renamed to short keys (`v`/`c`/`l`/`t`/`s`/`r`/`k`)
+- Measured: `ete query --search` output shrinks 4247 → 1461 bytes (~65% reduction).
+  Agents get 3× more questions per context window.
+
+### Phase 3 — `ete explain <name-or-cell>`
+New command. Full audit trail for any manifest name or cell reference:
+- Manifest path (which field maps here)
+- Cell reference + value
+- Adjacent label (column A/B on same row)
+- Formula (from `formulas.json` if present, else searches per-sheet `.mjs`)
+- Dependencies (from dependency graph if available)
+
+Use: `ete explain <modelDir> totalCarry` or `ete explain <modelDir> "Equity!AN125"`.
+
+### Phase 4 — Doctor-gated init + model-family templates
+- **Doctor gate:** `ete init` now runs `manifest doctor` after refine.
+  Errors abort init with non-zero exit. `--force` bypasses.
+- **Templates:** new `templates/` directory with `outpost-platform.json`,
+  `pe-fund-generic.json`, `re-fund-generic.json`. Each is a partial manifest
+  with pre-mapped cell references and a signature regex.
+- **`--template <name>`:** `ete init model.xlsx --template outpost-platform`
+  applies the template after auto-generation, overriding detected cells with
+  known-good mappings for the family.
+- **Auto-suggest:** when no template is specified, `init` checks whether the
+  model's sheet names match any known template (≥75% overlap) and prints a
+  suggestion.
+- **`ete manifest export <modelDir>`:** export a hand-corrected manifest as a
+  reusable template. Strips base-case values, keeps structural mappings.
+
+### Phase 5 — `ete eval <cell>` (chunked engine bridge)
+New command invokes the chunked engine to compute a cell using the actual
+transpiled Excel formulas. Escape hatch from the delta cascade (linear
+approximation) for non-linear scenarios: covenants, MIP, pref compounding
+with irregular calls, FX hedges. Supports `--inputs '{"Sheet!A1": value}'`
+to override base-case cells.
+
+### Phase 6 — Breadth of extraction primitives
+Manifest schema extensions + detectors + extraction command for the long
+tail of stakeholder questions:
+
+**New manifest sections:**
+- `fundLevel` — TVPI, DPI, RVPI, netIRR, vintageYear, fundSize, paidIn,
+  distributed, residualValue (LP-facing metrics)
+- `schedules[]` — time-series rows tagged with type: `capital_call`,
+  `distribution`, `debt_balance`, `debt_service`, `interest_expense`, `fee`,
+  `equity_invested`, `cash_flow`, `noi`
+- `covenants[]` — DSCR, LTV, ICR, leverage ratio, occupancy
+- `equity.classes[i].shares`, `.ownershipPct`, `equity.totalShares` (cap-table)
+- `debt.principal`, `.rate`, `.maturity` (debt-detail)
+- `carry.tiers[]` — detected waterfall tiers (return_of_capital, pref, catchup, residual)
+
+**New command:**
+- `ete extract <modelDir> [--list | --type <t> | --id <id>]` — retrieve any
+  detected schedule as `{year: value}` series + total.
+
+**New field ranges:** 12 new entries in `FIELD_RANGES` covering TVPI, DPI,
+RVPI, fund size, paid-in, distributed, vintage year, debt rate/principal,
+covenant ratio, ownership fraction. Used by `doctor` + detector validation.
+
+### Tests
+- 57 new assertions in `tests/cli/test-ai-interface.mjs`: label index,
+  compact output, explain, eval, extract, templates, every new detector.
+- Full test surface: **274 assertions** (34 CLI + 51 manifest + 57 AI-interface
+  + 132 use-case), all green.
+
+### Documentation
+- `skill/SKILL.md` — rewritten Intent→Command table organized by stakeholder:
+  analyst/VP (scenarios), LP (fund-level metrics + schedules), CFO (debt +
+  covenants + eval), audit ("why" questions via explain).
+- `README.md` — new "What AI agents can ask this tool" section with
+  representative questions per stakeholder.
+- `CLAUDE.md` — updated command count (12), added `extract`/`explain`/`eval`
+  to the reference table.
+- `templates/README.md` — template schema + how to build new ones.
+
+---
+
 ## 2026-04-16 (PM) — Carry Command + Label Hardening (SESSION_LOG_02_carry.md)
 
 Follow-on pass driven by a second 3-E2E-test session: computing "carry at 2.8×

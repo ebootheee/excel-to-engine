@@ -10,7 +10,7 @@
  * @license MIT
  */
 
-import { loadManifest, loadGroundTruth, resolveCell, searchByLabel } from '../../lib/manifest.mjs';
+import { loadManifest, loadGroundTruth, loadLabelIndex, resolveCell, searchByLabel } from '../../lib/manifest.mjs';
 import { formatOutput } from '../format.mjs';
 
 /**
@@ -23,6 +23,7 @@ import { formatOutput } from '../format.mjs';
 export function runQuery(modelDir, args) {
   const manifest = loadManifest(modelDir);
   const gt = loadGroundTruth(manifest, modelDir);
+  const index = loadLabelIndex(modelDir); // null if not emitted by parser (fallback: scan GT)
 
   // Mode 4: Label search
   if (args.search) {
@@ -31,6 +32,7 @@ export function runQuery(modelDir, args) {
       maxResults: args.limit || 20,
       context: args.context || 2,
       format: args.format,
+      index,
     });
   }
 
@@ -150,6 +152,7 @@ function queryBySearch(gt, pattern, options = {}) {
   const matches = searchByLabel(gt, pattern, {
     sheet: options.sheet,
     maxResults: options.maxResults,
+    index: options.index,
   });
 
   // Enrich with context rows

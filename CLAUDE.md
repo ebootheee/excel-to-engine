@@ -14,7 +14,7 @@ A toolkit for converting complex financial Excel models (.xlsx) into JavaScript 
 excel-to-engine/
 ├── cli/                             # Analysis CLI (the `ete` command)
 │   ├── index.mjs                    # Entry point + arg parsing
-│   ├── commands/                    # 9 commands: init, manifest, query, pnl, scenario, sensitivity, compare, carry, summary
+│   ├── commands/                    # 12 commands: init, manifest, query, pnl, scenario, sensitivity, compare, carry, extract, explain, eval, summary
 │   ├── extractors/                  # Date detector, annual aggregator, segment detector, waterfall detector, line-item resolver
 │   ├── solvers/                     # Delta cascade (financial math chain), scenario engine
 │   └── format.mjs                   # Output formatting (table, json, csv, markdown)
@@ -82,7 +82,17 @@ node cli/index.mjs compare ./my-model/chunked/ --base "" --alt "exit-multiple=16
 | `sensitivity` | 1D sweep or 2D surface across any parameter |
 | `compare` | Base vs alt, named scenarios, cross-model, attribution analysis |
 | `carry` | GP carry under waterfall (American/European, catch-up/no-catch-up, IRR-solved life) |
-| `manifest` | generate / validate / refine / **doctor** / **set** — always doctor first when trusting `totalCarry` / `basisCell` |
+| `extract` | Time-series schedules (capital calls, distributions, debt balances, fees, NOI, CF) |
+| `explain` | Audit trail for a manifest name or cell (manifest path → cell → label → value → formula) |
+| `eval` | Invoke the chunked engine to compute a cell using actual transpiled formulas |
+| `manifest` | generate / validate / refine / **doctor** / **set** / **export** — always doctor first when trusting `totalCarry` / `basisCell` |
+
+Use `--compact` on any command whose output you're consuming yourself (not
+showing to the user) — ~60% token savings vs `--format json`.
+
+The V4 pass added model-family templates at `templates/`. Apply with
+`ete init <xlsx> --template <name>`. Build new ones with
+`ete manifest export <dir>` and drop the result into `templates/`.
 
 ### Scenario Parameters (Full Set)
 

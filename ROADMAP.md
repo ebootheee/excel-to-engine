@@ -112,6 +112,33 @@
 
 ## Done
 
+### V4 AI Interface Layer (2026-04-17)
+- Rust parser emits `chunked/_labels.json` — O(1) label search (30s → <100ms on
+  200MB GT models)
+- `--compact` / `--format compact` output mode (~60% token savings)
+- `ete explain <name-or-cell>` — full audit trail (manifest → cell → label → value → formula)
+- `ete eval <cell>` — chunked-engine bridge for non-linear formulas with
+  `--inputs` override
+- `ete extract [--list | --type | --id]` — time-series schedules (capital
+  calls, distributions, debt balances, fees, NOI, CF, interest)
+- Manifest schema extensions: `fundLevel`, `schedules`, `covenants`,
+  `equity.classes[i].shares/ownershipPct`, `debt.principal/rate/maturity`,
+  `carry.tiers`
+- 7 new detectors: fund-level, schedules, cap-table, debt-details, carry tiers, covenants
+- Model-family templates (`templates/outpost-platform.json`, `pe-fund-generic`,
+  `re-fund-generic`) with auto-suggestion + `--template` application +
+  `ete manifest export` to build new ones
+- Doctor-gated init (exits non-zero on errors; `--force` to bypass)
+- 57 new test assertions (274 total, all green)
+
+### Deferred (acknowledged, not yet built)
+- Rent roll 2D table extraction (needs tabular detection heuristics)
+- MIP tier detection (too model-variable for generic detector)
+- FX hedge extraction (rare across model families)
+- Daemon / persistent-cache mode for CLI (cache manifest + GT across calls)
+- Richer dependency graph output for `ete explain` (requires chunked emitter
+  to persist formula→deps map)
+
 ### Carry Command + Label Hardening (2026-04-16 PM)
 - `ete carry` — waterfall GP carry command wrapping `lib/waterfall.mjs`
   (American + European structures, `--ownership`, `--combined`, `--no-catchup`,
