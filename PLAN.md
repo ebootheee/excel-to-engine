@@ -1,6 +1,13 @@
 # excel-to-engine — Plan
 
-## Status: V3 Implemented — Model Analysis CLI + Skill Layer (see PLAN_V3.md for design)
+## Status: V3 Implemented + Manifest Robustness Pass (2026-04-16)
+
+The CLI, manifest system, and skill layer are in production use. The most
+recent pass (2026-04-16) closed a cluster of auto-detection failures surfaced
+by a live run on two 76–83 MB Outpost Corporate Models — see CHANGELOG.md
+for the complete list. Core improvement: value-range validation now runs
+at manifest generation time (not just during refinement), blocking the
+cascade where a label artifact like `5` would produce a 7.2M× MOIC.
 
 ## Objective
 

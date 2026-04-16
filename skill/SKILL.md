@@ -32,16 +32,24 @@ node cli/index.mjs manifest refine ./my-model/chunked/ --apply
 Generate creates the base manifest. Refine searches the ground truth for key financial metrics (IRR, MOIC, equity basis, carry) using broad pattern matching and patches the manifest.
 
 ### If the manifest is missing key fields after auto-generation:
-Use `ete query --search` to find the cells manually, then patch the manifest:
+First, run the doctor to pinpoint exactly what's wrong:
+```bash
+node cli/index.mjs manifest doctor ./my-model/chunked/
+```
+Doctor flags each suspect mapping with its specific failure ("value 5 outside
+expected range [1e6, 5e10]") and prints the corrective query/set command.
+
+Then use `ete query --search` to locate the right cell and `ete manifest set`
+to patch the field (no hand-editing JSON required):
 ```bash
 # Find where IRR lives
 node cli/index.mjs query ./my-model/chunked/ --search "IRR"
-# Find carry
-node cli/index.mjs query ./my-model/chunked/ --search "Carry"
-# Find equity
-node cli/index.mjs query ./my-model/chunked/ --search "Equity"
+
+# Override the bad cell reference
+node cli/index.mjs manifest set ./my-model/chunked/ equity.classes[0].grossIRR "Cheat Sheet!F15"
 ```
-Then edit `manifest.json` to add the correct cell references to `equity.classes[0].grossIRR`, `carry.totalCell`, etc.
+`manifest set` verifies the cell exists in ground truth before writing, so a
+typo can't brick the manifest.
 
 ### Manifest is model-specific
 Each model gets its own `manifest.json` because cell addresses differ across spreadsheets. The manifest maps generic financial concepts (EBITDA, IRR, carry tiers) to specific cells in that model's ground truth. Once created, it's reused for all future queries and scenarios.

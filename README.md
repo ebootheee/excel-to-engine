@@ -189,9 +189,22 @@ node cli/index.mjs manifest generate ./my-model/chunked/
 # Smart refinement — searches for IRR, MOIC, carry, equity across all cells
 node cli/index.mjs manifest refine ./my-model/chunked/ --apply
 
+# Diagnose suspect cell mappings (out-of-range values, constant time-series)
+node cli/index.mjs manifest doctor ./my-model/chunked/
+
+# Override a single field (replaces the old "hand-patch JSON" workflow)
+node cli/index.mjs manifest set ./my-model/chunked/ equity.classes[0].grossIRR "Cheat Sheet!F15"
+
 # Validate all cell references resolve correctly
 node cli/index.mjs manifest validate ./my-model/chunked/manifest.json
 ```
+
+**Manifest robustness.** Auto-generation enforces value ranges on first-pass
+detection (e.g. `basisCell` must be between $1M and $50B, so a stray `5` never
+gets written), dedupes equity classes by `(sheet, row)`, and rejects segment
+rows whose values are constant across the timeline (scalar assumptions rather
+than P&L streams). When something still looks wrong, `ete manifest doctor`
+flags the specific field and suggests the fix command.
 
 ## Use with Claude Code
 

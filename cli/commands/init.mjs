@@ -8,7 +8,7 @@
  */
 
 import { execSync } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, unlinkSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
@@ -62,6 +62,24 @@ export function runInit(excelPath, args) {
       error: `Parser failed: ${e.message}`,
       _formatted: `Error: Rust parser failed.\n${e.stderr || e.message}`,
     };
+  }
+
+  // Clean up redundant root-level model-map.json in chunked mode. The CLI
+  // reads exclusively from chunked/. On large models the root file can be
+  // 600+ MB while serving no downstream consumer. Opt out with --keep-model-map.
+  if (!args.keepModelMap) {
+    const rootModelMap = join(absOutput, 'model-map.json');
+    const rootFormulas = join(absOutput, 'formulas.json');
+    if (existsSync(rootModelMap)) {
+      try {
+        const size = statSync(rootModelMap).size;
+        unlinkSync(rootModelMap);
+        if (size > 1e6) lines.push(`  Cleaned up redundant model-map.json (${(size / 1e6).toFixed(0)} MB)`);
+      } catch { /* ignore */ }
+    }
+    if (existsSync(rootFormulas)) {
+      try { unlinkSync(rootFormulas); } catch { /* ignore */ }
+    }
   }
 
   // Step 2: Generate manifest
@@ -124,6 +142,33 @@ export function runInit(excelPath, args) {
 
   lines.push('');
   lines.push(`Ready. Try: ete summary ${chunkedDir}`);
+
+  // Machine-readable quiet output: skips all the narrative, returns a
+  // compact JSON-ready summary for CI/agent contexts.
+  if (args.quiet) {
+    const m = manifestResult.manifest;
+    const quiet = {
+      ok: true,
+      outputDir: absOutput,
+      chunkedDir,
+      modelType: m?.model?.type,
+      sheets: m ? (Object.keys(new Set((Object.keys(m.baseCaseOutputs || {}))) )).length : undefined,
+      segments: m?.segments?.length || 0,
+      equityClasses: m?.equity?.classes?.length || 0,
+      timeline: m?.timeline ? {
+        investmentYear: m.timeline.investmentYear,
+        exitYear: m.timeline.exitYear,
+        periodicity: m.timeline.periodicity,
+      } : null,
+      baseCaseOutputs: m?.baseCaseOutputs || {},
+    };
+    return {
+      outputDir: absOutput,
+      chunkedDir,
+      manifest: manifestResult.manifest,
+      _formatted: JSON.stringify(quiet, null, 2),
+    };
+  }
 
   return {
     outputDir: absOutput,

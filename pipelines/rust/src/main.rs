@@ -128,7 +128,6 @@ fn main() {
     // We still need a quick stats-only pass for the formulas.json metadata.
     let t2 = Instant::now();
     let total_formulas: usize;
-    let parse_errors: usize;
     let formulas_path = output_dir.join("formulas.json");
     let formulas_written_size: usize;
     let formula_entries: Option<Vec<FormulaEntry>>;
@@ -136,7 +135,7 @@ fn main() {
     if chunked_flag {
         // Fast path: count formulas and write stats-only metadata (no transpilation)
         total_formulas = workbook.total_formula_cells;
-        parse_errors = 0; // not computed in fast path
+        // parse_errors is never read in chunked mode — chunked emitter reports its own
         formula_entries = None;
         let slim = serde_json::json!({
             "_compact": true,
@@ -154,7 +153,7 @@ fn main() {
     } else {
     let fe = build_formulas_json(&workbook);
     total_formulas = fe.len();
-    parse_errors = fe
+    let parse_errors = fe
         .iter()
         .filter(|e| e.parse_error.is_some())
         .count();

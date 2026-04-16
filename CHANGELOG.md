@@ -1,5 +1,70 @@
 # excel-to-engine — Changelog
 
+## 2026-04-16 — Manifest Robustness Pass (informed by 3-E2E-test session log)
+
+End-to-end run on two 76–83 MB Outpost Corporate Models surfaced a cluster of
+auto-detection failures that cascaded into garbage scenarios. All addressed here.
+
+### Fixed
+- **`basisCell` value-range validation on initial auto-generation.** Auto-gen
+  previously accepted the first numeric on an equity-labeled row regardless of
+  magnitude, so a `5` on `Assumptions!AI48` got written to manifest and produced
+  `MOIC = terminalValue / 5 = 7.2M×` on scenarios. Introduced shared
+  `FIELD_RANGES` + `inFieldRange()` in `lib/manifest.mjs` and enforced on
+  `detectEquity`, `detectOutputs` (terminal value, exit multiple, cap rate),
+  `detectCarry` (total carry, pref return), `detectDebt`, and `detectCustomCells`
+  (WACC, shares outstanding, price per share). The existing refiner reused the
+  same ranges.
+- **Equity class dedupe by `(sheet, row)`.** `detectEquity` produced 5 identical
+  `class-N` entries on both Outpost models because multiple "Equity Basis" /
+  "Capital Committed" labels on the same row each triggered a new class. Now
+  collapses to one class per row.
+- **Segment time-series validation.** `ete summary` showed "30 segments of $94K
+  repeats" because `detectSegments` grabbed any revenue/expense labeled row,
+  including scalar assumption rows that just replicated one number across year
+  columns. Added a timeline-aware check: segments must have ≥3 numeric values in
+  the timeline columns AND those values must vary by ≥0.1%.
+- **Rust build: 13 dead-code warnings → 0.** Cleaned up unused variable
+  destructures (`sheet_name`, `n_inputs`, `finished_v`, `loop_var`, `start`,
+  `saved_pos`, `input_cells`, dead `parse_errors` assignment). Marked
+  intentionally-retained helpers with `#[allow(dead_code)]` + reason comments
+  (`convert_vars_to_ctx_get`, `extract_cell_addr_from_var`, `ClusterCode` fields,
+  `ArrayLiteral` AST variant, `expect_comma`).
+
+### Added
+- **`ete manifest doctor <modelDir>`** — diagnoses suspect cell mappings after
+  the fact. Runs value-range checks on every scalar field, per-equity-class
+  metric, and time-series check on every segment. For each issue, reports the
+  bad cell + value + expected range, and suggests a corrective `ete query` /
+  `ete manifest set` command.
+- **`ete manifest set <modelDir> <path> <cellRef>`** — targeted single-cell
+  override for when auto-detection misses. Verifies the cell exists in ground
+  truth before writing, refreshes `baseCaseOutputs` when applicable, and
+  preserves manifest formatting. Replaces the "hand-patch JSON with Python"
+  workflow used in the session log.
+- **`ete summary` suspect-segment warnings.** Segments whose values are constant
+  across all years are marked inline with `⚠` and a footer note directs the
+  user to `ete manifest doctor`. Added `--terse` flag to hide suspect segments
+  for clean headline output.
+- **`ete init --quiet`** — machine-readable JSON summary instead of narrative
+  logs. For CI / agent contexts where init's 600+ lines of per-sheet progress
+  are noise.
+- **`ete init` now cleans up redundant root `model-map.json` + `formulas.json`.**
+  In chunked mode these files at the output root (up to 636 MB on large models)
+  are redundant — the CLI reads exclusively from `chunked/`. Opt out with
+  `--keep-model-map` for the eval pipeline.
+- **`tests/cli/test-manifest-improvements.mjs`** — 31 assertions covering range
+  validation edge cases, equity dedupe, segment time-series rejection, and
+  doctor/set end-to-end.
+- **`npm test`** runs the full suite: 34 CLI integration + 31 manifest + 132
+  use-case scenarios = 197 assertions, all green.
+
+### Session log reference
+See `3-E2E-test/SESSION_LOG.md` for the production workflow that exposed each
+of the above issues and what took manual intervention to work around.
+
+---
+
 ## 2026-04-15 — PLAN V3 Amended: PE-Focused CLI Design
 
 ### Amended: PLAN_V3.md

@@ -5,13 +5,16 @@
 ### CLI Field Testing
 - Run `ete` against all 6 production models (2-82 sheets)
 - Compare CLI scenario outputs to existing bespoke analysis scripts
-- Validate manifest auto-generation accuracy on real models
 - Test scenario file workflow end-to-end with PE team
 
-### Manifest Refinement
-- Improve auto-generation heuristics based on production model patterns
-- Add manual manifest editing guidance
-- Consider manifest migration tooling for model updates
+### Manifest Refinement (continuing)
+- Model-family templates (Outpost-like sheet templates: Version Tracker,
+  Assumptions, Financial Statements, Equity, Debt, Valuation, GPP Promote,
+  Cheat Sheet) — recognize the family and pick known cells directly.
+- Pre-indexed label→cell map built once during parsing (the session log noted
+  `manifest refine` took 2.5 min CPU on a 200 MB ground truth; a pre-index
+  from the Rust parser would cut this 10–100×).
+- Manifest migration tooling for model updates (vN → vN+1 shape diff).
 
 ---
 
@@ -108,6 +111,20 @@
 - Webhook for re-running eval on model changes
 
 ## Done
+
+### Manifest Robustness Pass (2026-04-16)
+- Enforced `FIELD_RANGES` value-range validation in manifest auto-generation
+  (`basisCell`, terminal value, exit multiple, carry, debt, WACC, shares, etc.)
+- Equity-class dedupe by `(sheet, row)`
+- Segment time-series validation (constant rows = scalar assumptions, rejected)
+- `ete manifest doctor` — diagnose suspect mappings with corrective commands
+- `ete manifest set` — targeted cell override (replaces hand-patched JSON)
+- `ete summary` flags suspect segments inline + `--terse` mode
+- `ete init --quiet` — machine-readable JSON summary for CI/agent contexts
+- `ete init` cleans up redundant root `model-map.json` / `formulas.json` in
+  chunked mode (`--keep-model-map` to opt out)
+- Rust build: 13 dead-code warnings → 0
+- 31-assertion test suite for manifest improvements + full `npm test` runner
 
 ### Security Hardening + Root Cause Fixes (2026-03-29)
 - Template literal `${}` injection blocked in cell value emission

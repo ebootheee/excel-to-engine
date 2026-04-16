@@ -66,7 +66,14 @@ export function runSummary(modelDir, args) {
       const last = annual[annualYears[annualYears.length - 1]];
       const cagr = annualYears.length >= 2 ? computeCAGR(first, last, annualYears.length - 1) : null;
 
-      summary.segments.push({ id, label: seg.label, type: seg.type, first, last, cagr });
+      // Suspect: row is constant across all years (likely a scalar assumption,
+      // not a P&L stream). Surfaces the issue without requiring a separate
+      // manifest doctor run.
+      const vals = annualYears.map(y => annual[y]).filter(v => typeof v === 'number');
+      const allEqual = vals.length >= 2 && vals.every(v => v === vals[0]);
+      const suspect = allEqual;
+
+      summary.segments.push({ id, label: seg.label, type: seg.type, first, last, cagr, suspect });
     }
 
     // EBITDA summary
@@ -98,7 +105,7 @@ export function runSummary(modelDir, args) {
   }
 
   // Format
-  summary._formatted = formatSummaryTable(summary);
+  summary._formatted = formatSummaryTable(summary, { terse: !!args.terse });
 
   if (args.format === 'json') {
     const { _formatted, ...data } = summary;
@@ -112,7 +119,8 @@ export function runSummary(modelDir, args) {
 // Formatting
 // ---------------------------------------------------------------------------
 
-function formatSummaryTable(s) {
+function formatSummaryTable(s, opts = {}) {
+  const { terse = false } = opts;
   const lines = [];
 
   // Header
@@ -124,18 +132,29 @@ function formatSummaryTable(s) {
   lines.push(`Period: ${s.timeline.investmentYear}–${s.timeline.exitYear} (${s.timeline.holdPeriod}yr, ${s.timeline.periodicity}) | Exit: ${s.timeline.exitYear}${multStr}`);
   lines.push('');
 
-  // Segments
-  if (s.segments.length > 0) {
+  // Segments — terse mode filters suspect (constant-value) rows
+  const visibleSegments = terse ? s.segments.filter(seg => !seg.suspect) : s.segments;
+  const suspectCount = s.segments.filter(seg => seg.suspect).length;
+
+  if (visibleSegments.length > 0) {
     const colW = 12;
     lines.push(padRight('Revenue Segments', 32) + padLeft('Start', colW) + padLeft('Exit', colW) + padLeft('CAGR', colW));
-    for (const seg of s.segments) {
+    for (const seg of visibleSegments) {
       const cagrStr = seg.cagr !== null ? fmtPct(seg.cagr) : '—';
+      const marker = seg.suspect ? ' ⚠' : '';
       lines.push(
-        padRight(`  ${seg.label}`, 32) +
+        padRight(`  ${seg.label}${marker}`, 32) +
         padLeft(fmtCur(seg.first), colW) +
         padLeft(fmtCur(seg.last), colW) +
         padLeft(cagrStr, colW)
       );
+    }
+    if (!terse && suspectCount > 0) {
+      lines.push('');
+      lines.push(`  ⚠ ${suspectCount} segment(s) have constant values across all years — likely scalar assumptions, not P&L streams.`);
+      lines.push(`    Run: ete manifest doctor <modelDir>  (or summary --terse to hide)`);
+    } else if (terse && suspectCount > 0) {
+      lines.push(`  (${suspectCount} suspect segment(s) hidden — run without --terse to show)`);
     }
     lines.push('');
   }

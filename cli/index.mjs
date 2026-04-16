@@ -91,9 +91,9 @@ async function main() {
       }
       case 'manifest': {
         const { runManifestCommand } = mod;
-        // ete manifest <subcommand> <path>
-        // args._[0]="manifest", args._[1]=subcommand, args._[2]=path
-        result = runManifestCommand(args._[1], args._[2], args);
+        // ete manifest <subcommand> <path> [extraArgs...]
+        // args._[0]="manifest", args._[1]=subcommand, args._[2]=path, args._[3..]=extra
+        result = runManifestCommand(args._[1], args._[2], args, args._.slice(3));
         break;
       }
     }
@@ -177,13 +177,13 @@ ete — excel-to-engine CLI
 
 Commands:
   init <model.xlsx>          Parse Excel model + generate manifest
-  summary <modelDir>         One-shot model overview
+  summary <modelDir>         One-shot model overview (--terse to hide suspects)
   query <modelDir> [args]    Query ground truth cells
   pnl <modelDir>             Extract annual P&L by segment
   scenario <modelDir>        Run scenario analysis
   sensitivity <modelDir>     Generate sensitivity surface
   compare <modelDir>         Compare scenarios or models
-  manifest <sub> <path>      Generate, validate, or refine manifest
+  manifest <sub> <path>      generate | validate | refine | doctor | set
 
 Query modes:
   ete query ./m/ "Sheet!A1"           Cell lookup
