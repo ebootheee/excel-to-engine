@@ -17,6 +17,12 @@ import { loadManifest, loadGroundTruth, resolveCell, MANIFEST_VERSION } from '..
 // Required fields and their search strategies
 // ---------------------------------------------------------------------------
 
+// Sheet-name hints: labels on these sheets get scored higher during refinement.
+// The pattern here is common across PE models — a dedicated summary/comparison
+// tab holds the clean, "final" number, while the same label on operational
+// tabs may point to a sub-total or per-period figure.
+const SUMMARY_SHEET_PATTERN = /^(cheat\s*sheet|uw\s*comparison|summary|valuation|cover|returns|dashboard|exec\s*summary)/i;
+
 const REQUIRED_FIELDS = [
   {
     key: 'equity.classes[0].grossIRR',
@@ -34,22 +40,27 @@ const REQUIRED_FIELDS = [
   },
   {
     key: 'equity.classes[0].grossMOIC',
+    // Accept MOIC, MoC, MoIC, MOC. Historical regex only matched `mo[ic]` which
+    // excluded `MOC` (no trailing IC). PE models frequently label this as
+    // "Gross MOC" or "Gross Multiple".
     label: 'Gross MOIC',
-    patterns: [/gross.*mo[ic]|mo[ic].*pre.*promot|multiple.*pre|pre.*promot.*mo[ic]|tvpi.*pre|moc.*pre/i],
+    patterns: [/gross.*mo(i?c|ic)\b|gross.*multiple|mo(i?c|ic).*pre.*promot|multiple.*pre|pre.*promot.*mo(i?c|ic)|tvpi.*pre/i],
     valueRange: [0.5, 20],
     valueHint: 'number 0.5-20 (e.g., 2.85)',
   },
   {
     key: 'equity.classes[0].netMOIC',
     label: 'Net MOIC',
-    patterns: [/net.*mo[ic]|mo[ic].*post.*promot|multiple.*post|post.*promot.*mo[ic]|tvpi.*post|moc.*post|lp.*mo[ic]/i],
+    patterns: [/net.*mo(i?c|ic)\b|net.*multiple|mo(i?c|ic).*post.*promot|multiple.*post|post.*promot.*mo(i?c|ic)|tvpi.*post|lp.*mo(i?c|ic)\b/i],
     valueRange: [0.5, 20],
     valueHint: 'number 0.5-20',
   },
   {
     key: 'equity.classes[0].basisCell',
+    // Broadened to catch "Peak Net Equity" and "Fund Size / Peak Net Equity"
+    // patterns that appear on Comparison/Summary tabs.
     label: 'Equity Basis / Peak Equity',
-    patterns: [/peak.*equity|equity.*basis|equity.*invested|total.*equity|committed.*capital|capital.*committed|equity.*drawn/i],
+    patterns: [/peak.*(net.*)?equity|fund.*size.*(\/|\s)\s*peak|equity.*basis|equity.*invested|total.*equity|committed.*capital|capital.*committed|equity.*drawn|max.*equity.*invested/i],
     valueRange: [1e6, 50e9],   // $1M to $50B
     valueHint: 'large number (equity invested)',
   },
@@ -125,6 +136,11 @@ export function runManifestRefine(modelDir, args) {
   // Pre-index for fast searching (single pass over GT)
   const index = buildIndex(gt);
 
+  // Resolve refinement hints: either passed in via args.hints (used by init
+  // when a template has been applied), or read from a hand-edited manifest
+  // (manifest._refineHints, if present).
+  const hints = args?.hints || manifest._refineHints || {};
+
   const report = {
     existing: {},     // Fields already mapped
     found: {},        // New fields found and patched
@@ -150,7 +166,7 @@ export function runManifestRefine(modelDir, args) {
     }
 
     // Search for this field using pre-index
-    const candidates = searchForFieldIndexed(index, field);
+    const candidates = searchForFieldIndexed(index, field, { hints });
 
     if (candidates.length === 0) {
       report.notFound.push(field.label);
@@ -159,11 +175,20 @@ export function runManifestRefine(modelDir, args) {
       report.found[field.label] = candidates[0];
       lines.push(`  + ${field.label}: ${candidates[0].cell} = ${formatVal(candidates[0].value)} (from "${candidates[0].labelText}")`);
     } else {
-      report.ambiguous[field.label] = candidates;
-      lines.push(`  ? ${field.label}: ${candidates.length} candidates`);
-      for (const c of candidates.slice(0, 3)) {
-        lines.push(`      ${c.cell} = ${formatVal(c.value)} (from "${c.labelText}")`);
-      }
+      // Multiple candidates — always pick the top-ranked one so the CLI has a
+      // usable binding, but record the full candidate list as `report.alternates`
+      // so downstream users can see what else was in play. The top candidate
+      // comes out of the ranking (summary-sheet → hinted col → non-zero →
+      // closest to label).
+      const best = candidates[0];
+      const otherSummary = candidates.slice(1).filter(c => c.onSummarySheet).length;
+      const otherNonSummary = candidates.length - 1 - otherSummary;
+      report.found[field.label] = best;
+      report.alternates = report.alternates || {};
+      report.alternates[field.label] = candidates.slice(1, 6);
+      const tag = best.onSummarySheet ? ' on summary tab' : '';
+      const note = `; ${candidates.length - 1} other candidate(s) available (${otherSummary} summary / ${otherNonSummary} other)`;
+      lines.push(`  + ${field.label}: ${best.cell} = ${formatVal(best.value)} (from "${best.labelText}"${tag}${note})`);
     }
   }
 
@@ -207,15 +232,28 @@ export function runManifestRefine(modelDir, args) {
 
 /**
  * Search for a field using the pre-built index (O(labels) instead of O(gt^2)).
+ *
+ * Candidate ranking (most → least preferred):
+ *   1. On a summary/comparison sheet (Cheat Sheet / UW Comparison / Summary /
+ *      Valuation / ...) — the "final" number usually lives here.
+ *   2. Match the template's declared scenario column when `opts.hints` carries
+ *      `scenarioColumns[sheet]` or `scenarioColumns.default`.
+ *   3. Non-zero value (a zero in a totals column is almost always a restated-
+ *      copy cell or an uninitialized sensitivity, not the answer).
+ *   4. Closer to the label's own column. Far-right restated copies (e.g. KU
+ *      when the real cell is D) lose to the canonical leftmost formula cell.
+ *
+ * Each preference applies only when it breaks a tie — so single-candidate
+ * rows are unaffected and plain sheets still work without templates.
  */
-function searchForFieldIndexed(index, field) {
+function searchForFieldIndexed(index, field, opts = {}) {
+  const hints = opts.hints || {};
+  const scenarioColumns = hints.scenarioColumns || {};
   const candidates = [];
 
   // Pass 1: Find label matches (scan pre-extracted labels only)
   const labelMatches = [];
   for (const label of index.labels) {
-    // Disqualifying patterns take precedence: reject labels that clearly
-    // describe a different concept even if they incidentally contain carry/promote.
     if (field.disqualifyingPatterns) {
       let disq = false;
       for (const p of field.disqualifyingPatterns) {
@@ -231,36 +269,66 @@ function searchForFieldIndexed(index, field) {
     }
   }
 
-  // Pass 2: For each label, look up same-row numeric values from index
+  // Pass 2: For each matching label, select the best same-row numeric cell.
   for (const lm of labelMatches) {
     const rowNums = index.numsByRow[lm.rowKey] || [];
+    const labelColNum = colToNum(lm.col);
 
     const inRange = rowNums.filter(n => {
       if (!field.valueRange) return true;
       return n.value >= field.valueRange[0] && n.value <= field.valueRange[1];
     });
+    if (inRange.length === 0) continue;
 
-    if (inRange.length > 0) {
-      // Prefer rightward columns (more likely to be the value)
-      inRange.sort((a, b) => colToNum(b.col) - colToNum(a.col));
-      const best = inRange[0];
-      candidates.push({
-        cell: best.addr,
-        value: best.value,
-        labelAddr: lm.addr,
-        labelText: lm.text.trim(),
-        sheet: lm.sheet,
-      });
-    }
+    // Template-hinted scenario column for this sheet (falls back to default).
+    const preferredCols = scenarioColumns[lm.sheet] || scenarioColumns.default || null;
+    const hitsHint = preferredCols && preferredCols.length
+      ? inRange.filter(n => preferredCols.includes(n.col))
+      : [];
+
+    // Prefer non-zero values when we have both zero and non-zero candidates.
+    const nonZero = inRange.filter(n => n.value !== 0);
+    const pool = hitsHint.length > 0
+      ? (hitsHint.some(n => n.value !== 0) ? hitsHint.filter(n => n.value !== 0) : hitsHint)
+      : (nonZero.length > 0 ? nonZero : inRange);
+
+    // Rank within the pool: closest to label column wins (ascending distance).
+    // Ties broken by ascending column index (leftmost) so restated "copy"
+    // cells at the far right can't shadow the canonical formula cell.
+    pool.sort((a, b) => {
+      const da = Math.abs(colToNum(a.col) - labelColNum);
+      const db = Math.abs(colToNum(b.col) - labelColNum);
+      if (da !== db) return da - db;
+      return colToNum(a.col) - colToNum(b.col);
+    });
+
+    const best = pool[0];
+    candidates.push({
+      cell: best.addr,
+      value: best.value,
+      labelAddr: lm.addr,
+      labelText: lm.text.trim(),
+      sheet: lm.sheet,
+      onSummarySheet: SUMMARY_SHEET_PATTERN.test(lm.sheet),
+      matchedHintCol: preferredCols ? preferredCols.includes(best.col) : null,
+    });
   }
 
-  // Deduplicate by cell
+  // Deduplicate by cell; then rank with summary-sheet candidates first.
   const seen = new Set();
-  return candidates.filter(c => {
+  const deduped = candidates.filter(c => {
     if (seen.has(c.cell)) return false;
     seen.add(c.cell);
     return true;
   });
+  deduped.sort((a, b) => {
+    if (a.onSummarySheet && !b.onSummarySheet) return -1;
+    if (!a.onSummarySheet && b.onSummarySheet) return 1;
+    if (a.matchedHintCol && !b.matchedHintCol) return -1;
+    if (!a.matchedHintCol && b.matchedHintCol) return 1;
+    return 0;
+  });
+  return deduped;
 }
 
 // ---------------------------------------------------------------------------
@@ -286,35 +354,23 @@ function applyPatches(manifest, found) {
   return patched;
 }
 
+// The array-aware nested setter. Path syntax uses dot + bracket for indices:
+//   "equity.classes[0].grossMOIC"
+// → parts ["equity", "classes", "0", "grossMOIC"]; arrays are auto-created when
+// the next key is numeric. Works identically to `setNested` in
+// cli/commands/manifest.mjs and init.mjs — the previous implementation here
+// had a subtle bug that wrote values into a nested "0" sub-object instead of
+// the target array element, silently losing every refiner patch.
 function setNestedField(obj, path, value) {
-  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.');
-  let current = obj;
-
+  const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  let cur = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const key = parts[i];
-    const nextKey = parts[i + 1];
-
-    if (!current[key]) {
-      current[key] = isNaN(nextKey) ? {} : [];
-    }
-
-    // Handle array index
-    if (Array.isArray(current[key])) {
-      const idx = parseInt(nextKey, 10);
-      if (!current[key][idx]) current[key][idx] = {};
-    }
-
-    current = Array.isArray(current[key]) ? current[key][parseInt(nextKey, 10)] : current[key];
-    if (Array.isArray(current)) {
-      // Skip the index part since we already navigated into it
-      i++;
-      if (i >= parts.length - 1) break;
-      if (!current[parts[i]]) current[parts[i]] = {};
-      current = current[parts[i]];
-    }
+    const nextIsIndex = /^\d+$/.test(parts[i + 1]);
+    if (cur[key] == null) cur[key] = nextIsIndex ? [] : {};
+    cur = cur[key];
   }
-
-  current[parts[parts.length - 1]] = value;
+  cur[parts[parts.length - 1]] = value;
 }
 
 // ---------------------------------------------------------------------------

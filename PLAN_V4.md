@@ -2,17 +2,17 @@
 
 ## Context
 
-Two production sessions against Outpost Corporate Models (SESSION_LOG.md,
-SESSION_LOG_02_carry.md) shipped in PR #8. A third conversation clarified
-the actual value prop: this is an **AI-navigable index over complex Excel
-models**, serving ~20-30 PE stakeholder use cases (analyst, VP, partner,
-LP, portfolio CFO, IR), not just the few use cases the session logs
-surfaced.
+Two production sessions (SESSION_LOG.md, SESSION_LOG_02_carry.md) shipped in
+PR #8. A third conversation clarified the actual value prop: this is an
+**AI-navigable index over complex Excel models**, serving ~20-30 PE
+stakeholder use cases (analyst, VP, partner, LP, portfolio CFO, IR), not
+just the few use cases the session logs surfaced.
 
-The previous plans optimized for "make the next Outpost session smoother."
-V4 optimizes for "answer anything an analyst, principal, partner, LP, or
-CFO might ask against any PE/RE/corp model — with token efficiency, fast
-lookup, auditability, and enough model-concept coverage."
+The previous plans optimized for "make the next session against this
+specific model family smoother." V4 optimizes for "answer anything an
+analyst, principal, partner, LP, or CFO might ask against any PE/RE/corp
+model — with token efficiency, fast lookup, auditability, and enough
+model-concept coverage."
 
 ## Scope — All six priorities from the reordered list
 
@@ -112,11 +112,11 @@ Catch bad auto-detection at parse time, and let teams reuse validated manifests 
 
 **Templates:**
 - New directory: `templates/`
-- Template files: `outpost-platform.json`, `pe-fund-generic.json`, `re-fund-generic.json` (2-3 starter templates based on known model families)
+- Template files: `pe-platform-summary.json`, `pe-fund-generic.json`, `re-fund-generic.json` (starter templates keyed by common model shapes)
 - Template = partial manifest with known cell refs + optional regex patterns to recognize the family
-- **Apply:** `ete init <xlsx> --template outpost-platform` uses the template's cell refs instead of auto-detection where possible; falls back to auto-detect for unmapped fields
-- **Export:** `ete manifest export <modelDir> --template > template.json` creates a reusable template from a hand-corrected manifest
-- **Auto-match:** during init (no --template specified), sample sheet names are hashed against template signatures — if a match is found, user is prompted to apply it
+- **Apply:** `ete init <xlsx> --template pe-platform-summary` uses the template's cell refs instead of auto-detection where possible; falls back to auto-detect for unmapped fields
+- **Export:** `ete manifest export <modelDir> > template.json` creates a reusable template from a hand-corrected manifest
+- **Auto-match:** during init (no --template specified), sheet names are matched against template signatures — strong matches are auto-applied
 
 ### Touchpoints
 - `cli/commands/init.mjs` — doctor check + template flag
@@ -126,7 +126,7 @@ Catch bad auto-detection at parse time, and let teams reuse validated manifests 
 - `README.md` — document templates
 
 ### Templates to ship
-1. `outpost-platform.json` — 8-sheet GreenPoint/Outpost platform template
+1. `pe-platform-summary.json` — PE platform family that organizes around a dedicated summary/comparison tab plus a separate promote tab
 2. `pe-fund-generic.json` — traditional PE fund (Assumptions, Cash Flows, Waterfall, IRR tabs)
 3. `re-fund-generic.json` — RE fund (Rent Roll, NOI, Cap Rate, Waterfall tabs)
 

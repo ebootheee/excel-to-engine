@@ -38,7 +38,7 @@
     "setup": "npm install && cd eval && npm install && echo 'Setup complete. Build Rust parser: cd pipelines/rust && cargo build --release'",
     "check-env": "node scripts/check-env.mjs",
     "smoke": "node pipelines/rust/tests/smoke-chunked.mjs",
-    "test": "node tests/cli/test-cli.mjs && node tests/cli/test-manifest-improvements.mjs && node tests/cli/test-ai-interface.mjs && node tests/cli/use-case-suite.mjs"
+    "test": "node tests/cli/test-cli.mjs && node tests/cli/test-manifest-improvements.mjs && node tests/cli/test-ai-interface.mjs && node tests/cli/test-e2e4-fixes.mjs && node tests/cli/test-ship-ready.mjs && node tests/cli/use-case-suite.mjs"
   },
   "devDependencies": {}
 }

@@ -17,7 +17,8 @@
  */
 
 import {
-  loadManifest, loadGroundTruth, resolveCell, resolveBaseCaseOutputs,
+  loadManifest, loadGroundTruth, loadLabelIndex, resolveCell,
+  resolveBaseCaseOutputs, searchByLabel, inFieldRange,
 } from '../../lib/manifest.mjs';
 import {
   computeWaterfall, createAmericanWaterfall, createEuropeanWaterfall,
@@ -33,13 +34,16 @@ import {
 export function runCarryCommand(modelDir, args) {
   let manifest = null;
   let baseOutputs = {};
+  let gt = null;
+  let labelIndex = null;
 
   // modelDir is optional — pure parametric mode works without a manifest.
   if (modelDir) {
     try {
       manifest = loadManifest(modelDir);
-      const gt = loadGroundTruth(manifest, modelDir);
+      gt = loadGroundTruth(manifest, modelDir);
       baseOutputs = resolveBaseCaseOutputs(manifest, gt);
+      labelIndex = loadLabelIndex(modelDir);
     } catch (e) {
       if (!args.peak || !args.moc) {
         return { error: `Could not load manifest from ${modelDir}. Provide --peak and --moc to run without a manifest. (${e.message})` };
@@ -47,7 +51,50 @@ export function runCarryCommand(modelDir, args) {
     }
   }
 
-  const inputs = resolveInputs(manifest, baseOutputs, args);
+  // Model-first path: when the manifest has a valid `carry.totalCell` AND the
+  // user hasn't asked for a parametric sensitivity (`--peak` or `--moc`
+  // overrides), return the model's OWN computed carry directly. The model's
+  // waterfall may use a different structure (multi-tier IRR hurdles, no
+  // catch-up, MIP overlays) than our parametric approximation, so trusting
+  // the model's cell is more accurate than re-running a generic waterfall.
+  // Pass `--parametric` to force the generic computation.
+  if (
+    manifest?.carry?.totalCell &&
+    gt &&
+    !args.peak && !args.moc && !args.parametric
+  ) {
+    const totalCarry = resolveCell(gt, manifest.carry.totalCell);
+    if (typeof totalCarry === 'number' && totalCarry !== 0) {
+      let ownership = num(args.ownership);
+      if (ownership != null && ownership > 1.001) ownership = ownership / 100;
+      const ownerShare = ownership != null ? totalCarry * ownership : null;
+
+      const lines = [];
+      lines.push(`Carry (from model's own waterfall)`);
+      lines.push('─'.repeat(50));
+      lines.push(`  Total carry:    ${fmtCur(totalCarry)}`);
+      lines.push(`  Source:         ${manifest.carry.totalCell} (manifest.carry.totalCell)`);
+      if (ownership != null) {
+        lines.push(`  Ownership:      ${(ownership * 100).toFixed(2)}%`);
+        lines.push(`  Your share:     ${fmtCur(ownerShare)}`);
+      }
+      lines.push('');
+      lines.push('  Uses the model\'s own computed Total Carry cell — exact to whatever');
+      lines.push('  waterfall structure the model implements. Pass --parametric to run');
+      lines.push('  the generic American/European waterfall against --peak/--moc/--irr.');
+
+      return {
+        source: 'model',
+        totalCarry,
+        ownerShare,
+        cell: manifest.carry.totalCell,
+        ownership,
+        _formatted: lines.join('\n'),
+      };
+    }
+  }
+
+  const inputs = resolveInputs(manifest, baseOutputs, args, { gt, labelIndex, caseColumn: args.case || null });
   if (inputs.error) return inputs;
 
   // Build the waterfall
@@ -93,11 +140,15 @@ export function runCarryCommand(modelDir, args) {
 // Input resolution — CLI args → manifest → sensible defaults
 // ---------------------------------------------------------------------------
 
-function resolveInputs(manifest, base, args) {
+function resolveInputs(manifest, base, args, ctx = {}) {
+  const { gt = null, labelIndex = null, caseColumn = null } = ctx;
+
   // Peak equity
   let peak = num(args.peak);
+  let peakSource = null;
   if (peak == null) {
     peak = num(base.equityBasis);
+    if (peak != null) peakSource = 'manifest';
   }
   if (peak == null && manifest?.equity?.classes?.length) {
     // Sum all equity classes with basisCell if multiple (e.g., "combined" scenario)
@@ -108,8 +159,13 @@ function resolveInputs(manifest, base, args) {
         if (ec.id && base[`${ec.id}.equityBasis`] != null) vals.push(base[`${ec.id}.equityBasis`]);
       }
     }
-    if (vals.length && args.combined) peak = vals.reduce((a, b) => a + b, 0);
-    else if (vals.length) peak = vals[0];
+    if (vals.length && args.combined) { peak = vals.reduce((a, b) => a + b, 0); peakSource = 'manifest-combined'; }
+    else if (vals.length) { peak = vals[0]; peakSource = 'manifest'; }
+  }
+  if (peak == null && gt) {
+    const fb = fallbackSearch(gt, labelIndex, PEAK_PATTERNS, 'basisCell', caseColumn);
+    if (fb.kind === 'single') { peak = fb.value; peakSource = `label:${fb.cell}`; }
+    else if (fb.kind === 'ambiguous') return { error: formatFallbackError('Peak equity', '--peak <dollars>', fb, 'basisCell') };
   }
   if (peak == null) {
     return { error: 'Peak equity not determined. Pass --peak <dollars>, or ensure the manifest has equity.classes[0].basisCell set (verify with: ete manifest doctor).' };
@@ -117,7 +173,16 @@ function resolveInputs(manifest, base, args) {
 
   // MoC (gross)
   let moc = num(args.moc);
-  if (moc == null) moc = num(base.grossMOIC);
+  let mocSource = null;
+  if (moc == null) {
+    moc = num(base.grossMOIC);
+    if (moc != null) mocSource = 'manifest';
+  }
+  if (moc == null && gt) {
+    const fb = fallbackSearch(gt, labelIndex, MOC_PATTERNS, 'grossMOIC', caseColumn);
+    if (fb.kind === 'single') { moc = fb.value; mocSource = `label:${fb.cell}`; }
+    else if (fb.kind === 'ambiguous') return { error: formatFallbackError('MoC', '--moc <multiple>', fb, 'grossMOIC') };
+  }
   if (moc == null) {
     return { error: 'MoC not determined. Pass --moc <multiple>, or ensure the manifest has equity.classes[0].grossMOIC set.' };
   }
@@ -137,7 +202,11 @@ function resolveInputs(manifest, base, args) {
     }
   }
   if (life == null) {
-    const irr = num(args.irr) ?? num(base.grossIRR);
+    let irr = num(args.irr) ?? num(base.grossIRR);
+    if (irr == null && gt) {
+      const fb = fallbackSearch(gt, labelIndex, IRR_PATTERNS, 'grossIRR', caseColumn);
+      if (fb.kind === 'single') irr = fb.value;
+    }
     if (irr != null && irr > 0 && moc > 1) {
       life = Math.log(moc) / Math.log(1 + irr);
       lifeInferredFromIRR = true;
@@ -151,7 +220,109 @@ function resolveInputs(manifest, base, args) {
   let ownership = num(args.ownership);
   if (ownership != null && ownership > 1.001) ownership = ownership / 100;
 
-  return { peak, moc, pref, carry, life, ownership, lifeInferredFromIRR };
+  return { peak, moc, pref, carry, life, ownership, lifeInferredFromIRR, peakSource, mocSource };
+}
+
+// ---------------------------------------------------------------------------
+// Label-search fallback — when the manifest hasn't bound a field, look it up
+// by label so a first-time user doesn't have to hand-wire the manifest before
+// getting a carry number out.
+// ---------------------------------------------------------------------------
+
+const PEAK_PATTERNS = [
+  /peak\s*net\s*equity/i,
+  /fund\s*size.*peak/i,
+  /peak\s*equity/i,
+  /equity\s*basis/i,
+  /max\s*equity\s*invested/i,
+  /equity\s*invested/i,
+];
+
+const MOC_PATTERNS = [
+  /gross\s*mo(i?c|ic)\b/i,
+  /gross\s*multiple/i,
+  /gross\s*mult\b/i,
+];
+
+const IRR_PATTERNS = [
+  /gross\s*irr/i,
+  /levered\s*irr/i,
+  /fund\s*irr/i,
+];
+
+/**
+ * Search the ground truth for any of `patterns`, keeping only matches whose
+ * adjacent numeric value passes `rangeField`'s validation. When `caseColumn`
+ * is provided, the value from that column is preferred; otherwise the
+ * rightmost in-range value on each match row is taken.
+ *
+ * Returns one of:
+ *   { kind: 'none' }
+ *   { kind: 'single', value, cell, label }
+ *   { kind: 'ambiguous', candidates }  (caller prints them and errors)
+ */
+function fallbackSearch(gt, labelIndex, patterns, rangeField, caseColumn) {
+  const found = [];
+  const seen = new Set();
+  for (const pattern of patterns) {
+    const matches = searchByLabel(gt, pattern.source, {
+      regex: true,
+      index: labelIndex,
+      caseColumn,
+      maxResults: 25,
+    });
+    for (const m of matches) {
+      const key = `${m.sheet}!${m.col}${m.row}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      let pick = null;
+      if (caseColumn) {
+        const col = String(caseColumn).toUpperCase();
+        const hit = m.values.find(v => v.col === col && inFieldRange(rangeField, v.value));
+        if (hit) pick = { value: hit.value, cell: `${m.sheet}!${col}${m.row}` };
+      }
+      if (!pick) {
+        const inRange = m.values.filter(v => inFieldRange(rangeField, v.value));
+        if (inRange.length === 0) continue;
+        inRange.sort((a, b) => colLetterRank(b.col) - colLetterRank(a.col));
+        pick = { value: inRange[0].value, cell: `${m.sheet}!${inRange[0].col}${m.row}` };
+      }
+
+      found.push({ value: pick.value, cell: pick.cell, label: m.label, sheet: m.sheet });
+    }
+  }
+
+  if (found.length === 0) return { kind: 'none' };
+  if (found.length === 1) return { kind: 'single', ...found[0] };
+
+  // Dedupe by numeric value — a handful of labels often resolve to the same
+  // cell when the summary tab restates the same number in multiple places.
+  const byValue = new Map();
+  for (const f of found) {
+    if (!byValue.has(f.value)) byValue.set(f.value, f);
+  }
+  if (byValue.size === 1) {
+    return { kind: 'single', ...byValue.values().next().value };
+  }
+  return { kind: 'ambiguous', candidates: Array.from(byValue.values()).slice(0, 8) };
+}
+
+function formatFallbackError(field, flagHint, fb, rangeField) {
+  const lines = [`${field} not determined (multiple label candidates found — pass ${flagHint} or bind the field in manifest).`];
+  lines.push('Candidates:');
+  for (const c of fb.candidates) {
+    lines.push(`  ${c.cell}: ${c.value}  (from "${c.label}" on ${c.sheet})`);
+  }
+  lines.push(`To resolve, pick one and re-run with ${flagHint} <value>, or run:`);
+  lines.push(`  ete manifest set <modelDir> equity.classes[0].${rangeField} <cellRef>`);
+  return lines.join('\n');
+}
+
+function colLetterRank(col) {
+  let n = 0;
+  for (let i = 0; i < col.length; i++) n = n * 26 + (col.charCodeAt(i) - 64);
+  return n;
 }
 
 function num(v) {
@@ -174,8 +345,8 @@ function formatCarry({ inputs, structure, result, ownerShare, inferredLifeFromIR
   L.push(`Carry estimate (${structure === 'european' ? 'European' : 'American'} waterfall)`);
   L.push('─'.repeat(50));
   L.push('Inputs:');
-  L.push(`  Peak equity:    ${fmtCur(inputs.peak)}`);
-  L.push(`  MoC (gross):    ${inputs.moc.toFixed(2)}×`);
+  L.push(`  Peak equity:    ${fmtCur(inputs.peak)}${inputs.peakSource && inputs.peakSource.startsWith('label:') ? `  (via label lookup at ${inputs.peakSource.slice(6)})` : ''}`);
+  L.push(`  MoC (gross):    ${inputs.moc.toFixed(2)}×${inputs.mocSource && inputs.mocSource.startsWith('label:') ? `  (via label lookup at ${inputs.mocSource.slice(6)})` : ''}`);
   L.push(`  Hold period:    ${inputs.life.toFixed(2)}yr${inferredLifeFromIRR ? '  (solved from IRR: n = ln(MoC) / ln(1+IRR))' : ''}`);
   L.push(`  Pref return:    ${(inputs.pref * 100).toFixed(1)}%`);
   L.push(`  GP carry:       ${(inputs.carry * 100).toFixed(1)}%`);

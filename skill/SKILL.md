@@ -9,6 +9,36 @@ Use the compact output mode (`--compact` or `--format compact`) whenever you're
 consuming output yourself rather than presenting to the user — it cuts tokens
 ~60% compared to `--format json`.
 
+## Core rules — read before you run anything
+
+These are the non-negotiables. Ignoring them is how sessions stall.
+
+1. **Never walk cell coordinates to search for a concept.** If you don't know
+   where something lives, run `ete query --search "<label>"` — the label
+   index makes it effectively free. Do NOT run sequential queries like
+   `query H213`, `H214`, `H215`, ... one per cell. That pattern looks cheap
+   (~2 s per call) but burns minutes while learning nothing the index
+   couldn't tell you in one call. If you catch yourself probing a second
+   coordinate on the same sheet, stop and label-search instead.
+2. **Assume + verify beats probe + prove.** For analyst-style questions
+   ("which column is the base case?", "which row has exit MoC?"), pick the
+   conventional answer (leftmost scenario column, summary-sheet row),
+   compute the downstream number, then sanity-check it against one
+   cross-reference — not by reverse-engineering the sheet layout. The user
+   asked for an answer, not a proof.
+3. **Templates do the guessing for you when they match.** `ete init` auto-
+   applies a template when the model's sheet set matches a known family
+   (printed as `Template auto-applied: <name>`). Read the template's
+   `hints` block — it tells you which tab holds the summary numbers and
+   which column is the base case. If a template applied, stop trying to
+   discover those things from scratch.
+4. **When in doubt, ask the user.** "Base case", "peak equity basis",
+   "which waterfall tab" are all user-domain calls. A one-line clarifying
+   question beats a 60-cell investigation.
+5. **`--search` is literal by default.** Paste phrases naturally:
+   `ete query ./m --search "Gross (portfolio)"` just works. Add
+   `--regex` only when you actually want regex semantics.
+
 ## Triggers
 
 General:
@@ -47,18 +77,22 @@ node cli/index.mjs init model.xlsx --output ./my-model/
 ```
 This runs: parse → auto-generate manifest → refine (smart search for IRR/MOIC/carry/equity) → **doctor validation** → summary.
 
-As of V4, `init` exits non-zero if `doctor` finds errors (bad basisCell,
-suspect carry.totalCell, etc.). Pass `--force` to override. This prevents
-downstream scenarios from running against a broken manifest.
+As of 2026-04-17, `init` **soft-fails** on doctor errors: bad fields are
+quarantined (set to null) and the init still exits 0 with a working chunked
+directory. The command prints each quarantined field and the one-liner to
+fix it. Pass `--strict` to restore hard-fail (useful for CI). `--force` is
+accepted as a no-op alias.
 
-If the model matches a known family, init prints a template suggestion. Apply
-it explicitly:
+If the model's sheet set matches a known family signature, init auto-applies
+that template (printing `Template auto-applied: <name>`). Pass `--no-template`
+to opt out for the run, or select a specific one with `--template <name>`:
 ```bash
-node cli/index.mjs init model.xlsx --output ./my-model/ --template outpost-platform
+node cli/index.mjs init model.xlsx --output ./my-model/ --template pe-platform-summary
 ```
-Templates pre-map cells for known model families — skip auto-detection guesswork
-for fields the template already knows. See `templates/` for available templates
-and `templates/README.md` for building your own.
+Templates contribute layout hints (summary-tab preference, base-case column
+convention, peak-equity vocabulary) that steer the refiner, plus optional
+pre-mapped cell refs. See `templates/` for available templates and
+`templates/README.md` for building your own.
 
 ### If a chunked directory exists but no manifest:
 ```bash
@@ -108,7 +142,9 @@ label index makes it effectively free and avoids irrelevant matches.
 **Finding things:**
 | Intent | Command |
 |---|---|
-| "What is X?" / "Find X" | `ete query --search "X" --sheet "Name"` |
+| "What is X?" / "Find X" | `ete query --search "X" --sheet "Name"` (literal substring by default) |
+| "Find X under base case column H" | `ete query --search "X" --case H` (prefers column H's value) |
+| "Find with a regex pattern" | `ete query --search "Gross.*IRR" --regex` |
 | "Why is this number X?" / "Where does X come from?" | `ete explain <name-or-cell>` (shows manifest path, cell, value, adjacent label, formula) |
 | "Summarize the model" | `ete summary` |
 | "List all the scenario blocks on this sheet" | `ete summary` (section at bottom) |
@@ -137,10 +173,19 @@ label index makes it effectively free and avoids irrelevant matches.
 **Carry, returns, LP metrics:**
 | Intent | Command |
 |---|---|
-| "What's the carry at X MoC?" | `ete carry --moc X [--ownership Y]` |
-| "Carry on $500M combined at 2.8x with 6% ownership?" | `ete carry --peak 500e6 --moc 2.8 --life 4.7 --ownership 0.06` |
+| "What's the carry?" (use the model's own number) | `ete carry <modelDir> [--ownership Y]` — returns `manifest.carry.totalCell × ownership`, exact to the model's own waterfall |
+| "What-if carry at a different MoC?" | `ete carry <modelDir> --parametric --moc X [--ownership Y]` or `ete carry --peak ... --moc ... --irr ...` (parametric) |
+| "Compare European vs American waterfall" | `ete carry --parametric --structure european` vs `--structure american` |
 | "TVPI / DPI / RVPI" | `ete query --name tvpi` (etc.) — populated from `manifest.fundLevel` |
 | "Vintage year" / "Fund size" | `ete query --name vintageYear` / `--name fundSize` |
+
+The default path reads `manifest.carry.totalCell` — the cell the model
+itself computes carry in. This is the most accurate answer because the
+model may use a non-standard tier structure (IRR-hurdle bands, no full
+catch-up, MIP overlays) that a parametric waterfall can't replicate.
+Use `--parametric` only when you want a what-if at different inputs than
+the model is running, or when the manifest doesn't have `carry.totalCell`
+bound.
 
 **Exact formula evaluation (when linear approximation breaks):**
 | Intent | Command |
