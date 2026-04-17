@@ -187,8 +187,11 @@ console.log('Testing: template name no longer contains any proprietary identifie
 // ---------------------------------------------------------------------------
 console.log('Testing: ete carry uses manifest fields when present (baseline)');
 {
+  // Default path now uses model's totalCell if non-zero — accept either the
+  // model-first or parametric output shape as long as "Your share" renders.
   const out = run(`carry "${FIXTURES}" --ownership 0.1`);
-  assert(/GP carry/i.test(out) && /Your share/i.test(out), 'carry runs with manifest-backed inputs');
+  assert(/Your share/i.test(out) && (/GP carry/i.test(out) || /Total carry/i.test(out)),
+    'carry runs with manifest-backed inputs');
 }
 
 console.log('Testing: ete carry pure parametric mode still works');

@@ -1,5 +1,75 @@
 # excel-to-engine — Changelog
 
+## 2026-04-17 — Ship-readiness pass (accuracy verification + refiner hardening)
+
+A live accuracy check ran `ete carry` against two real PE platform models and
+compared the outputs to the models' own computed carry cells in Excel. The
+check found that the CLI's answer was ~3× the model's real number, exposing
+seven bugs that silently produced "plausible but wrong" outputs. All seven
+are fixed, with a 63-assertion ship-ready test battery gating regressions.
+
+### Fixes
+
+1. **Array-path corruption in the refiner** (critical, silent). The previous
+   `setNestedField` walked `equity.classes[0].grossMOIC` as
+   `equity → classes → 0 → grossMOIC` and wrote the value to a nested `"0"`
+   sub-object instead of to the target class. Every refiner patch for
+   `equity.classes[i].grossMOIC / grossIRR / netMOIC / netIRR` had been
+   landing in a dead key — which is why `ete carry` from manifest kept
+   erroring with "MoC not determined" even when the refine report said 8/8
+   coverage. Replaced with the simpler iterative setter used by init.mjs
+   and manifest.mjs.
+2. **Refiner rejects zero-valued candidates when non-zero alternatives
+   exist.** `carry.totalCell` used to bind to a restated-copy column cell
+   that happened to be zero (e.g. `GPP Promote!KU88 = 0` shadowing
+   `D88 = $41.6M`), because `0` passed the `[0, 10e9]` range check. Now
+   any non-zero same-row candidate wins over zero. Safe across every
+   caller because a zero total/basis is overwhelmingly wrong.
+3. **Refiner + `pickRightmostInRange` prefer "closest-to-label" when
+   given a labelCol anchor.** Paired with (2), this fixes the D-vs-KU
+   trap: the label at column B anchors the search, the canonical formula
+   cell in column D wins over restated copies in column KU. Time-series
+   rows (e.g. `Debt Balance` with per-year values) still fall back to
+   rightmost when no anchor is supplied.
+4. **Doctor flags zero-value `totalCell` / `basisCell` / `terminalValue` /
+   `exitMultiple` / `wacc` / `sharesOutstanding` / `pricePerShare` as
+   errors.** New `mustBeNonZero: true` flag on `DOCTOR_FIELDS`. Zero debt
+   at exit is still legal (post-refi models).
+5. **`ete carry` model-first path.** When `manifest.carry.totalCell`
+   resolves to a non-zero number and the user hasn't passed `--peak` /
+   `--moc` / `--parametric`, the command returns the model's own computed
+   carry × ownership. No parametric re-compute, no waterfall-structure
+   guessing — exact to whatever tier structure (IRR hurdle bands, MIP
+   overlays, catch-up variants) the model implements.
+6. **Template `hints.scenarioColumns` drives refiner column selection.**
+   Init now runs template-apply BEFORE refine, threading the template's
+   hints block into the refiner. Candidates in the template's declared
+   base-case column rank above the same label in other scenario columns.
+7. **`--search` token fallback for non-contiguous substrings.** Pasting
+   `"Gross MOIC"` now matches labels like
+   `"Gross (post carry, pre-fees / expenses / carry) MOIC"` — the literal
+   substring fails but the token AND-match ("Gross" and "MOIC" both
+   present as words) succeeds. Requires ≥2 tokens to avoid
+   false-positives on single terms. `--regex` still honored; invalid
+   regex silently falls back.
+8. **Refiner picks top candidate when multiple summary-sheet entries
+   compete.** A file with repeated summary blocks (e.g. Post-MIP MOIC
+   shown on both "A-1 Management" and "A-1 TVP" rows) now binds to the
+   top-ranked candidate and records alternates in the refine report,
+   instead of leaving the field unbound as "ambiguous".
+
+### Tests
+- +63 ship-ready assertions in `tests/cli/test-ship-ready.mjs` covering
+  adversarial refiner layouts, search edge cases (regex / literal / token
+  fallback), doctor zero-value flags, `ete carry` routing matrix,
+  end-to-end synthetic platform fixture, and real-world stressors
+  (unicode, mixed types, null equity, long labels, idempotent refinement).
+- Total assertion count: 363 (34 + 54 + 57 + 23 + 63 + 132).
+- Rust smoke: 78/78. Cargo build: zero warnings.
+- Verified on two live 77-84 MB PE platform models: `ete carry` now
+  returns `$2.5M` (A-1) and `$4.7M` (A-2) at 6% ownership — matching the
+  models' own Total Carried Interest cells exactly.
+
 ## 2026-04-17 — Post-SESSION_LOG-4 workflow + auto-gen fixes
 
 A fresh-instance end-to-end session against two PE platform models surfaced

@@ -173,10 +173,19 @@ label index makes it effectively free and avoids irrelevant matches.
 **Carry, returns, LP metrics:**
 | Intent | Command |
 |---|---|
-| "What's the carry at X MoC?" | `ete carry --moc X [--ownership Y]` |
-| "Carry on $500M combined at 2.8x with 6% ownership?" | `ete carry --peak 500e6 --moc 2.8 --life 4.7 --ownership 0.06` |
+| "What's the carry?" (use the model's own number) | `ete carry <modelDir> [--ownership Y]` — returns `manifest.carry.totalCell × ownership`, exact to the model's own waterfall |
+| "What-if carry at a different MoC?" | `ete carry <modelDir> --parametric --moc X [--ownership Y]` or `ete carry --peak ... --moc ... --irr ...` (parametric) |
+| "Compare European vs American waterfall" | `ete carry --parametric --structure european` vs `--structure american` |
 | "TVPI / DPI / RVPI" | `ete query --name tvpi` (etc.) — populated from `manifest.fundLevel` |
 | "Vintage year" / "Fund size" | `ete query --name vintageYear` / `--name fundSize` |
+
+The default path reads `manifest.carry.totalCell` — the cell the model
+itself computes carry in. This is the most accurate answer because the
+model may use a non-standard tier structure (IRR-hurdle bands, no full
+catch-up, MIP overlays) that a parametric waterfall can't replicate.
+Use `--parametric` only when you want a what-if at different inputs than
+the model is running, or when the manifest doesn't have `carry.totalCell`
+bound.
 
 **Exact formula evaluation (when linear approximation breaks):**
 | Intent | Command |

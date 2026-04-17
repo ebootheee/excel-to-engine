@@ -197,14 +197,18 @@ function runValidate(manifestPath, args) {
 // ---------------------------------------------------------------------------
 
 // Fields to inspect with their FIELD_RANGES key for value-range checks.
+// `mustBeNonZero: true` flags fields where a 0-valued cell is overwhelmingly
+// a sign of a wrong binding (e.g. a restated-copy column that wasn't
+// populated), not a legit zero. Terminal Value and Total Carry are the two
+// classic traps — a model with real returns always has non-zero values there.
 const DOCTOR_FIELDS = [
-  { path: 'outputs.terminalValue.cell',      field: 'terminalValue',  label: 'Terminal Value' },
-  { path: 'outputs.exitMultiple.cell',       field: 'exitMultiple',   label: 'Exit Multiple' },
-  { path: 'carry.totalCell',                 field: 'carryTotal',     label: 'Total Carry' },
-  { path: 'debt.exitBalance',                field: 'exitDebt',       label: 'Exit Debt' },
-  { path: 'customCells.wacc',                field: 'wacc',           label: 'WACC' },
-  { path: 'customCells.sharesOutstanding',   field: 'sharesOutstanding', label: 'Shares Outstanding' },
-  { path: 'customCells.pricePerShare',       field: 'pricePerShare',  label: 'Price Per Share' },
+  { path: 'outputs.terminalValue.cell',      field: 'terminalValue',  label: 'Terminal Value',       mustBeNonZero: true },
+  { path: 'outputs.exitMultiple.cell',       field: 'exitMultiple',   label: 'Exit Multiple',        mustBeNonZero: true },
+  { path: 'carry.totalCell',                 field: 'carryTotal',     label: 'Total Carry',          mustBeNonZero: true },
+  { path: 'debt.exitBalance',                field: 'exitDebt',       label: 'Exit Debt' },  // debt may be 0 at exit post-refi
+  { path: 'customCells.wacc',                field: 'wacc',           label: 'WACC',                 mustBeNonZero: true },
+  { path: 'customCells.sharesOutstanding',   field: 'sharesOutstanding', label: 'Shares Outstanding', mustBeNonZero: true },
+  { path: 'customCells.pricePerShare',       field: 'pricePerShare',  label: 'Price Per Share',      mustBeNonZero: true },
 ];
 
 function runDoctor(modelDir, args) {
@@ -252,6 +256,17 @@ function runDoctor(modelDir, args) {
         message: `value ${val} outside expected range [${range.min}, ${range.max}] — ${range.label}`,
         fix: `ete query ${modelDir} --search "${spec.label.toLowerCase()}"  →  ete manifest set ${modelDir} ${spec.path} <goodCell>`,
       });
+      continue;
+    }
+    if (spec.mustBeNonZero && val === 0) {
+      issues.push({
+        severity: 'error',
+        field: spec.path,
+        cell: cellRef,
+        value: val,
+        message: `value is 0 — this almost always means the binding points at a restated-copy cell or an uninitialized sensitivity, not the real ${spec.label.toLowerCase()}`,
+        fix: `ete query ${modelDir} --search "${spec.label.toLowerCase()}"  →  ete manifest set ${modelDir} ${spec.path} <goodCell>`,
+      });
     }
   }
 
@@ -290,6 +305,19 @@ function runDoctor(modelDir, args) {
           cell: ec[field],
           value: val,
           message: `value ${val} outside expected range [${range.min}, ${range.max}] — ${range.label}`,
+          fix: `ete manifest set ${modelDir} equity.classes[${i}].${field} <goodCell>`,
+        });
+        continue;
+      }
+      // basisCell = 0 on an active class is nearly always wrong. MOIC/IRR of
+      // 0 happen in unfunded sensitivities so we don't block those.
+      if (field === 'basisCell' && val === 0) {
+        issues.push({
+          severity: 'error',
+          field: `equity.classes[${i}].${field}`,
+          cell: ec[field],
+          value: val,
+          message: `equity basis is 0 — expected a non-zero peak equity for class "${ec.label || ec.id}"`,
           fix: `ete manifest set ${modelDir} equity.classes[${i}].${field} <goodCell>`,
         });
       }

@@ -1,5 +1,18 @@
 # excel-to-engine — Plan
 
+## Status: Ship-readiness pass — landed 2026-04-17
+
+A live accuracy verification on two real PE platform models found that the
+CLI's parametric carry was ~3× the model's own computed carry, exposing a
+cluster of silent refiner bugs. All seven fixed and gated by a 63-assertion
+ship-ready test battery: array-path corruption in `setNestedField`,
+zero-valued candidate preference, restated-copy cell shadowing (KU88 vs
+D88), doctor zero-value flags, `ete carry` model-first routing, template
+hints threading into refiner column selection, and token-fallback for
+non-contiguous label substrings. Total suite: 363 green, Rust smoke 78/78.
+End-to-end verified: `ete carry --ownership 0.06` returns $2.5M (A-1) /
+$4.7M (A-2) — matching the models' own Total Carried Interest cells.
+
 ## Status: Post-SESSION_LOG-4 workflow pass — landed 2026-04-17
 
 A third end-to-end run against two PE platform models surfaced a workflow

@@ -295,13 +295,23 @@ console.log('Testing: scenario-block detection skips non-repeating sheets');
 // ---------------------------------------------------------------------------
 // ete carry — smoke tests
 // ---------------------------------------------------------------------------
-console.log('Testing: ete carry against fixture');
+console.log('Testing: ete carry against fixture (model-first path)');
 {
+  // With a manifest that has a non-zero carry.totalCell, the default path
+  // returns the model's own computed carry (no parametric re-run).
   const out = run(`carry "${FIXTURES}"`);
-  assert(out.includes('Carry estimate'), 'carry renders header');
-  assert(out.includes('Peak equity'), 'carry shows peak');
-  assert(out.includes('MoC'), 'carry shows MoC');
-  assert(out.includes('GP carry'), 'carry shows GP total');
+  assert(out.includes("model's own waterfall"), 'carry renders model-first header');
+  assert(out.includes('Total carry'), 'carry shows total carry');
+  assert(out.includes('Source:') && out.includes('totalCell'), 'carry cites source cell');
+}
+
+console.log('Testing: ete carry --parametric forces the generic waterfall');
+{
+  const out = run(`carry "${FIXTURES}" --parametric --peak 500000000 --moc 2.8 --life 4.7 --pref 0.08 --carry 0.20`);
+  assert(out.includes('Carry estimate'), 'parametric renders waterfall header');
+  assert(out.includes('Peak equity'), 'parametric shows peak');
+  assert(out.includes('MoC'), 'parametric shows MoC');
+  assert(out.includes('GP carry'), 'parametric shows GP total');
 }
 
 console.log('Testing: ete carry pure parametric mode');
