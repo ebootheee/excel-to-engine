@@ -101,33 +101,11 @@ export function runInit(excelPath, args) {
     lines.push(`  Segments: ${manifestResult.manifest.segments.length}`);
   }
 
-  // Step 3: Refine manifest (smart search for key financial metrics)
-  lines.push('');
-  lines.push('Step 3/5: Refining manifest (searching for IRR, MOIC, carry, equity)...');
-  try {
-    const refineResult = runManifestCommand('refine', chunkedDir, { apply: true });
-    if (refineResult._formatted) {
-      // Show just the found/not-found summary, not the full report
-      const foundCount = Object.keys(refineResult.found || {}).length;
-      const existingCount = Object.keys(refineResult.existing || {}).length;
-      const totalFields = foundCount + existingCount + (refineResult.notFound || []).length;
-      lines.push(`  Coverage: ${foundCount + existingCount}/${totalFields} key fields mapped`);
-      if (foundCount > 0) lines.push(`  Refined: ${foundCount} new fields found and patched`);
-      if (refineResult.notFound?.length > 0) {
-        lines.push(`  Missing: ${refineResult.notFound.join(', ')}`);
-      }
-    }
-  } catch (e) {
-    lines.push(`  (Refinement skipped: ${e.message})`);
-  }
-
-  // Step 3b: Apply template if specified, or auto-apply on a strong match.
-  //
-  // A template can declare `signature.autoApply: true` and (optionally) a
-  // `matchThreshold`. When the model's sheet-name set satisfies the threshold
-  // (default 0.75), the template is applied automatically — no extra run
-  // needed. `--no-template` opts out for the session; `--template <name>`
-  // forces a specific one.
+  // Step 3a: Resolve a template BEFORE refine so refine can consume its hints
+  // (summarySheets, scenarioColumns, peakEquityLabels). Without this ordering
+  // the refiner can't prefer the template's declared base-case column for
+  // rows where multiple scenarios sit side-by-side.
+  let templateApplied = null;      // { name, hints }
   if (args.noTemplate) {
     // skip entirely
   } else if (args.template) {
@@ -138,6 +116,7 @@ export function runInit(excelPath, args) {
       lines.push(`  Warning: ${templateResult.error}`);
     } else {
       lines.push(`  Applied ${templateResult.applied} cell mappings from ${templateResult.path}`);
+      templateApplied = { name: args.template, hints: templateResult.hints || {} };
     }
   } else {
     const match = detectMatchingTemplate(chunkedDir);
@@ -151,11 +130,35 @@ export function runInit(excelPath, args) {
         } else {
           lines.push(`  Applied ${templateResult.applied} cell mappings from ${templateResult.path}`);
           lines.push(`  (override with --no-template, or pick a different one with --template <name>)`);
+          templateApplied = { name: match.name, hints: templateResult.hints || {} };
         }
       } else {
         lines.push(`  Template suggestion: this model matches "${match.name}" — re-run with --template ${match.name} to apply known cell mappings.`);
       }
     }
+  }
+
+  // Step 3b: Refine manifest (smart search for key financial metrics)
+  lines.push('');
+  lines.push('Step 3/5: Refining manifest (searching for IRR, MOIC, carry, equity)...');
+  try {
+    const refineResult = runManifestCommand('refine', chunkedDir, {
+      apply: true,
+      hints: templateApplied ? templateApplied.hints : null,
+    });
+    if (refineResult._formatted) {
+      // Show just the found/not-found summary, not the full report
+      const foundCount = Object.keys(refineResult.found || {}).length;
+      const existingCount = Object.keys(refineResult.existing || {}).length;
+      const totalFields = foundCount + existingCount + (refineResult.notFound || []).length;
+      lines.push(`  Coverage: ${foundCount + existingCount}/${totalFields} key fields mapped`);
+      if (foundCount > 0) lines.push(`  Refined: ${foundCount} new fields found and patched`);
+      if (refineResult.notFound?.length > 0) {
+        lines.push(`  Missing: ${refineResult.notFound.join(', ')}`);
+      }
+    }
+  } catch (e) {
+    lines.push(`  (Refinement skipped: ${e.message})`);
   }
 
   // Step 3c: Doctor-gated validation
@@ -274,7 +277,11 @@ export function runInit(excelPath, args) {
 
 /**
  * Apply a named template's cell mappings to the manifest in `chunkedDir`.
- * Returns { applied, path } on success or { error } on failure.
+ * Returns `{ applied, path, hints }` on success or `{ error }` on failure.
+ *
+ * The `hints` block is persisted on the manifest as `_refineHints` so that
+ * downstream refinement runs (including future re-runs from the same dir)
+ * can consume it even if they aren't going through `ete init`.
  */
 function applyTemplate(chunkedDir, templateName) {
   const templatePath = findTemplate(templateName);
@@ -297,8 +304,14 @@ function applyTemplate(chunkedDir, templateName) {
     applied++;
   }
 
+  // Persist hints onto the manifest for the refine step and any later reruns.
+  const hints = template.hints || {};
+  if (Object.keys(hints).length > 0) {
+    manifest._refineHints = hints;
+  }
+
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-  return { applied, path: templatePath };
+  return { applied, path: templatePath, hints };
 }
 
 /**

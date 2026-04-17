@@ -111,6 +111,17 @@
 
 ## Done
 
+### Ship-readiness pass — accuracy verification + refiner hardening (2026-04-17)
+- setNestedField array-path corruption fixed (refiner patches were landing in a dead `"0"` sub-object)
+- Refiner rejects zero-valued candidates when non-zero alternatives exist
+- `pickRightmostInRange` supports `labelCol` anchor; prefers closest-to-label, time-series rows still get rightmost
+- Doctor flags zero `totalCell` / `basisCell` / `terminalValue` etc. as errors
+- `ete carry` model-first: returns `manifest.carry.totalCell` × ownership directly when set and non-zero
+- Template `hints.scenarioColumns` drives refiner column selection (init now applies template BEFORE refine)
+- `--search` token fallback: `"Gross MOIC"` matches `"Gross (post carry) MOIC"` via all-words AND-match
+- Refiner picks top candidate when multiple summary-sheet entries compete (alternates recorded in report)
+- +63 ship-ready assertions (363 total across suite)
+
 ### Post-SESSION_LOG-4 workflow + auto-gen fixes (2026-04-17)
 - `--search` literal substring by default, `--regex` opt-in; invalid regex falls back to literal
 - `--case <col>` scenario-column selection on `ete query` (and surfaced to `ete carry`)

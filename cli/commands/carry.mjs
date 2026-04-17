@@ -51,6 +51,49 @@ export function runCarryCommand(modelDir, args) {
     }
   }
 
+  // Model-first path: when the manifest has a valid `carry.totalCell` AND the
+  // user hasn't asked for a parametric sensitivity (`--peak` or `--moc`
+  // overrides), return the model's OWN computed carry directly. The model's
+  // waterfall may use a different structure (multi-tier IRR hurdles, no
+  // catch-up, MIP overlays) than our parametric approximation, so trusting
+  // the model's cell is more accurate than re-running a generic waterfall.
+  // Pass `--parametric` to force the generic computation.
+  if (
+    manifest?.carry?.totalCell &&
+    gt &&
+    !args.peak && !args.moc && !args.parametric
+  ) {
+    const totalCarry = resolveCell(gt, manifest.carry.totalCell);
+    if (typeof totalCarry === 'number' && totalCarry !== 0) {
+      let ownership = num(args.ownership);
+      if (ownership != null && ownership > 1.001) ownership = ownership / 100;
+      const ownerShare = ownership != null ? totalCarry * ownership : null;
+
+      const lines = [];
+      lines.push(`Carry (from model's own waterfall)`);
+      lines.push('─'.repeat(50));
+      lines.push(`  Total carry:    ${fmtCur(totalCarry)}`);
+      lines.push(`  Source:         ${manifest.carry.totalCell} (manifest.carry.totalCell)`);
+      if (ownership != null) {
+        lines.push(`  Ownership:      ${(ownership * 100).toFixed(2)}%`);
+        lines.push(`  Your share:     ${fmtCur(ownerShare)}`);
+      }
+      lines.push('');
+      lines.push('  Uses the model\'s own computed Total Carry cell — exact to whatever');
+      lines.push('  waterfall structure the model implements. Pass --parametric to run');
+      lines.push('  the generic American/European waterfall against --peak/--moc/--irr.');
+
+      return {
+        source: 'model',
+        totalCarry,
+        ownerShare,
+        cell: manifest.carry.totalCell,
+        ownership,
+        _formatted: lines.join('\n'),
+      };
+    }
+  }
+
   const inputs = resolveInputs(manifest, baseOutputs, args, { gt, labelIndex, caseColumn: args.case || null });
   if (inputs.error) return inputs;
 
