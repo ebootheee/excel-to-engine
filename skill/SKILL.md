@@ -38,6 +38,21 @@ These are the non-negotiables. Ignoring them is how sessions stall.
 5. **`--search` is literal by default.** Paste phrases naturally:
    `ete query ./m --search "Gross (portfolio)"` just works. Add
    `--regex` only when you actually want regex semantics.
+6. **Trust the auto-detectors for three recurring multi-sheet shapes.**
+   Past sessions stalled trying to hand-resolve these; the detectors now
+   handle them out of the box:
+   - **Multi-class promote** (`Foo (X)` + `Foo (Y)` carry sheets) →
+     `carry.totalCell` becomes an aggregate `{ cells: [...], op: 'sum' }`.
+     `ete carry` prints `sum(A!D88, B!D88)` as the source. Don't override.
+   - **Per-class vs rollup sheets** (e.g. `1-A..9-A` + `LP Rollup-A`) →
+     detectCarry ranks summary > rollup > generic > per-class. If doctor
+     is happy, the rollup is what you want.
+   - **Multi-facility debt** (`Term Loan (A)` + `Term Loan (B)`) →
+     `debt.exitBalance` aggregates across siblings.
+
+   Each has adversarial ship-ready tests gating it; if you're staring at a
+   result that looks like one of these was missed, run doctor first —
+   don't assume the detector failed.
 
 ## Triggers
 
@@ -82,6 +97,16 @@ quarantined (set to null) and the init still exits 0 with a working chunked
 directory. The command prints each quarantined field and the one-liner to
 fix it. Pass `--strict` to restore hard-fail (useful for CI). `--force` is
 accepted as a no-op alias.
+
+**Iterating on an already-parsed model? Use `--reuse-parse`.** If `chunked/`
+already exists, skip the Rust parse (which can take 60–90s on a 50+ sheet
+model) and just regenerate the manifest + refine + doctor:
+```bash
+node cli/index.mjs init model.xlsx --output ./my-model/ --reuse-parse
+```
+Silently falls through to a normal parse if `chunked/_ground-truth.json` is
+missing — safe to default on when iterating. Turns the tighten-the-manifest
+loop from minutes to seconds.
 
 If the model's sheet set matches a known family signature, init auto-applies
 that template (printing `Template auto-applied: <name>`). Pass `--no-template`
@@ -203,8 +228,35 @@ Before answering a PE question, run `ete manifest doctor <modelDir>` once per se
 - `carry.totalCell` pointing at a pre-carry CF or cash-flow cell (common auto-detection failure)
 - `equity.classes[0].basisCell` with an out-of-range value (label artifacts)
 - Segments whose values are constant across all years (scalar assumptions masquerading as P&L)
+- **`invariants[]` violations** — user-defined trip-wires (see below)
 
 If doctor reports issues, fix them with `ete manifest set <path> <cellRef>` before trusting `--name totalCarry` or `ete carry` output.
+
+#### Manifest invariants — agent-safe domain rules
+
+If the manifest has an `invariants` block, doctor enforces it. Schema:
+
+```json
+{
+  "invariants": [
+    {
+      "path": "carry.totalCell",
+      "forbid": ["Sheet-B!E24"],
+      "expect": ["LP Rollup-A!E24"],
+      "note": "LP Rollup-A is the canonical consolidation; Sheet-B is a different investor class."
+    }
+  ]
+}
+```
+
+- `path`: dotted path into the manifest (resolves to string or aggregate object)
+- `forbid`: string values the path must NOT equal (optional)
+- `expect`: string values the path MUST equal at least one of (optional)
+- `note`: explanation shown on failure
+
+**Read invariants like a warning siren.** If doctor fails because an invariant fires, do NOT override it by mechanically following "use the combined model" or similar heuristics — the invariant exists because that heuristic has produced the wrong answer before. Fix the cell reference to match the invariant, or ask the user before overriding. When you add new cell mappings that should never regress, add an invariant rather than relying on a comment that agents will re-interpret away.
+
+String-equality only — no regex. If `path` resolves to an aggregate object, its JSON-stringified form is compared.
 
 ### 2b. When to Use Python Over the CLI
 
@@ -216,8 +268,8 @@ import json
 gt = json.loads(open('models/my-model/chunked/_ground-truth.json').read())
 # O(1) lookups, sweep rows in ms
 for r in range(1, 100):
-    label = gt.get(f'GPP Promote!B{r}')
-    val = gt.get(f'GPP Promote!C{r}')
+    label = gt.get(f'GP Promote!B{r}')
+    val = gt.get(f'GP Promote!C{r}')
     if label and val: print(f'row {r}: {label!r} = {val}')
 ```
 
@@ -275,6 +327,7 @@ Write bulk-scan scripts in `scripts/` (not `/tmp/`) so they're reusable for the 
 | "Compare European vs American waterfall" | `ete carry --structure european` and `--structure american` |
 | "No catch-up — just 80/20 above pref" | `ete carry --no-catchup` |
 | "Hold period from 16% IRR at 2.8x" | `ete carry --irr 0.16 --moc 2.8` (solves `n = ln(MoC)/ln(1+IRR)`) |
+| "Flat MOIC hurdle, no IRR pref" (Class A PPS / VC) | `ete carry --peak X --moc Y --hurdle-moic 1.40 --carry 0.20` |
 | "Override pref to 10%" | `--pref-return 0.10` (for `scenario`) or `--pref 0.10` (for `carry`) |
 | "Show me carry by tier" | `ete carry` table output has per-tier LP/GP breakdown |
 | "What discount rate brings NPV to zero?" | `--discount-rate X` (iterate via sensitivity) |
@@ -283,6 +336,8 @@ Write bulk-scan scripts in `scripts/` (not `/tmp/`) so they're reusable for the 
 - Default uses American waterfall with catch-up. Session log #2 showed this can produce effective 28-30% GP share (not 20%) due to residual 80/20 above catch-up. If the user expects "exactly 20%" carry, use `--no-catchup`.
 - When `--life` isn't given and `--irr` is, the command solves hold period from `ln(MoC)/ln(1+IRR)` — accurate for scaling but not for irregular capital calls. Flagged in output.
 - When the manifest has multiple equity classes and the user asks about a "combined" scenario, pass `--combined` to sum all class basis cells.
+- **Flat-MOIC hurdles** (`--hurdle-moic 1.40`) are for waterfalls where the trigger is a price-per-share multiple or fixed MOIC threshold with **no IRR component** and no hold-period compounding. Common in VC Class A PPS structures (e.g. "20% promote above 1.40x"). Overrides `--structure` and makes `--life` / `--irr` / `--pref` irrelevant. If the model's waterfall description says "IRR" or "preferred return," don't use this.
+- **Multi-class promote** (e.g. two `GP Carry (Class X)` sheets): the manifest's `carry.totalCell` auto-aggregates sibling sheets into `{ cells: [...], op: 'sum' }`. `ete carry` handles this transparently — the source line shows `sum(A!D88, B!D88)` for provenance. You don't need to do anything special.
 
 ### 4. Run Commands
 

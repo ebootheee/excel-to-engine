@@ -25,53 +25,76 @@ export function runInit(excelPath, args) {
   const absOutput = resolve(outputDir);
   const chunkedDir = join(absOutput, 'chunked');
 
-  // Step 1: Find and run the Rust parser
-  const parserPaths = [
-    join(process.cwd(), 'pipelines/rust/target/release/rust-parser'),
-    join(process.cwd(), 'pipelines/rust/target/debug/rust-parser'),
-  ];
-
-  let parserBin = parserPaths.find(p => existsSync(p));
-
-  if (!parserBin) {
-    return {
-      error: 'Rust parser not found. Build it first:\n  cd pipelines/rust && cargo build --release',
-      _formatted: 'Error: Rust parser not found.\n\nBuild it:\n  cd pipelines/rust && cargo build --release\n\nThen re-run:\n  ete init ' + excelPath,
-    };
-  }
-
-  if (!existsSync(excelPath)) {
-    return { error: `Excel file not found: ${excelPath}` };
-  }
-
   const lines = [];
   lines.push(`Parsing: ${excelPath}`);
   lines.push(`Output:  ${absOutput}`);
   lines.push('');
 
-  // Run parser
-  try {
-    lines.push('Step 1/3: Running Rust parser...');
-    const cmd = `"${parserBin}" "${resolve(excelPath)}" "${absOutput}" --chunked`;
-    const output = execSync(cmd, { encoding: 'utf-8', timeout: 600000 });
-    lines.push('  Parser completed.');
+  // --reuse-parse: skip the Rust parse step when chunked/_ground-truth.json
+  // already exists. Useful when iterating on manifest configuration against
+  // an already-parsed large model — a 50+ sheet PE platform parse can take
+  // 60-90s, but the manifest → refine → doctor loop only needs the existing
+  // ground truth. Silently ignored if the chunked dir is missing.
+  const groundTruthPath = join(chunkedDir, '_ground-truth.json');
+  const canReuse = args.reuseParse && existsSync(groundTruthPath);
 
-    // Extract key stats from parser output
-    const cellMatch = output.match(/Total cells:\s*([\d,]+)/);
-    const sheetMatch = output.match(/Total sheets:\s*(\d+)/);
-    if (cellMatch) lines.push(`  Cells: ${cellMatch[1]}`);
-    if (sheetMatch) lines.push(`  Sheets: ${sheetMatch[1]}`);
-  } catch (e) {
-    return {
-      error: `Parser failed: ${e.message}`,
-      _formatted: `Error: Rust parser failed.\n${e.stderr || e.message}`,
-    };
+  if (canReuse) {
+    lines.push('Step 1/3: Reusing existing parse (--reuse-parse)');
+    lines.push(`  Ground truth: ${groundTruthPath}`);
+    try {
+      const size = statSync(groundTruthPath).size;
+      lines.push(`  Size: ${(size / 1e6).toFixed(1)} MB`);
+    } catch { /* ignore */ }
+    lines.push('  Skipped Rust parser — using chunked/ as-is.');
+  } else {
+    if (args.reuseParse) {
+      lines.push('Note: --reuse-parse requested but chunked/_ground-truth.json not found; running parser.');
+      lines.push('');
+    }
+
+    // Step 1: Find and run the Rust parser
+    const parserPaths = [
+      join(process.cwd(), 'pipelines/rust/target/release/rust-parser'),
+      join(process.cwd(), 'pipelines/rust/target/debug/rust-parser'),
+    ];
+
+    const parserBin = parserPaths.find(p => existsSync(p));
+
+    if (!parserBin) {
+      return {
+        error: 'Rust parser not found. Build it first:\n  cd pipelines/rust && cargo build --release',
+        _formatted: 'Error: Rust parser not found.\n\nBuild it:\n  cd pipelines/rust && cargo build --release\n\nThen re-run:\n  ete init ' + excelPath,
+      };
+    }
+
+    if (!existsSync(excelPath)) {
+      return { error: `Excel file not found: ${excelPath}` };
+    }
+
+    // Run parser
+    try {
+      lines.push('Step 1/3: Running Rust parser...');
+      const cmd = `"${parserBin}" "${resolve(excelPath)}" "${absOutput}" --chunked`;
+      const output = execSync(cmd, { encoding: 'utf-8', timeout: 600000 });
+      lines.push('  Parser completed.');
+
+      // Extract key stats from parser output
+      const cellMatch = output.match(/Total cells:\s*([\d,]+)/);
+      const sheetMatch = output.match(/Total sheets:\s*(\d+)/);
+      if (cellMatch) lines.push(`  Cells: ${cellMatch[1]}`);
+      if (sheetMatch) lines.push(`  Sheets: ${sheetMatch[1]}`);
+    } catch (e) {
+      return {
+        error: `Parser failed: ${e.message}`,
+        _formatted: `Error: Rust parser failed.\n${e.stderr || e.message}`,
+      };
+    }
   }
 
   // Clean up redundant root-level model-map.json in chunked mode. The CLI
   // reads exclusively from chunked/. On large models the root file can be
   // 600+ MB while serving no downstream consumer. Opt out with --keep-model-map.
-  if (!args.keepModelMap) {
+  if (!canReuse && !args.keepModelMap) {
     const rootModelMap = join(absOutput, 'model-map.json');
     const rootFormulas = join(absOutput, 'formulas.json');
     if (existsSync(rootModelMap)) {

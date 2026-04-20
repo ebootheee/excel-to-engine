@@ -23,6 +23,14 @@ import { loadManifest, loadGroundTruth, resolveCell, MANIFEST_VERSION } from '..
 // tabs may point to a sub-total or per-period figure.
 const SUMMARY_SHEET_PATTERN = /^(cheat\s*sheet|uw\s*comparison|summary|valuation|cover|returns|dashboard|exec\s*summary)/i;
 
+// Rollup sheets aggregate per-class data and are almost always what you want
+// when both a rollup sheet and its underlying per-class sheets share a label.
+// Example: a PE platform model with 1-A..9-A per-class sheets plus an
+// "LP Rollup-A" sheet — the rollup is the authoritative consolidation. A
+// "GP Fees - Hold" aggregation sheet plays the same role. Both should
+// outrank any single underlying class sheet.
+const ROLLUP_SHEET_PATTERN = /\b(roll[-\s]?up|rollup|consolidat|combined|total|aggregate|all\s+class|gp\s+fees)\b/i;
+
 const REQUIRED_FIELDS = [
   {
     key: 'equity.classes[0].grossIRR',
@@ -69,9 +77,9 @@ const REQUIRED_FIELDS = [
     label: 'Total Carry / Promote',
     patterns: [/total.*(carry|carried|promot)|carried.*interest.*total|(carry|carried|promot).*total|gp.*(carry|carried|promot)/i],
     // Reject labels that clearly describe something else. Historically the
-    // refiner mapped `carry.totalCell` to `GPP Promote!AF25` = "Total Cash Flows
-    // (pre-carry)" — a single-year pre-carry CF, not GP carry. See
-    // 3-E2E-test/SESSION_LOG_02_carry.md.
+    // refiner mapped `carry.totalCell` to a promote-tab cell whose label was
+    // "Total Cash Flows (pre-carry)" — a single-year pre-carry CF, not GP
+    // carry. See the session logs for context.
     disqualifyingPatterns: [/pre.?(carry|promot)|cash.?flow|receivable|payable|fee|operating|capital|equity|profit/i],
     valueRange: [0, 10e9],
     valueHint: 'number (total GP carry)',
@@ -310,11 +318,15 @@ function searchForFieldIndexed(index, field, opts = {}) {
       labelText: lm.text.trim(),
       sheet: lm.sheet,
       onSummarySheet: SUMMARY_SHEET_PATTERN.test(lm.sheet),
+      onRollupSheet: ROLLUP_SHEET_PATTERN.test(lm.sheet),
       matchedHintCol: preferredCols ? preferredCols.includes(best.col) : null,
     });
   }
 
-  // Deduplicate by cell; then rank with summary-sheet candidates first.
+  // Deduplicate by cell; then rank with summary-sheet candidates first,
+  // rollup-sheet candidates next, then hint-matched cols, then by distance.
+  // This matters most for multi-class PE models where the same label appears
+  // on N per-class sheets plus a rollup — we always want the rollup.
   const seen = new Set();
   const deduped = candidates.filter(c => {
     if (seen.has(c.cell)) return false;
@@ -324,6 +336,8 @@ function searchForFieldIndexed(index, field, opts = {}) {
   deduped.sort((a, b) => {
     if (a.onSummarySheet && !b.onSummarySheet) return -1;
     if (!a.onSummarySheet && b.onSummarySheet) return 1;
+    if (a.onRollupSheet && !b.onRollupSheet) return -1;
+    if (!a.onRollupSheet && b.onRollupSheet) return 1;
     if (a.matchedHintCol && !b.matchedHintCol) return -1;
     if (!a.matchedHintCol && b.matchedHintCol) return 1;
     return 0;
@@ -385,6 +399,12 @@ function resolveFieldFromManifest(manifest, path) {
     current = current[part];
   }
   if (typeof current === 'string' && current.includes('!')) return current;
+  // Aggregate: { cells: ["Sheet!A1", ...], op: 'sum' } — treat as set so the
+  // refiner doesn't stomp on multi-class carry.totalCell bindings that the
+  // detector already aggregated across sibling sheets.
+  if (current && typeof current === 'object' && Array.isArray(current.cells) && current.cells.length > 0) {
+    return current;
+  }
   return null;
 }
 
