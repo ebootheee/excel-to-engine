@@ -109,7 +109,7 @@ are fixed, with a 63-assertion ship-ready test battery gating regressions.
    and manifest.mjs.
 2. **Refiner rejects zero-valued candidates when non-zero alternatives
    exist.** `carry.totalCell` used to bind to a restated-copy column cell
-   that happened to be zero (e.g. `GP Promote!KU88 = 0` shadowing
+   that happened to be zero (e.g. `GPP Promote!KU88 = 0` shadowing
    `D88 = $41.6M`), because `0` passed the `[0, 10e9]` range check. Now
    any non-zero same-row candidate wins over zero. Safe across every
    caller because a zero total/basis is overwhelmingly wrong.
