@@ -1,5 +1,30 @@
 # excel-to-engine — Plan
 
+## Status: Platform upgrades from real-world rebuild — landed 2026-04-20
+
+Post-rebuild reflection pass found 5 more gaps worth closing. All landed
+in the same PR branch: flat-MOIC hurdles in the parametric waterfall,
+rollup-sheet preference in auto-detection, `ete init --reuse-parse` for
+fast manifest iteration (68s → 2s on big models), manifest-level
+`invariants` with doctor enforcement, and generalized sibling-sheet
+aggregation now applied to debt (multi-facility exit balances) in addition
+to carry. Ship-ready suite 78 → 97 (+19). Full test suite 378/378 green.
+Downstream consumer app still validates clean against its own pre-deploy check.
+
+## Status: Aggregate cell refs — landed 2026-04-20
+
+A real end-to-end downstream engine rebuild exposed the one remaining
+"quiet wrongness" path after the ship-readiness pass: multi-class promote
+structures. A PE fund model's carry was split across two investor-class
+sheets (`GP Carry (1.5%)` + `GP Carry (1.25% TRS)`), and the single-cell
+`carry.totalCell` schema could only capture one of them — `ete carry`
+returned $28.3M instead of the consolidated $49.3M. Closed by teaching
+`resolveCell` to accept aggregate `{ cells, op }` refs, teaching
+`detectCarry` to auto-aggregate sibling sheets whose names differ only in
+a parenthesized qualifier, and updating refiner + doctor + `ete carry` to
+handle aggregates end-to-end. Suite: 378 green (63 ship-ready + 15 new
+aggregate-category assertions + 132 use-case + prior layers).
+
 ## Status: Ship-readiness pass — landed 2026-04-17
 
 A live accuracy verification on two real PE platform models found that the

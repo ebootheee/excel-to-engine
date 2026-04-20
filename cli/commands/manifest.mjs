@@ -329,7 +329,12 @@ function runDoctor(modelDir, args) {
   // (pre-carry)" or similar — any value above zero looks plausible without this
   // check. See SESSION_LOG_02_carry.md.
   if (manifest.carry?.totalCell) {
-    const cell = manifest.carry.totalCell;
+    // Aggregate form is per-sibling-class; the label check runs against the
+    // primary cell only (others are sums of the same label across classes).
+    const cell = typeof manifest.carry.totalCell === 'string'
+      ? manifest.carry.totalCell
+      : Array.isArray(manifest.carry.totalCell?.cells) ? manifest.carry.totalCell.cells[0] : null;
+    if (cell) {
     const bang = cell.lastIndexOf('!');
     const sheet = cell.substring(0, bang);
     const rowMatch = cell.substring(bang + 1).match(/^([A-Z]+)(\d+)$/);
@@ -348,6 +353,7 @@ function runDoctor(modelDir, args) {
           fix: `ete query ${modelDir} --search "Total (Carry|Promote|Carried Interest)" --sheet "${sheet}"  →  ete manifest set ${modelDir} carry.totalCell <goodCell>`,
         });
       }
+    }
     }
   }
 
@@ -379,6 +385,57 @@ function runDoctor(modelDir, args) {
         message: `row ${seg.sheet}!${seg.row} is constant across all years (${series[0]}) — likely a scalar assumption, not a P&L stream`,
         fix: `Remove from segments in manifest.json, or ete query ${modelDir} --search "${seg.label.substring(0, 30)}"`,
       });
+    }
+  }
+
+  // User-defined invariants. A trip-wire mechanism for domain rules that
+  // should never change silently — even when a fresh agent walks into a
+  // codebase with mechanical instructions that would otherwise justify a
+  // "correction." Use for cross-model attribution rules, hard dependencies
+  // on specific sheets, and anywhere the wrong value still looks plausible
+  // enough to slip past a range check.
+  //
+  // Schema:  manifest.invariants = [
+  //   { path: 'carry.totalCell', forbid: [...], expect: [...], note: '...' }
+  // ]
+  //   - path:   dotted path into the manifest (resolves to a string or object)
+  //   - forbid: list of string values the resolved path must NOT equal
+  //   - expect: list of string values the resolved path MUST equal (any one)
+  //   - note:   human-readable explanation, shown on failure
+  //
+  // Deliberately string-equality only; no regex. If a match flips a domain
+  // decision, an agent reading the manifest should see exactly which value
+  // is canonical. Both `forbid` and `expect` are optional; at least one
+  // should be present.
+  for (const inv of manifest.invariants || []) {
+    const actual = getNested(manifest, inv.path);
+    const toStr = (v) => (typeof v === 'object' && v !== null)
+      ? JSON.stringify(v)
+      : String(v);
+    const actualStr = actual == null ? null : toStr(actual);
+
+    if (Array.isArray(inv.forbid)) {
+      for (const bad of inv.forbid) {
+        if (actualStr === toStr(bad)) {
+          issues.push({
+            severity: 'error',
+            field: `invariants.${inv.path}`,
+            message: `${inv.path} = ${actualStr} is forbidden${inv.note ? '. ' + inv.note : ''}`,
+            fix: `ete manifest set ${modelDir} ${inv.path} <goodCell>`,
+          });
+        }
+      }
+    }
+    if (Array.isArray(inv.expect) && inv.expect.length > 0) {
+      const ok = inv.expect.some(good => actualStr === toStr(good));
+      if (!ok) {
+        issues.push({
+          severity: 'error',
+          field: `invariants.${inv.path}`,
+          message: `${inv.path} = ${actualStr} is not one of the expected values [${inv.expect.map(toStr).join(', ')}]${inv.note ? '. ' + inv.note : ''}`,
+          fix: `ete manifest set ${modelDir} ${inv.path} <expectedCell>`,
+        });
+      }
     }
   }
 

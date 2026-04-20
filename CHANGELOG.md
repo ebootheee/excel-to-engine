@@ -1,5 +1,93 @@
 # excel-to-engine — Changelog
 
+## 2026-04-20 — Post-rebuild platform upgrades (5 items)
+
+After shipping the aggregate-cell-refs pass, the follow-on downstream
+integration work surfaced five more gaps. All now fixed in the same
+branch / PR.
+
+1. **Flat-MOIC hurdle waterfall** (`lib/waterfall.mjs`). Tiers now accept
+   a `hurdleMOIC` property — a fixed MOIC threshold that does NOT compound
+   with hold period. Common in VC Class A PPS waterfalls. New helper
+   `createMoicHurdleWaterfall({ hurdleMOIC, carryPercent })` builds the
+   3-tier structure. `ete carry --hurdle-moic <n>` wires it end-to-end.
+   When `--hurdle-moic` is set, `--life` / `--irr` are optional.
+2. **Rollup-sheet preference** in both `detectCarry` and the refiner's
+   candidate ranking. New `sheetRank` function: summary > rollup > generic
+   > per-class-numbered. Fixes the case where 20+ "Total Carried
+   Interest" labels across per-class, rollup, and summary sheets caused
+   arbitrary cell selection. Large multi-rollup PE platform models now
+   auto-detect the right consolidated carry sheet out of the box
+   instead of picking a single per-class value.
+3. **`ete init --reuse-parse`** flag skips the Rust parser when
+   `chunked/_ground-truth.json` already exists. Turns 68s parse + manifest
+   iteration into 2s manifest iteration. Silently falls through to a
+   normal parse if `chunked/` is missing.
+4. **Manifest-level invariants** (`manifest.invariants[]`) enforced by
+   `ete manifest doctor`. Schema: `{ path, forbid?, expect?, note? }`.
+   Use for cross-model attribution rules and domain decisions that
+   agent-driven workflows have a tendency to revert. String-equality only
+   (deliberate — regex would invite ambiguity). Failures surface as doctor
+   errors with the user-supplied `note`.
+5. **Sibling-sheet aggregation generalized.** Extracted
+   `resolveSiblingAggregate(gt, sheets, primaryAddr)` helper. Applied to
+   `detectCarry` (existing use) and `detectDebt` (new — multi-facility
+   exit balances). Not applied to equity: the "class" abstraction already
+   captures per-sheet splits, and downstream IRR/MOIC neighbor-search
+   assumes string cells.
+
+### Test surface
+Ship-ready suite: 78 → 97 (+19 new assertions across categories J-N).
+Full `npm test`: 378/378 green.
+
+## 2026-04-20 — Aggregate cell refs for multi-class promote structures
+
+End-to-end driven by a real downstream integration rebuild. `ete init`
+on a PE fund model with two parenthesized investor-class sheets
+(`GP Carry (1.5%)` and `GP Carry (1.25% TRS)`) returned only one
+class's carry total instead of the consolidated sum across both —
+the manifest schema had no way to express "total carry = sum of these
+two cells."
+
+### Changes
+
+1. **`lib/manifest.mjs::resolveCell` accepts aggregate refs.** A
+   `carry.totalCell` (or any cell-returning field) may now be either a
+   string `"Sheet!A1"` or an object `{ cells: ["A!D1", "B!D1"], op: 'sum' }`.
+   Supported ops: `sum` (default), `avg`, `min`, `max`. Missing cells are
+   skipped; if none resolve to numbers, returns `undefined`. Backwards-
+   compatible: every existing string ref still resolves identically.
+
+2. **`detectCarry` auto-aggregates sibling sheets.** After locating a carry
+   cell on a sheet whose name ends in a parenthesized qualifier
+   (`"GP Carry (1.5%)"`), the detector scans for sibling sheets with the
+   same prefix + non-zero value at the same row/col and upgrades
+   `carry.totalCell` to an aggregate automatically. Single-class models
+   (no parenthesized suffix, no siblings, or sibling with 0 value) fall
+   through unchanged — the 63 prior ship-ready tests all still pass.
+
+3. **Refiner preserves aggregates.** `resolveFieldFromManifest` now
+   treats aggregate objects as "already set," so the refiner no longer
+   overwrites a detector-built `carry.totalCell` aggregate with a single
+   string cell. Prevents a silent downgrade that was shadowing the
+   aggregation.
+
+4. **Doctor + carry CLI handle aggregates.** The doctor label-sanity
+   check (pre-carry / cash-flow disqualifier) unwraps aggregate refs and
+   runs against the primary cell only. `ete carry` formats the source
+   line as `sum(A!D1, B!D1)` for human-readable provenance.
+
+5. **Ship-ready suite grows to 78 assertions.** Added category I with
+   15 new assertions across: aggregate resolution of all four ops,
+   missing-cell / null handling, sibling-sheet detection on multi-class
+   shape, single-class pass-through, 0-valued sibling filtering, and
+   refiner idempotency on aggregates.
+
+6. **End-to-end validated.** `ete carry` on a re-parsed multi-class
+   PE fund model now returns the consolidated total — matching the sum
+   of both class cells (`GP Carry (1.5%)!D86 + GP Carry (1.25% TRS)!D86`)
+   rather than just one class.
+
 ## 2026-04-17 — Ship-readiness pass (accuracy verification + refiner hardening)
 
 A live accuracy check ran `ete carry` against two real PE platform models and
@@ -21,7 +109,7 @@ are fixed, with a 63-assertion ship-ready test battery gating regressions.
    and manifest.mjs.
 2. **Refiner rejects zero-valued candidates when non-zero alternatives
    exist.** `carry.totalCell` used to bind to a restated-copy column cell
-   that happened to be zero (e.g. `GPP Promote!KU88 = 0` shadowing
+   that happened to be zero (e.g. `GP Promote!KU88 = 0` shadowing
    `D88 = $41.6M`), because `0` passed the `[0, 10e9]` range check. Now
    any non-zero same-row candidate wins over zero. Safe across every
    caller because a zero total/basis is overwhelmingly wrong.
@@ -261,7 +349,7 @@ label scans over a 200 MB ground truth had to be done outside the CLI.
   only callable from JS code.
 - **Scenario-block detection** — `lib/manifest.mjs` now detects stacked
   repeating blocks on a sheet (e.g. 5 scenarios at rows 1-92, 93-184, ... on a
-  PE "GPP Promote" tab) and emits them to `manifest.scenarioBlocks`. `ete
+  PE "GP Promote" tab) and emits them to `manifest.scenarioBlocks`. `ete
   summary` surfaces them with block labels and stride so users can target a
   specific scenario without row arithmetic.
 - **`manifest doctor` carry-label sanity check** — inspects the adjacent

@@ -122,6 +122,28 @@
 - Refiner picks top candidate when multiple summary-sheet entries compete (alternates recorded in report)
 - +63 ship-ready assertions (363 total across suite)
 
+### Multi-class promote aggregation (2026-04-20)
+- `resolveCell` accepts aggregate `{ cells: [...], op }` refs — first-class
+  manifest concept, backwards-compatible with string refs
+- `detectCarry` auto-aggregates sibling sheets (e.g. `GP Carry (1.5%)` +
+  `GP Carry (1.25% TRS)` → sum to consolidated total)
+- Refiner + doctor + `ete carry` all handle aggregate refs
+- +15 ship-ready assertions (category I: aggregate resolution, sibling
+  detection, 0-value filtering, refiner preservation); 378 total
+
+### Platform upgrades from rebuild reflection (2026-04-20)
+- Flat-MOIC hurdle waterfall: `hurdleMOIC` tier prop + `createMoicHurdleWaterfall`
+  helper + `ete carry --hurdle-moic`. No IRR compounding with hold.
+- Rollup-sheet preference in `detectCarry` and refiner ranking: summary >
+  rollup > generic > per-class-numbered
+- `ete init --reuse-parse`: skip Rust parse when `chunked/` already exists
+  (68s → 2s on big models)
+- `manifest.invariants[]` with doctor enforcement — trip-wires for domain
+  rules that need to survive agent reinterpretation
+- `resolveSiblingAggregate` helper extracted; extended to `detectDebt`
+  (multi-facility exit balances). Not applied to equity (see CHANGELOG).
+- +19 ship-ready assertions (categories J-N); 397 total
+
 ### Post-SESSION_LOG-4 workflow + auto-gen fixes (2026-04-17)
 - `--search` literal substring by default, `--regex` opt-in; invalid regex falls back to literal
 - `--case <col>` scenario-column selection on `ete query` (and surfaced to `ete carry`)

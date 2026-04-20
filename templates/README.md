@@ -36,7 +36,7 @@ mapping. Edit the `signature.sheetNames` field to control auto-match.
   "name": "pe-platform-summary",
   "description": "Human description of the model family",
   "signature": {
-    "sheetNames": ["UW Comparison", "Cheat Sheet", "GPP Promote"],
+    "sheetNames": ["UW Comparison", "Cheat Sheet", "GP Promote"],
     "matchThreshold": 1.0,
     "autoApply": true
   },

@@ -204,6 +204,9 @@ ete — excel-to-engine CLI
 
 Commands:
   init <model.xlsx>          Parse Excel model + generate manifest
+                             Flags: --output <dir>, --template <name>, --no-template,
+                                    --strict (hard-fail on doctor errors),
+                                    --reuse-parse (skip Rust parse if chunked/ exists)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   query <modelDir> [args]    Query ground truth cells
   pnl <modelDir>             Extract annual P&L by segment
@@ -228,7 +231,10 @@ Carry flags (falls back to manifest values when not provided):
   --pref <rate>              Preferred return (0.08 = 8%)
   --carry <rate>             GP carry percent (0.20 = 20%)
   --ownership <frac>         Your share of GP carry (0.06 = 6%)
-  --structure <a|e>          american | european waterfall
+  --structure <a|e>          american | european waterfall (IRR-based hurdles)
+  --hurdle-moic <n>          Flat MOIC hurdle (e.g., 1.40). No IRR pref, does
+                             not compound with hold. Overrides --structure.
+                             Common in VC Class A PPS waterfalls.
   --combined                 Sum all equity classes (for multi-class funds)
 
 Scenario flags:

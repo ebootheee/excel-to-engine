@@ -77,17 +77,17 @@ console.log('\n[A] Refiner — adversarial layouts');
 console.log('Testing: refiner rejects zero-valued carryTotal when non-zero alternative exists');
 {
   const gt = {
-    'GPP Promote!B88': 'Total Carried Interest',
-    'GPP Promote!D88': 41613251,   // the real value
-    'GPP Promote!KU88': 0,         // restated-copy column, zero
+    'GP Promote!B88': 'Total Carried Interest',
+    'GP Promote!D88': 41613251,   // the real value
+    'GP Promote!KU88': 0,         // restated-copy column, zero
     // minimal anchoring to let runManifestRefine execute
-    'GPP Promote!A1': 2024, 'GPP Promote!B1': 2025, 'GPP Promote!C1': 2026, 'GPP Promote!D1': 2027,
+    'GP Promote!A1': 2024, 'GP Promote!B1': 2025, 'GP Promote!C1': 2026, 'GP Promote!D1': 2027,
   };
   const manifest = generateManifest(gt).manifest;
   const { tmp, dir } = mkTempModel(gt, manifest);
   const report = runManifestRefine(dir, { apply: true });
   const m2 = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf-8'));
-  assert(m2.carry.totalCell === 'GPP Promote!D88',
+  assert(m2.carry.totalCell === 'GP Promote!D88',
     `carry.totalCell binds to D88 (got ${m2.carry.totalCell})`);
   rmSync(tmp, { recursive: true, force: true });
 }
@@ -453,7 +453,7 @@ console.log('Testing: full manifest generate + refine + doctor cycle on platform
 {
   // Mimic the shape that surfaced multiple bugs: summary tab with two
   // scenario columns (H, I), operational tab with the same labels at
-  // different cells, GPP Promote tab with a Total Carried Interest row
+  // different cells, GP Promote tab with a Total Carried Interest row
   // that has both a canonical D-column cell and a restated KU-column zero.
   const gt = {
     // Timeline
@@ -471,10 +471,10 @@ console.log('Testing: full manifest generate + refine + doctor cycle on platform
     'Cheat Sheet!F14': 2.85,
     'Cheat Sheet!B15': 'Gross IRR',
     'Cheat Sheet!F15': 0.18,
-    // GPP Promote — carry total, with a restated zero far right
-    'GPP Promote!B88': 'Total Carried Interest',
-    'GPP Promote!D88': 41613251,
-    'GPP Promote!KU88': 0,
+    // GP Promote — carry total, with a restated zero far right
+    'GP Promote!B88': 'Total Carried Interest',
+    'GP Promote!D88': 41613251,
+    'GP Promote!KU88': 0,
     // Equity basis on Equity tab
     'Equity!B10': 'Peak Equity Invested',
     'Equity!F10': 276000000,
@@ -486,7 +486,7 @@ console.log('Testing: full manifest generate + refine + doctor cycle on platform
   runManifestRefine(dir, { apply: true, hints });
   const m2 = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf-8'));
   // Verify key bindings
-  assert(m2.carry?.totalCell === 'GPP Promote!D88',
+  assert(m2.carry?.totalCell === 'GP Promote!D88',
     `carry.totalCell → D88 (got ${m2.carry?.totalCell})`);
   // Doctor should pass (no zero values bound, no range violations)
   const doctorOut = run(`manifest doctor "${dir}"`);
@@ -796,6 +796,329 @@ console.log('Testing: runManifestRefine returns proper report shape');
   assert(typeof report.found === 'object', 'report.found is object');
   assert(Array.isArray(report.notFound), 'report.notFound is array');
   rmSync(tmp, { recursive: true, force: true });
+}
+
+// ===========================================================================
+// I. AGGREGATE CELL RESOLUTION — multi-class promote totals
+// ===========================================================================
+// Historical: a PE fund model surfaced two carry classes on separate sheets
+// ("GP Carry (1.5%)" + "GP Carry (1.25% TRS)"), each with its own total. A
+// single `carry.totalCell` string couldn't express the consolidated total,
+// so `ete carry` returned only one class's amount (~60% of the real number).
+// Fixed by teaching detectCarry to auto-aggregate sibling sheets whose
+// names differ only in a parenthesized qualifier, and teaching resolveCell
+// to handle `{ cells, op }` aggregate refs. Session 2026-04-20.
+console.log('Testing: resolveCell handles aggregate { cells, op: "sum" }');
+{
+  const gt = { 'A!D1': 100, 'B!D1': 200, 'C!D1': 300 };
+  const agg = { cells: ['A!D1', 'B!D1', 'C!D1'], op: 'sum' };
+  assert(resolveCell(gt, agg) === 600, 'sum aggregate = 600');
+  assert(resolveCell(gt, 'A!D1') === 100, 'string still resolves');
+  assert(resolveCell(gt, { cells: ['A!D1'], op: 'max' }) === 100, 'max with 1 cell');
+  assert(resolveCell(gt, { cells: ['A!D1', 'B!D1'], op: 'min' }) === 100, 'min');
+  assert(resolveCell(gt, { cells: ['A!D1', 'B!D1'], op: 'avg' }) === 150, 'avg');
+  assert(resolveCell(gt, { cells: ['missing!X1'] }) === undefined, 'missing cells → undefined');
+  assert(resolveCell(gt, null) === undefined, 'null cellRef → undefined');
+}
+
+console.log('Testing: detectCarry aggregates sibling sheets (multi-class PE shape)');
+{
+  // Simulate a multi-class PE model: two promote sheets, identical layout,
+  // names differ only in a parenthesized qualifier.
+  const gt = {
+    'GP Carry (1.5%)!B86': 'Total Carried Interest',
+    'GP Carry (1.5%)!D86': 28_256_071,
+    'GP Carry (1.25% TRS)!B86': 'Total Carried Interest',
+    'GP Carry (1.25% TRS)!D86': 21_031_822,
+  };
+  const { manifest: m } = generateManifest(gt, { source: 'x.xlsx' });
+  const total = m.carry?.totalCell;
+  assert(total && typeof total === 'object' && Array.isArray(total.cells),
+    `carry.totalCell is aggregate object (got ${typeof total})`);
+  assert(total?.cells?.length === 2 && total.op === 'sum',
+    `2 cells, op=sum (got ${total?.cells?.length}, ${total?.op})`);
+  assert(resolveCell(gt, total) === 49_287_893,
+    `aggregate resolves to consolidated total $49.3M (got ${resolveCell(gt, total)})`);
+}
+
+console.log('Testing: detectCarry skips sibling aggregation for single-class models');
+{
+  const gt = {
+    'GP Carry!B86': 'Total Carried Interest',
+    'GP Carry!D86': 196_042_645,
+  };
+  const { manifest: m } = generateManifest(gt, { source: 'y.xlsx' });
+  assert(typeof m.carry?.totalCell === 'string',
+    `single-class stays string (got ${typeof m.carry?.totalCell})`);
+  assert(m.carry?.totalCell === 'GP Carry!D86',
+    `points at only carry cell (got ${m.carry?.totalCell})`);
+}
+
+console.log('Testing: detectCarry aggregate skips sibling with 0 value');
+{
+  const gt = {
+    'GP Carry (A)!B86': 'Total Carried Interest',
+    'GP Carry (A)!D86': 50_000_000,
+    'GP Carry (B)!B86': 'Total Carried Interest',
+    'GP Carry (B)!D86': 0,                      // zero — should be skipped
+  };
+  const { manifest: m } = generateManifest(gt, { source: 'z.xlsx' });
+  // Regardless of whether the aggregate is built, the resolved total should
+  // equal the single live class ($50M). A 0-valued sibling can't invalidate
+  // the aggregate — sum(0, 50M) is still 50M — but nor can it contribute.
+  assert(resolveCell(gt, m.carry?.totalCell) === 50_000_000,
+    `zero sibling doesn't corrupt total (got ${resolveCell(gt, m.carry?.totalCell)})`);
+}
+
+console.log('Testing: refiner preserves aggregate carry.totalCell across re-runs');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-agg-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  const gt = {
+    'GP Carry (1.5%)!B86': 'Total Carried Interest',
+    'GP Carry (1.5%)!D86': 28_256_071,
+    'GP Carry (1.25% TRS)!B86': 'Total Carried Interest',
+    'GP Carry (1.25% TRS)!D86': 21_031_822,
+  };
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  const { manifest: m } = generateManifest(gt, { source: 'x.xlsx' });
+  m.model = m.model || {};
+  m.model.groundTruth = './_ground-truth.json';
+  writeFileSync(join(tmp, 'chunked', 'manifest.json'), JSON.stringify(m, null, 2));
+  const r = runManifestRefine(join(tmp, 'chunked'), { apply: true });
+  const after = JSON.parse(readFileSync(join(tmp, 'chunked', 'manifest.json'), 'utf-8'));
+  assert(after.carry?.totalCell && typeof after.carry.totalCell === 'object',
+    'refiner preserved aggregate (did not overwrite with string)');
+  assert(Array.isArray(after.carry.totalCell?.cells) && after.carry.totalCell.cells.length === 2,
+    'aggregate still has 2 cells after refine');
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// ===========================================================================
+// J. FLAT-MOIC HURDLE WATERFALL — Class A PPS pattern (no IRR pref)
+// ===========================================================================
+// Some waterfalls use a flat MOIC hurdle (e.g. 1.40x Class A PPS) with no
+// IRR pref component. The hurdle doesn't compound with hold period. Before
+// this fix, parametric carry treated every structure as IRR-based and
+// produced wrong numbers for PPS-style promote structures.
+console.log('Testing: createMoicHurdleWaterfall with 2.0x MOIC on $100M equity');
+{
+  const { computeWaterfall, createMoicHurdleWaterfall } = await import('../../lib/waterfall.mjs');
+  const tiers = createMoicHurdleWaterfall({ hurdleMOIC: 1.40, carryPercent: 0.20 });
+  const r = computeWaterfall(200_000_000, 100_000_000, tiers);
+  assert(Math.abs(r.gpTotal - 12_000_000) < 1, `GP carry = $12M (got ${r.gpTotal})`);
+  assert(Math.abs(r.lpTotal - 188_000_000) < 1, `LP total = $188M (got ${r.lpTotal})`);
+  assert(Math.abs(r.lpMOIC - 1.88) < 0.001, `LP MOIC = 1.88x (got ${r.lpMOIC})`);
+}
+
+console.log('Testing: hurdleMOIC does NOT compound with hold period');
+{
+  const { computeWaterfall, createMoicHurdleWaterfall } = await import('../../lib/waterfall.mjs');
+  const tiers = createMoicHurdleWaterfall({ hurdleMOIC: 1.40, carryPercent: 0.20 });
+  const r5 = computeWaterfall(200_000_000, 100_000_000, tiers, { holdPeriodYears: 5 });
+  const r10 = computeWaterfall(200_000_000, 100_000_000, tiers, { holdPeriodYears: 10 });
+  assert(Math.abs(r5.gpTotal - r10.gpTotal) < 0.01,
+    `same GP carry at 5yr and 10yr (${r5.gpTotal} vs ${r10.gpTotal}) — no compounding`);
+}
+
+console.log('Testing: hurdleMOIC below 1.0x returns $0 carry');
+{
+  const { computeWaterfall, createMoicHurdleWaterfall } = await import('../../lib/waterfall.mjs');
+  const tiers = createMoicHurdleWaterfall({ hurdleMOIC: 1.40, carryPercent: 0.20 });
+  const r = computeWaterfall(140_000_000, 100_000_000, tiers);  // exactly at hurdle
+  assert(r.gpTotal < 1, `at-hurdle MOIC produces ~$0 carry (got ${r.gpTotal})`);
+}
+
+// ===========================================================================
+// K. ROLLUP-SHEET PREFERENCE — detector picks rollup over per-class
+// ===========================================================================
+// Large PE platform models often have 20+ per-class sheets (1-A..9-A plus
+// 1-B..9-B) with a rollup sheet (LP Rollup-A, GP Fees - Hold). The old detector picked
+// whichever "Total Carried Interest" label happened to iterate last, which
+// was arbitrary. The new sheetRank function ranks summary > rollup > generic
+// > per-class.
+console.log('Testing: detectCarry prefers Rollup sheet over per-class sibling');
+{
+  const gt = {
+    '1-A!C82': 'Total Carried Interest',
+    '1-A!E82': 10_000_000,
+    '2-A!C82': 'Total Carried Interest',
+    '2-A!E82': 15_000_000,
+    'LP Rollup-A!C24': 'Total Carried Interest',
+    'LP Rollup-A!E24': 87_148_891,   // consolidated
+  };
+  const { manifest: m } = generateManifest(gt, { source: 'lysara-shape.xlsx' });
+  assert(m.carry?.totalCell === 'LP Rollup-A!E24',
+    `rollup wins over per-class (got ${JSON.stringify(m.carry?.totalCell)})`);
+}
+
+console.log('Testing: detectCarry prefers summary sheet over rollup');
+{
+  const gt = {
+    'Summary!B3': 'Total Carried Interest',
+    'Summary!C3': 42_000_000,
+    'LP Rollup!C24': 'Total Carried Interest',
+    'LP Rollup!E24': 42_000_000,
+  };
+  const { manifest: m } = generateManifest(gt, { source: 'summary-beats-rollup.xlsx' });
+  assert(m.carry?.totalCell === 'Summary!C3',
+    `summary wins over rollup (got ${JSON.stringify(m.carry?.totalCell)})`);
+}
+
+console.log('Testing: refiner rollup preference inside candidate ranking');
+{
+  const gt = {
+    '1-A!C82': 'Total Carried Interest',  '1-A!E82': 10_000_000,
+    'LP Rollup-A!C24': 'Total Carried Interest',  'LP Rollup-A!E24': 50_000_000,
+  };
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-rollup-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  const m = {
+    $schema: 'manifest-v1.0',
+    model: { name: 'x', type: 'pe_platform', groundTruth: './_ground-truth.json' },
+    timeline: {}, segments: [], outputs: {}, equity: { classes: [] },
+    carry: {}, debt: {}, lineItems: {}, subsegments: {}, customCells: {},
+    baseCaseOutputs: {},
+  };
+  writeFileSync(join(tmp, 'chunked', 'manifest.json'), JSON.stringify(m, null, 2));
+  runManifestRefine(join(tmp, 'chunked'), { apply: true });
+  const after = JSON.parse(readFileSync(join(tmp, 'chunked', 'manifest.json'), 'utf-8'));
+  assert(after.carry?.totalCell === 'LP Rollup-A!E24',
+    `refiner picks rollup (got ${JSON.stringify(after.carry?.totalCell)})`);
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// ===========================================================================
+// L. MANIFEST INVARIANTS — trip-wires for domain rules
+// ===========================================================================
+// Cross-model attribution rules and agent-hostile "do not revert" decisions
+// need to survive re-interpretation. Doctor checks manifest.invariants and
+// errors when forbid/expect are violated.
+console.log('Testing: doctor flags forbidden invariant value');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-inv-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  const gt = { 'GP!B5': 'Total Carried Interest', 'GP!D5': 50_000_000, 'BadSheet!E24': 999 };
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  const m = {
+    $schema: 'manifest-v1.0',
+    model: { name: 'x', type: 'pe_platform', groundTruth: './_ground-truth.json' },
+    timeline: {}, segments: [], outputs: {}, equity: { classes: [] },
+    carry: { totalCell: 'BadSheet!E24' }, debt: {}, lineItems: {}, subsegments: {},
+    customCells: {},
+    invariants: [
+      { path: 'carry.totalCell', forbid: ['BadSheet!E24'], note: 'not the right rollup' },
+    ],
+  };
+  writeFileSync(join(tmp, 'chunked', 'manifest.json'), JSON.stringify(m, null, 2));
+  const out = run(`manifest doctor "${join(tmp, 'chunked')}"`);
+  assert(/is forbidden/.test(out), 'doctor reports forbidden invariant');
+  assert(/not the right rollup/.test(out), 'doctor includes user note');
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log('Testing: doctor flags unexpected value when expect list is set');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-inv2-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  const gt = { 'GP!B5': 'Total Carried Interest', 'GP!D5': 50_000_000 };
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  const m = {
+    $schema: 'manifest-v1.0',
+    model: { name: 'x', type: 'pe_platform', groundTruth: './_ground-truth.json' },
+    timeline: {}, segments: [], outputs: {}, equity: { classes: [] },
+    carry: { totalCell: 'GP!D5' }, debt: {}, lineItems: {}, subsegments: {},
+    customCells: {},
+    invariants: [
+      { path: 'carry.totalCell', expect: ['Other!X1', 'Another!Y2'] },
+    ],
+  };
+  writeFileSync(join(tmp, 'chunked', 'manifest.json'), JSON.stringify(m, null, 2));
+  const out = run(`manifest doctor "${join(tmp, 'chunked')}"`);
+  assert(/is not one of the expected values/.test(out), 'doctor reports expect mismatch');
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log('Testing: doctor passes when invariants match');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-inv3-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  const gt = { 'GP!B5': 'Total Carried Interest', 'GP!D5': 50_000_000 };
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  const m = {
+    $schema: 'manifest-v1.0',
+    model: { name: 'x', type: 'pe_platform', groundTruth: './_ground-truth.json' },
+    timeline: {}, segments: [], outputs: {}, equity: { classes: [] },
+    carry: { totalCell: 'GP!D5' }, debt: {}, lineItems: {}, subsegments: {},
+    customCells: {},
+    invariants: [
+      { path: 'carry.totalCell', expect: ['GP!D5'], forbid: ['BadSheet!X1'] },
+    ],
+  };
+  writeFileSync(join(tmp, 'chunked', 'manifest.json'), JSON.stringify(m, null, 2));
+  const out = run(`manifest doctor "${join(tmp, 'chunked')}"`);
+  assert(/All checks passed/.test(out) || !/is forbidden/.test(out),
+    `doctor passes when invariant satisfied (output: ${out.substring(0, 200)})`);
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// ===========================================================================
+// M. --REUSE-PARSE FLAG — skip Rust parse when chunked/ exists
+// ===========================================================================
+console.log('Testing: ete init --reuse-parse skips Rust parse');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-reuse-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  const gt = { 'GP!B5': 'Total Carried Interest', 'GP!D5': 50_000_000 };
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  // xlsx path is intentionally nonexistent — --reuse-parse should not care.
+  const out = run(`init /tmp/definitely-not-real.xlsx --reuse-parse --output "${tmp}" --no-template`);
+  assert(/Reusing existing parse/.test(out), `output mentions reuse (${out.substring(0, 300)})`);
+  assert(/Skipped Rust parser/.test(out), 'output confirms parser skip');
+  // Manifest should have been generated
+  assert(existsSync(join(tmp, 'chunked', 'manifest.json')), 'manifest.json created');
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log('Testing: --reuse-parse without chunked/ falls through to parser');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-reuse-miss-'));
+  // No chunked/ — the flag is ignored; the command fails on missing xlsx.
+  const out = run(`init /tmp/definitely-not-real.xlsx --reuse-parse --output "${tmp}"`);
+  assert(/running parser|Excel file not found|Parser failed/.test(out),
+    `flag ignored when chunked/ missing (${out.substring(0, 200)})`);
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// ===========================================================================
+// N. DEBT SIBLING AGGREGATION
+// ===========================================================================
+console.log('Testing: detectDebt aggregates sibling facilities');
+{
+  const gt = {
+    'Term Loan (A)!B86': 'Exit Debt Balance',
+    'Term Loan (A)!E86': 75_000_000,
+    'Term Loan (B)!B86': 'Exit Debt Balance',
+    'Term Loan (B)!E86': 25_000_000,
+  };
+  const { manifest: m } = generateManifest(gt, { source: 'multi-facility.xlsx' });
+  const bal = m.debt?.exitBalance;
+  assert(bal && typeof bal === 'object' && Array.isArray(bal.cells),
+    `multi-facility → aggregate (got ${typeof bal})`);
+  assert(resolveCell(gt, bal) === 100_000_000,
+    `aggregate resolves to $100M total (got ${resolveCell(gt, bal)})`);
+}
+
+console.log('Testing: detectDebt single-facility stays string');
+{
+  const gt = {
+    'Term Loan!B86': 'Exit Debt Balance',
+    'Term Loan!E86': 75_000_000,
+  };
+  const { manifest: m } = generateManifest(gt, { source: 'single-facility.xlsx' });
+  assert(typeof m.debt?.exitBalance === 'string' || m.debt?.exitBalance === undefined,
+    `single-facility stays string/undefined (got ${typeof m.debt?.exitBalance})`);
 }
 
 // ===========================================================================

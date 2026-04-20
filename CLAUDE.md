@@ -81,7 +81,7 @@ node cli/index.mjs compare ./my-model/chunked/ --base "" --alt "exit-multiple=16
 | `scenario` | Run scenario with 25+ adjustment parameters |
 | `sensitivity` | 1D sweep or 2D surface across any parameter |
 | `compare` | Base vs alt, named scenarios, cross-model, attribution analysis |
-| `carry` | GP carry under waterfall (American/European, catch-up/no-catch-up, IRR-solved life) |
+| `carry` | GP carry under waterfall (American / European / **flat-MOIC hurdle** via `--hurdle-moic`, catch-up/no-catch-up, IRR-solved life) |
 | `extract` | Time-series schedules (capital calls, distributions, debt balances, fees, NOI, CF) |
 | `explain` | Audit trail for a manifest name or cell (manifest path → cell → label → value → formula) |
 | `eval` | Invoke the chunked engine to compute a cell using actual transpiled formulas |
@@ -124,6 +124,18 @@ node cli/index.mjs manifest validate ./my-model/chunked/manifest.json
 ```
 
 The manifest maps segments (revenue/expense rows), outputs (EBITDA, terminal value), equity classes (MOIC, IRR cells), carry tiers, debt, and custom cells. All scenario commands read this manifest to know where things are in the model.
+
+### Aggregate cell refs (multi-class + multi-facility)
+
+Any cell-returning field can be either a string `"Sheet!A1"` or an aggregate `{ cells: ["A!D1", "B!D1"], op: "sum" | "avg" | "min" | "max" }`. `detectCarry` auto-aggregates sibling sheets (e.g., `GP Carry (Class A)` + `GP Carry (Class B)`); `detectDebt` does the same for multi-facility exit balances. The refiner, doctor, and `ete carry` all handle aggregates transparently.
+
+### Invariants — durable domain rules
+
+`manifest.invariants = [{ path, forbid?, expect?, note? }]` encodes rules that should never silently revert (cross-model attribution, specific cell mappings, etc.). `ete manifest doctor` enforces them and errors out with the user's note. Use these instead of prose-only CLAUDE.md rules when the decision has been reverted before by agent mechanical reasoning. See `skill/SKILL.md` → "Manifest invariants" for the full pattern.
+
+### Fast manifest iteration
+
+`ete init model.xlsx --reuse-parse --output ./my-model/` skips the Rust parse step when `chunked/_ground-truth.json` already exists. Turns a 60–90s parse + manifest iteration into a 2s manifest iteration. Safe to default on when you're tuning the manifest — silently falls through to a normal parse if `chunked/` is missing.
 
 ## Two Pipelines
 

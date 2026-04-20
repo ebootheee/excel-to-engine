@@ -213,10 +213,10 @@ console.log('Testing: carry detection rejects pre-carry CF labels');
   // must NOT pick this as carry.totalCell (it's a per-year pre-carry CF, not
   // GP carry). Regression guard for the pre-carry-CF detection trap.
   const gt = {
-    'GPP Promote!A25': 'Total Cash Flows (pre-carry)',
-    'GPP Promote!AF25': 16_800_000, // plausible dollar amount but WRONG concept
-    'GPP Promote!A50': 'Preferred Return',
-    'GPP Promote!C50': 0.08,
+    'GP Promote!A25': 'Total Cash Flows (pre-carry)',
+    'GP Promote!AF25': 16_800_000, // plausible dollar amount but WRONG concept
+    'GP Promote!A50': 'Preferred Return',
+    'GP Promote!C50': 0.08,
   };
   const { manifest } = generateManifest(gt, { source: 'test.xlsx' });
   assert(!manifest.carry?.totalCell, 'pre-carry CF label did not capture carry.totalCell');
@@ -225,11 +225,11 @@ console.log('Testing: carry detection rejects pre-carry CF labels');
 console.log('Testing: carry detection accepts real carry labels');
 {
   const gt = {
-    'GPP Promote!A25': 'Total Carried Interest',
-    'GPP Promote!C25': 50_300_000,
+    'GP Promote!A25': 'Total Carried Interest',
+    'GP Promote!C25': 50_300_000,
   };
   const { manifest } = generateManifest(gt, { source: 'test.xlsx' });
-  assert(manifest.carry?.totalCell === 'GPP Promote!C25', '"Total Carried Interest" captured');
+  assert(manifest.carry?.totalCell === 'GP Promote!C25', '"Total Carried Interest" captured');
 }
 
 console.log('Testing: doctor flags pre-carry label even if manually set');
@@ -263,14 +263,14 @@ console.log('Testing: scenario-block detection');
   // 5 scenario blocks, stride 92, on a sheet with common summary labels
   for (let block = 0; block < 5; block++) {
     const offset = block * 92;
-    for (let r = 1; r <= 80; r++) gt[`GPP Promote!B${offset + r}`] = `Detail ${block}-${r}`;
-    gt[`GPP Promote!B${offset + 1}`] = `Scenario ${block + 1}`;
-    gt[`GPP Promote!B${offset + 85}`] = 'Pre-Promote CF';
-    gt[`GPP Promote!B${offset + 86}`] = 'Post-Promote CF';
-    gt[`GPP Promote!B${offset + 87}`] = 'IRR';
-    gt[`GPP Promote!B${offset + 88}`] = 'Profit';
-    gt[`GPP Promote!B${offset + 89}`] = 'Peak Equity';
-    gt[`GPP Promote!B${offset + 90}`] = 'MoC';
+    for (let r = 1; r <= 80; r++) gt[`GP Promote!B${offset + r}`] = `Detail ${block}-${r}`;
+    gt[`GP Promote!B${offset + 1}`] = `Scenario ${block + 1}`;
+    gt[`GP Promote!B${offset + 85}`] = 'Pre-Promote CF';
+    gt[`GP Promote!B${offset + 86}`] = 'Post-Promote CF';
+    gt[`GP Promote!B${offset + 87}`] = 'IRR';
+    gt[`GP Promote!B${offset + 88}`] = 'Profit';
+    gt[`GP Promote!B${offset + 89}`] = 'Peak Equity';
+    gt[`GP Promote!B${offset + 90}`] = 'MoC';
   }
   const { manifest } = generateManifest(gt, { source: 'test.xlsx' });
   const blocks = manifest.scenarioBlocks?.[0];

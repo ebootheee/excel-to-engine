@@ -22,6 +22,7 @@ import {
 } from '../../lib/manifest.mjs';
 import {
   computeWaterfall, createAmericanWaterfall, createEuropeanWaterfall,
+  createMoicHurdleWaterfall,
 } from '../../lib/waterfall.mjs';
 
 /**
@@ -69,11 +70,18 @@ export function runCarryCommand(modelDir, args) {
       if (ownership != null && ownership > 1.001) ownership = ownership / 100;
       const ownerShare = ownership != null ? totalCarry * ownership : null;
 
+      const srcRef = manifest.carry.totalCell;
+      const srcLabel = typeof srcRef === 'string'
+        ? srcRef
+        : Array.isArray(srcRef?.cells)
+          ? `${(srcRef.op || 'sum').toLowerCase()}(${srcRef.cells.join(', ')})`
+          : 'manifest.carry.totalCell';
+
       const lines = [];
       lines.push(`Carry (from model's own waterfall)`);
       lines.push('─'.repeat(50));
       lines.push(`  Total carry:    ${fmtCur(totalCarry)}`);
-      lines.push(`  Source:         ${manifest.carry.totalCell} (manifest.carry.totalCell)`);
+      lines.push(`  Source:         ${srcLabel} (manifest.carry.totalCell)`);
       if (ownership != null) {
         lines.push(`  Ownership:      ${(ownership * 100).toFixed(2)}%`);
         lines.push(`  Your share:     ${fmtCur(ownerShare)}`);
@@ -87,7 +95,7 @@ export function runCarryCommand(modelDir, args) {
         source: 'model',
         totalCarry,
         ownerShare,
-        cell: manifest.carry.totalCell,
+        cell: srcLabel,
         ownership,
         _formatted: lines.join('\n'),
       };
@@ -97,19 +105,31 @@ export function runCarryCommand(modelDir, args) {
   const inputs = resolveInputs(manifest, baseOutputs, args, { gt, labelIndex, caseColumn: args.case || null });
   if (inputs.error) return inputs;
 
-  // Build the waterfall
+  // Build the waterfall. Three shapes supported:
+  //   --hurdle-moic N  → flat-MOIC hurdle, no IRR pref (Class A PPS style)
+  //   --structure european → multi-hurdle IRR waterfall
+  //   default → American w/ pref + catch-up (omit --no-catchup to disable)
   const structure = (args.structure || 'american').toLowerCase();
-  const tiers = structure === 'european'
-    ? createEuropeanWaterfall([
-        { hurdle: inputs.pref, carry: 0 },
-        { hurdle: Infinity, carry: inputs.carry },
-      ])
-    : createAmericanWaterfall({
-        prefReturn: inputs.pref,
-        carryPercent: inputs.carry,
-        residualLPSplit: 1 - inputs.carry,
-        hasCatchup: args.noCatchup ? false : true,
-      });
+  const hurdleMOIC = num(args.hurdleMoic);
+  let tiers;
+  if (hurdleMOIC != null && hurdleMOIC > 1) {
+    tiers = createMoicHurdleWaterfall({
+      hurdleMOIC,
+      carryPercent: inputs.carry,
+    });
+  } else if (structure === 'european') {
+    tiers = createEuropeanWaterfall([
+      { hurdle: inputs.pref, carry: 0 },
+      { hurdle: Infinity, carry: inputs.carry },
+    ]);
+  } else {
+    tiers = createAmericanWaterfall({
+      prefReturn: inputs.pref,
+      carryPercent: inputs.carry,
+      residualLPSplit: 1 - inputs.carry,
+      hasCatchup: args.noCatchup ? false : true,
+    });
+  }
 
   const netProceeds = inputs.peak * inputs.moc;
   const result = computeWaterfall(netProceeds, inputs.peak, tiers, {
@@ -127,6 +147,7 @@ export function runCarryCommand(modelDir, args) {
     ownerShare,
     inferredLifeFromIRR: inputs.lifeInferredFromIRR === true,
     manifestUsed: !!manifest,
+    hurdleMOIC: hurdleMOIC != null && hurdleMOIC > 1 ? hurdleMOIC : null,
   };
 
   payload._formatted = args.format === 'json'
@@ -212,8 +233,15 @@ function resolveInputs(manifest, base, args, ctx = {}) {
       lifeInferredFromIRR = true;
     }
   }
+  // Hold period is only required for IRR-based hurdles. A flat MOIC hurdle
+  // (--hurdle-moic) doesn't compound, so `life` is informational only. Set to
+  // a placeholder so downstream formatting doesn't break.
   if (life == null) {
-    return { error: 'Hold period not determined. Pass --life <years> (or --irr <rate> to solve n = ln(MoC)/ln(1+IRR)).' };
+    if (num(args.hurdleMoic) != null) {
+      life = 0;
+    } else {
+      return { error: 'Hold period not determined. Pass --life <years> (or --irr <rate> to solve n = ln(MoC)/ln(1+IRR)).' };
+    }
   }
 
   // Ownership (fractional — 0.06 for 6%)
@@ -340,15 +368,21 @@ function num(v) {
 // Formatting
 // ---------------------------------------------------------------------------
 
-function formatCarry({ inputs, structure, result, ownerShare, inferredLifeFromIRR, manifestUsed }) {
+function formatCarry({ inputs, structure, result, ownerShare, inferredLifeFromIRR, manifestUsed, hurdleMOIC }) {
   const L = [];
-  L.push(`Carry estimate (${structure === 'european' ? 'European' : 'American'} waterfall)`);
+  const shape = hurdleMOIC ? `${hurdleMOIC.toFixed(2)}x MOIC hurdle`
+    : (structure === 'european' ? 'European' : 'American') + ' waterfall';
+  L.push(`Carry estimate (${shape})`);
   L.push('─'.repeat(50));
   L.push('Inputs:');
   L.push(`  Peak equity:    ${fmtCur(inputs.peak)}${inputs.peakSource && inputs.peakSource.startsWith('label:') ? `  (via label lookup at ${inputs.peakSource.slice(6)})` : ''}`);
   L.push(`  MoC (gross):    ${inputs.moc.toFixed(2)}×${inputs.mocSource && inputs.mocSource.startsWith('label:') ? `  (via label lookup at ${inputs.mocSource.slice(6)})` : ''}`);
-  L.push(`  Hold period:    ${inputs.life.toFixed(2)}yr${inferredLifeFromIRR ? '  (solved from IRR: n = ln(MoC) / ln(1+IRR))' : ''}`);
-  L.push(`  Pref return:    ${(inputs.pref * 100).toFixed(1)}%`);
+  if (hurdleMOIC) {
+    L.push(`  Hurdle:         ${hurdleMOIC.toFixed(2)}× (flat MOIC — does not compound with hold)`);
+  } else {
+    L.push(`  Hold period:    ${inputs.life.toFixed(2)}yr${inferredLifeFromIRR ? '  (solved from IRR: n = ln(MoC) / ln(1+IRR))' : ''}`);
+    L.push(`  Pref return:    ${(inputs.pref * 100).toFixed(1)}%`);
+  }
   L.push(`  GP carry:       ${(inputs.carry * 100).toFixed(1)}%`);
   if (inputs.ownership != null) L.push(`  Ownership:      ${(inputs.ownership * 100).toFixed(2)}%`);
   if (!manifestUsed) L.push(`  (manifest not used — pure parametric mode)`);
