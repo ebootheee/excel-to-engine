@@ -14,7 +14,7 @@
 import { createServer } from 'http';
 import { readFile, mkdir } from 'fs/promises';
 import { existsSync, createWriteStream } from 'fs';
-import { join, dirname, resolve } from 'path';
+import { basename, join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
@@ -26,8 +26,29 @@ const UPLOADS_DIR = resolve(__dir, '../../.pipeline-uploads');
 const OUTPUTS_DIR = resolve(__dir, '../../.pipeline-outputs');
 
 const PORT = parseInt(process.env.PORT || '3000');
+const HOST = process.env.HOST || '127.0.0.1';
+const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES || String(200 * 1024 * 1024)); // 200 MB
+const ALLOWED_ORIGIN = `http://localhost:${PORT}`;
 const RUST_PARSER = process.env.RUST_PARSER_BIN
   || resolve(PROJECT_ROOT, 'rust-parser/target/release/rust-parser');
+
+function isOriginAllowed(req) {
+  const origin = req.headers.origin;
+  // Same-origin browser requests omit Origin; CLI/curl also omit it. Only reject
+  // when an explicit Origin header is present and doesn't match the bind addr.
+  if (!origin) return true;
+  return origin === ALLOWED_ORIGIN || origin === `http://127.0.0.1:${PORT}`;
+}
+
+function safeUploadPath(rawFilename) {
+  // Strip any path components and restrict to a conservative charset. The base
+  // name might still collide between users; prefix with a timestamp to avoid
+  // overwriting an active upload.
+  const base = basename(String(rawFilename || ''));
+  const cleaned = base.replace(/[^\w.\-]/g, '_').slice(0, 200);
+  const safe = cleaned.length > 0 ? cleaned : 'upload.xlsx';
+  return join(UPLOADS_DIR, `${Date.now()}-${safe}`);
+}
 
 await mkdir(UPLOADS_DIR, { recursive: true });
 await mkdir(OUTPUTS_DIR, { recursive: true });
@@ -50,6 +71,11 @@ const httpServer = createServer(async (req, res) => {
 
   // File upload endpoint
   if (req.method === 'POST' && url.pathname === '/run') {
+    if (!isOriginAllowed(req)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Origin not allowed' }));
+      return;
+    }
     if (activeRun) {
       res.writeHead(409, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Pipeline already running' }));
@@ -64,23 +90,52 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    const declaredLen = parseInt(req.headers['content-length'] || '0', 10);
+    if (declaredLen && declaredLen > MAX_UPLOAD_BYTES) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Upload too large (>${MAX_UPLOAD_BYTES} bytes)` }));
+      return;
+    }
+
     const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
+    let received = 0;
+    let aborted = false;
+    for await (const chunk of req) {
+      received += chunk.length;
+      if (received > MAX_UPLOAD_BYTES) {
+        aborted = true;
+        break;
+      }
+      chunks.push(chunk);
+    }
+    if (aborted) {
+      res.writeHead(413, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Upload exceeded MAX_UPLOAD_BYTES' }));
+      return;
+    }
     const body = Buffer.concat(chunks);
 
     // Extract file from multipart body
-    const boundaryBuf = Buffer.from('--' + boundary);
     const headerEnd = body.indexOf('\r\n\r\n');
+    if (headerEnd < 0) {
+      res.writeHead(400);
+      res.end('Malformed multipart body');
+      return;
+    }
     const fileStart = headerEnd + 4;
     const fileEnd = body.lastIndexOf('\r\n--' + boundary);
+    if (fileEnd <= fileStart) {
+      res.writeHead(400);
+      res.end('Malformed multipart body');
+      return;
+    }
     const fileData = body.slice(fileStart, fileEnd);
 
-    // Get filename from Content-Disposition header
+    // Get filename from Content-Disposition header. Sanitize to prevent path
+    // traversal — `filename="../../etc/foo"` would otherwise escape UPLOADS_DIR.
     const headerSection = body.slice(0, headerEnd).toString();
     const filenameMatch = headerSection.match(/filename="([^"]+)"/);
-    const filename = filenameMatch?.[1] || `upload-${Date.now()}.xlsx`;
-
-    const uploadPath = join(UPLOADS_DIR, filename);
+    const uploadPath = safeUploadPath(filenameMatch?.[1]);
     const outputDir = join(OUTPUTS_DIR, `${Date.now()}`);
     await mkdir(outputDir, { recursive: true });
 
@@ -89,7 +144,7 @@ const httpServer = createServer(async (req, res) => {
     await new Promise(r => ws.end(r));
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, filename }));
+    res.end(JSON.stringify({ ok: true, filename: basename(uploadPath) }));
 
     // Start pipeline (non-blocking)
     runPipeline(uploadPath, outputDir);
@@ -108,24 +163,23 @@ const httpServer = createServer(async (req, res) => {
 });
 
 // ── WebSocket server ──────────────────────────────────────────────────────────
-const wss = new WebSocketServer({ server: httpServer });
+// `verifyClient` rejects WS upgrades whose Origin isn't the dashboard. Without
+// this, an attacker page in the user's browser could trigger pipeline runs.
+const wss = new WebSocketServer({
+  server: httpServer,
+  verifyClient: (info) => isOriginAllowed(info.req),
+});
 
 wss.on('connection', ws => {
   clients.add(ws);
   ws.send(JSON.stringify({ type: 'connected', running: !!activeRun }));
   ws.on('close', () => clients.delete(ws));
 
-  // Allow clients to trigger a run via WS (send JSON: { action: 'run', path: '...' })
-  ws.on('message', async (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (msg.action === 'run' && msg.path && !activeRun) {
-        const outputDir = join(OUTPUTS_DIR, `${Date.now()}`);
-        await mkdir(outputDir, { recursive: true });
-        runPipeline(msg.path, outputDir);
-      }
-    } catch {}
-  });
+  // The previous WS `run` action accepted an arbitrary local path from any
+  // connected client and spawned the pipeline against it. That's a remote
+  // arbitrary-file-execution primitive — even with the Origin gate above, we
+  // don't need it: the supported flow is upload → POST /run. Drop the action.
+  ws.on('message', () => { /* no-op: WS is broadcast-only */ });
 });
 
 function broadcast(type, payload) {
@@ -193,9 +247,12 @@ function runPipeline(inputPath, outputDir) {
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-httpServer.listen(PORT, () => {
-  console.log(`Monitor dashboard: http://localhost:${PORT}`);
-  console.log(`WebSocket:         ws://localhost:${PORT}`);
+// Bind to loopback by default so the dashboard isn't exposed on LAN/WAN. Set
+// HOST=0.0.0.0 explicitly if you need to expose it (and add an auth layer).
+httpServer.listen(PORT, HOST, () => {
+  console.log(`Monitor dashboard: http://${HOST}:${PORT}`);
+  console.log(`WebSocket:         ws://${HOST}:${PORT}`);
   console.log(`Rust parser:       ${RUST_PARSER}`);
+  console.log(`Max upload:        ${MAX_UPLOAD_BYTES} bytes`);
   console.log(`Press Ctrl+C to stop.`);
 });

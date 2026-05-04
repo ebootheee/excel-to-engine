@@ -375,8 +375,14 @@ function applyPatches(manifest, found) {
 // cli/commands/manifest.mjs and init.mjs — the previous implementation here
 // had a subtle bug that wrote values into a nested "0" sub-object instead of
 // the target array element, silently losing every refiner patch.
+// Reject path segments that would walk into `Object.prototype`. Refiner paths
+// can be derived from manifest content; without this guard a malicious manifest
+// could pollute the global prototype.
+const FORBIDDEN_REFINE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function setNestedField(obj, path, value) {
   const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  if (parts.some(p => FORBIDDEN_REFINE_KEYS.has(p))) return;
   let cur = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const key = parts[i];

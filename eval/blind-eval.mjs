@@ -73,11 +73,14 @@ async function precomputeEngine() {
     console.log(`  (Blind eval tests navigability and usability, not formula accuracy)`);
   } else {
     // Small model: run engine directly
+    // Interpolate paths via JSON.stringify so a path containing a quote or
+    // backslash cannot break out of the source-string template and inject code
+    // into the spawned node process.
     const precomputeScript = `
-import { run } from '${ENGINE_PATH.replace(/\\/g, '/')}';
+import { run } from ${JSON.stringify(ENGINE_PATH.replace(/\\/g, '/'))};
 import { writeFileSync } from 'fs';
 const result = run();
-writeFileSync('${PRECOMPUTED_PATH.replace(/\\/g, '/')}', JSON.stringify(result.values));
+writeFileSync(${JSON.stringify(PRECOMPUTED_PATH.replace(/\\/g, '/'))}, JSON.stringify(result.values));
 process.stdout.write(String(Object.keys(result.values).length));
 `;
     const tmpFile = join(chunkedDir, '_precompute.mjs');
@@ -160,7 +163,7 @@ async function executeJs(code) {
   const wrappedCode = `
 import { readFileSync, readdirSync, existsSync } from 'fs';
 
-const INDEX_DIR = '${INDEX_DIR.replace(/\\/g, '/')}';
+const INDEX_DIR = ${JSON.stringify(INDEX_DIR.replace(/\\/g, '/'))};
 
 // Load sheet list
 const allSheets = JSON.parse(readFileSync(INDEX_DIR + '/_sheets.json', 'utf8'));
