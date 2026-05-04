@@ -7,15 +7,16 @@
  * @license MIT
  */
 
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { existsSync, unlinkSync, statSync, readFileSync, writeFileSync, readdirSync } from 'fs';
-import { join, resolve, dirname } from 'path';
+import { join, resolve, dirname, sep as PATH_SEP } from 'path';
 import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = join(__dirname, '..', '..', 'templates');
+const PACKAGE_ROOT = resolve(__dirname, '..', '..');
 
 /**
  * Execute the init command.
@@ -52,10 +53,13 @@ export function runInit(excelPath, args) {
       lines.push('');
     }
 
-    // Step 1: Find and run the Rust parser
+    // Step 1: Find and run the Rust parser. Resolve relative to the package
+    // install location, not process.cwd() — running `ete init` from an
+    // attacker-controlled directory shouldn't pick up a hostile binary at
+    // `./pipelines/rust/target/release/rust-parser`.
     const parserPaths = [
-      join(process.cwd(), 'pipelines/rust/target/release/rust-parser'),
-      join(process.cwd(), 'pipelines/rust/target/debug/rust-parser'),
+      join(PACKAGE_ROOT, 'pipelines/rust/target/release/rust-parser'),
+      join(PACKAGE_ROOT, 'pipelines/rust/target/debug/rust-parser'),
     ];
 
     const parserBin = parserPaths.find(p => existsSync(p));
@@ -71,11 +75,22 @@ export function runInit(excelPath, args) {
       return { error: `Excel file not found: ${excelPath}` };
     }
 
-    // Run parser
+    // Run parser. Use spawnSync with array args (no shell) — execSync with a
+    // shell-concatenated string would let a crafted .xlsx path containing $(),
+    // backticks, or quote characters inject commands.
     try {
       lines.push('Step 1/3: Running Rust parser...');
-      const cmd = `"${parserBin}" "${resolve(excelPath)}" "${absOutput}" --chunked`;
-      const output = execSync(cmd, { encoding: 'utf-8', timeout: 600000 });
+      const result = spawnSync(
+        parserBin,
+        [resolve(excelPath), absOutput, '--chunked'],
+        { encoding: 'utf-8', timeout: 600000, maxBuffer: 50 * 1024 * 1024 }
+      );
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        const detail = result.stderr || result.stdout || `exit ${result.status}`;
+        throw new Error(detail);
+      }
+      const output = result.stdout || '';
       lines.push('  Parser completed.');
 
       // Extract key stats from parser output
@@ -395,16 +410,31 @@ function detectMatchingTemplate(chunkedDir) {
 
 function findTemplate(name) {
   if (!existsSync(TEMPLATES_DIR)) return null;
-  // Accept both bare names ("pe-platform-summary") and filenames with .json
+  // Reject anything that isn't a plain template name. Without this,
+  // `--template ../../etc/some.json` resolves outside TEMPLATES_DIR.
+  if (typeof name !== 'string' || !/^[\w.\-]+$/.test(name)) return null;
+  const templatesRoot = resolve(TEMPLATES_DIR);
   const candidates = [
     join(TEMPLATES_DIR, name),
     join(TEMPLATES_DIR, `${name}.json`),
   ];
-  return candidates.find(p => existsSync(p) && p.endsWith('.json')) || null;
+  return candidates.find(p => {
+    if (!p.endsWith('.json')) return false;
+    if (!existsSync(p)) return false;
+    // Defense in depth: ensure the resolved path stays inside the templates dir.
+    const abs = resolve(p);
+    return abs === templatesRoot || abs.startsWith(templatesRoot + PATH_SEP);
+  }) || null;
 }
+
+// Reject path segments that walk into `Object.prototype`. A template or CLI
+// caller shouldn't be able to set Object.prototype.x by passing a crafted path
+// like "constructor.prototype.foo" or "__proto__.foo".
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 function setNested(obj, path, value) {
   const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  if (parts.some(p => FORBIDDEN_KEYS.has(p))) return;
   let cur = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const key = parts[i];

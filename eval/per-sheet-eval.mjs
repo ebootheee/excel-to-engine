@@ -189,9 +189,11 @@ async function main() {
       return { name: s, sanitized: san, path: modPath };
     }).filter(m => existsSync(join(sheetsDir, `${m.sanitized}.mjs`))) : [];
 
-    // Build a child process script that loads the sheet module(s) and compares
+    // Build a child process script that loads the sheet module(s) and compares.
+    // Paths flow into JS source — interpolate them as JSON-quoted strings so a
+    // path containing `'` or `\` can't break out and inject code.
     const clusterImports = clusterModules.length > 0
-      ? clusterModules.map(m => `import { compute as compute_${m.sanitized} } from '${m.path}';`).join('\n')
+      ? clusterModules.map(m => `import { compute as compute_${m.sanitized} } from ${JSON.stringify(m.path)};`).join('\n')
       : '';
     const clusterComputeBlock = clusterModules.length > 0
       ? `
@@ -224,11 +226,11 @@ async function main() {
 
     const evalScript = `
 import { readFile } from 'fs/promises';
-import { compute } from '${modulePath.replace(/\\/g, '/')}';
+import { compute } from ${JSON.stringify(modulePath.replace(/\\/g, '/'))};
 ${clusterImports}
 
-const allGt = JSON.parse(await readFile('${gtFullPath.replace(/\\/g, '/')}', 'utf8'));
-const sheetGt = JSON.parse(await readFile('${sheetGtPath.replace(/\\/g, '/')}', 'utf8'));
+const allGt = JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8'));
+const sheetGt = JSON.parse(await readFile(${JSON.stringify(sheetGtPath.replace(/\\/g, '/'))}, 'utf8'));
 
 const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
