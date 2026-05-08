@@ -1,5 +1,17 @@
 # excel-to-engine — Plan
 
+## Status: Security audit pass (v0.2.0) — landed 2026-05-07
+
+External security review (PR #13) closed five concrete attack primitives:
+shell injection in `ete init`, prototype pollution in three `setNested`
+variants, code injection in generated child-process scripts, path
+traversal in `--template`, and a remote arbitrary-file-execution
+primitive in the monitor WebSocket. `xlsx` upgraded 0.18.5 → 0.20.3
+(via SheetJS CDN; closes CVE-2023-30533 + CVE-2024-22363, neither fix
+on npm). Package bumped to v0.2.0 to mark the post-audit baseline. Test
+suite: 397/397 green. See `CHANGELOG.md` for the full list and the
+non-blocking follow-ups.
+
 ## Status: Platform upgrades from real-world rebuild — landed 2026-04-20
 
 Post-rebuild reflection pass found 5 more gaps worth closing. All landed

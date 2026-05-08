@@ -1,5 +1,76 @@
 # excel-to-engine — Changelog
 
+## 2026-05-07 — Security audit pass (PR #13, v0.2.0)
+
+External security review by @shanedog. Two commits, 8 files, 397/397
+tests green after merge. Each fix targets a concrete attack primitive
+rather than a theoretical hardening — none break the public CLI surface.
+
+### Dependency upgrade
+
+- **`xlsx` 0.18.5 → 0.20.3** via SheetJS CDN tarball
+  (`https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`). Closes
+  CVE-2023-30533 (prototype pollution, fixed upstream in 0.19.3) and
+  CVE-2024-22363 (ReDoS, fixed in 0.20.2). Neither fix is on npm — SheetJS
+  now ships exclusively via their own CDN. Lockfile shrinks ~88 lines
+  because the CDN tarball bundles transitive deps (adler-32, cfb,
+  codepage, crc-32, ssf, wmf, word). Mirror/airgapped installs need to
+  allow-list `cdn.sheetjs.com`.
+- **Package version bump 0.1.0 → 0.2.0** to mark the post-audit baseline.
+
+### Security fixes
+
+1. **Monitor server hardening** (`eval/monitor/server.mjs`).
+   - Bind `127.0.0.1` by default (was `0.0.0.0`); override with `HOST=0.0.0.0`.
+   - Multipart filename sanitized via `basename` + `[\w.\-]` charset whitelist
+     + timestamp prefix (was: raw `Content-Disposition` filename → path
+     traversal into `UPLOADS_DIR`).
+   - `MAX_UPLOAD_BYTES` cap (default 200 MB) on both declared
+     `Content-Length` and streamed bytes (was: unbounded buffer).
+   - `Origin` allowlist on POST /run **and** WebSocket `verifyClient`.
+   - **Dropped the WS `{action:'run', path}` handler entirely.** It was a
+     remote-arbitrary-file-execution primitive — any connected client could
+     spawn the pipeline against any local path. The supported flow is
+     upload → POST /run; nothing in the dashboard used the dropped action.
+2. **Shell-injection via crafted Excel paths** (`cli/commands/init.mjs`).
+   `execSync` with shell-concatenated `"${parserBin}" "${excelPath}"` →
+   `spawnSync(parserBin, [excelPath, ...], {})` array form. A `.xlsx` path
+   containing `$()`, backticks, or quote characters can no longer escape
+   into the shell. Parser binary now resolved from `PACKAGE_ROOT` instead
+   of `process.cwd()`, so a hostile cwd can't ship a fake binary at
+   `pipelines/rust/target/release/rust-parser`.
+3. **Prototype-pollution guards in three `setNested` variants**
+   (`cli/commands/{init,manifest,manifest-refine}.mjs`). Reject any path
+   segment matching `__proto__` / `constructor` / `prototype`. CLI
+   `manifest set`, template `mappings`, and refiner-derived paths can no
+   longer pollute `Object.prototype`. `runSet` returns a clean error up
+   front instead of silently no-op-ing.
+4. **Code injection in generated child-process scripts**
+   (`eval/{per-sheet-eval,blind-eval}.mjs`). All path interpolation now
+   goes through `JSON.stringify()` instead of bare `'${path}'` template
+   literals — a path containing a single quote or backslash can no longer
+   break out of the source string and inject code into the spawned `node`
+   process.
+5. **Path-traversal in `--template`** (`cli/commands/init.mjs::findTemplate`).
+   `--template ../../etc/foo` previously resolved outside `TEMPLATES_DIR`.
+   Restrict template name to `/^[\w.\-]+$/` and verify the resolved path
+   stays inside the templates root (defense in depth).
+
+### Test surface
+
+`npm test`: 397/397 (34 cli + 54 manifest-improvements + 57 ai-interface
++ 23 e2e4-fixes + 97 ship-ready + 132 use-case). `npm install` clean,
+xlsx loads at 0.20.3.
+
+### Follow-ups (none blocking)
+
+- Origin allowlist hardcodes `http://localhost:${PORT}` /
+  `http://127.0.0.1:${PORT}`. If we ever expose the monitor via
+  `HOST=0.0.0.0`, the allowlist also needs widening — currently any
+  explicit `Origin` from a non-loopback hostname will 403.
+- `MAX_UPLOAD_BYTES` defaults to 200 MB. Largest tested model so far is
+  ~83 MB (PE platform models); 200 MB covers expected upload sizes.
+
 ## 2026-04-20 — Post-rebuild platform upgrades (5 items)
 
 After shipping the aggregate-cell-refs pass, the follow-on downstream

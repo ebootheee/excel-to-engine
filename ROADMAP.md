@@ -1,5 +1,29 @@
 # excel-to-engine — Roadmap
 
+## Now — Security Hardening Follow-ups (post-PR #13)
+
+Non-blocking items surfaced during the v0.2.0 security audit pass. Open
+when we next touch the monitor server or auth surface.
+
+- **Monitor `Origin` allowlist for non-loopback `HOST`.** Currently
+  hardcodes `http://localhost:${PORT}` / `http://127.0.0.1:${PORT}`. If
+  someone sets `HOST=0.0.0.0` to expose the dashboard on a LAN/dev box,
+  any explicit `Origin` from another hostname will 403. Either compute
+  the allowlist from `HOST` + a configurable extra list, or document the
+  loopback-only constraint in `eval/monitor/README` (and require an auth
+  layer for any non-loopback bind).
+- **Auth layer for non-loopback monitor.** The post-PR #13 server is safe
+  on loopback. If we ever expose it publicly we need real auth (signed
+  token, mTLS, or upstream SSO) before re-enabling anything beyond the
+  upload→POST /run flow.
+- **`MAX_UPLOAD_BYTES` review.** Default 200 MB covers tested PE platform
+  models (~83 MB largest). Re-evaluate if we add multi-fund consolidated
+  workbooks or pre-parsed bundles.
+- **Mirror/airgapped install path for `xlsx`.** The CDN tarball
+  (`cdn.sheetjs.com`) is a single point of failure for reproducible
+  builds. Document the mirror approach (vendor the tarball into the repo
+  or a private registry) before any locked-down deployment.
+
 ## Now — V3 Polish + Production Validation
 
 ### CLI Field Testing
