@@ -474,6 +474,11 @@ function runSet(modelDir, fieldPath, cellRef, args) {
   if (!/^[^!]+!(\$?[A-Z]+\$?\d+)$/.test(cellRef)) {
     return { error: `Invalid cell reference "${cellRef}". Expected format: Sheet!A1` };
   }
+  // Reject paths that would touch the prototype chain.
+  const segs = fieldPath.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  if (segs.some(s => s === '__proto__' || s === 'constructor' || s === 'prototype')) {
+    return { error: `Invalid field path "${fieldPath}". Reserved keys (__proto__, constructor, prototype) are not allowed.` };
+  }
 
   const manifestPath = findManifestPath(modelDir);
   if (!existsSync(manifestPath)) {
@@ -534,8 +539,14 @@ function getNested(obj, path) {
   return cur;
 }
 
+// Reject path segments that walk into `Object.prototype`. `runSet` takes the
+// path directly from CLI argv, and templates feed paths in here too — both
+// would otherwise allow `__proto__.x` / `constructor.prototype.x` pollution.
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function setNested(obj, path, value) {
   const parts = path.replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean);
+  if (parts.some(p => FORBIDDEN_KEYS.has(p))) return;
   let cur = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const key = parts[i];
