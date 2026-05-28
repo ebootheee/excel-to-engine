@@ -108,6 +108,12 @@ Silently falls through to a normal parse if `chunked/_ground-truth.json` is
 missing — safe to default on when iterating. Turns the tighten-the-manifest
 loop from minutes to seconds.
 
+The refine step inside that loop is also faster on big models: it reads labels
+from the parser's `chunked/_labels.json` and probes only the matched rows for
+values, instead of indexing every cell (it used to scan the whole ground truth,
+including giant unlabeled grids it never consults). Transparent — same command,
+same result.
+
 **Default output is slim.** `ete init` drops the large debug/intermediate
 artifacts (`dependency-graph.json`, `_graph.json`, root `model-map.json`) once
 the dependency closures are baked into `named-outputs.json` / `named-inputs.json`.

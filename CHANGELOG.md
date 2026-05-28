@@ -1,5 +1,47 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — refine consumes `_labels.json` + lazy numeric probes
+
+`ete manifest refine` rebuilt a full label+numeric index over the **entire**
+ground truth on every run (`buildIndex`), even though it only ever inspects
+numerics on a *matched label's own row*. On big models the bulk of that work
+indexed giant **unlabeled** grids (e.g. a 190 MB PP&E depreciation schedule)
+that the refiner never consults — pure waste. (Investigation also found refine
+did **not** consume the parser's `_labels.json` at all, despite that index
+existing since V4.)
+
+### What changed
+
+- **Labels now come from `chunked/_labels.json`** when the parser emitted it —
+  an O(labels) read instead of scanning every cell. Legacy engines without the
+  index fall back to a one-time GT scan (`buildLabelIndex`), so nothing breaks.
+- **Numerics are resolved lazily, per matched row**, by probing that row's
+  columns on demand (`numericsForRow`, memoized) — instead of bucketing every
+  numeric in a multi-million-cell workbook up front. The giant unlabeled grids
+  are never touched.
+- **Behavior-preserving:** the candidate ranking, dedup, value-range, and
+  summary/rollup/hint logic are untouched. The full manifest + ship-ready
+  suites stay green.
+
+### Impact
+
+The eliminated `buildIndex` pass scales with *total* cell count; the new probe
+cost scales with *matched label rows* (a few dozen). On a synthetic giant-grid
+ground truth the removed pass alone was ~1.4 s (1.4 M cells) / ~7.9 s (6.4 M
+cells); end-to-end refine now finishes in less time than the old index build
+took. The remaining floor is the unavoidable JSON parse of the ground truth — a
+follow-up could lift that with a parser-emitted row-values artifact (see
+ROADMAP), and the same lazy-numerics treatment could be extended to
+`searchByLabel` (the `query` / `carry` path).
+
+### Tests
+
+- `tests/cli/test-refine-label-index.mjs` (14), wired into `npm test`:
+  correctness off `_labels.json`; **parity** between the index path and the
+  GT-scan fallback; lazy-probe far/gapped columns + value ranges; and a
+  **consumption proof** — a label present only in the index (not as a GT
+  string) is still resolved, which the fallback provably cannot do.
+
 ## 2026-05-28 — Continuous integration (GitHub Actions)
 
 The test suite is now substantial (132 JS assertions across 7 suites, plus the

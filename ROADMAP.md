@@ -76,9 +76,21 @@ when we next touch the monitor server or auth surface.
 ### Manifest Refinement (continuing)
 - Model-family templates — recognize a family by its sheet signature and pick
   known cells directly (summary tabs, promote tab, etc.).
-- Pre-indexed label→cell map built once during parsing (the session log noted
-  `manifest refine` took 2.5 min CPU on a 200 MB ground truth; a pre-index
-  from the Rust parser would cut this 10–100×).
+- Pre-indexed label→cell map.
+  - **Done (2026-05-28):** `ete manifest refine` now consumes the parser's
+    `chunked/_labels.json` for labels (it previously ignored it and rebuilt a
+    full label+numeric index over the whole GT) and resolves same-row numerics
+    lazily by probing — so it no longer indexes the giant unlabeled grids that
+    dominate big models. The removed `buildIndex` pass was ~7.9 s on a 6.4 M-cell
+    GT; the work skipped scales with total cell count. `test-refine-label-index`.
+  - **Still open (Tier B):** the remaining floor is the ground-truth JSON parse.
+    A parser-emitted *row-values* artifact (numerics for label-bearing rows
+    only) would let refine skip the GT entirely — a large win on giant-grid
+    models, ~GT-sized (no win) on dense-label models, so gate it on a
+    real-model size measurement first.
+  - **Still open:** apply the same lazy-numerics path to `searchByLabel`
+    (`query` / `carry`), and build the GT index *once* per `init` so
+    generate → refine → doctor → maps stop each re-parsing it.
 - Manifest migration tooling for model updates (vN → vN+1 shape diff).
 
 ---
