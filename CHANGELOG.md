@@ -1,5 +1,65 @@
 # excel-to-engine — Changelog
 
+## 2026-05-27 — Downstream contract maps (Round 1, JS half)
+
+Driven by the Mippy engine-integration request (2026-05-27): a consumer
+wiring the chunked engine into a production RPC service had to *run the
+engine* (9 min/call) and value-match numeric cells to discover which cells
+hold the named outputs — then shipped a silent-`NaN` bug from guessing the
+wrong cells. The fix surfaces what the manifest pipeline already knows as
+small, stable JSON artifacts consumers can read at boot.
+
+### New artifacts (emitted into `chunked/` by `ete init`)
+
+- **`named-outputs.json`** — `name → { cell, label, type, format,
+  baseCaseValue, source }`. The contract for downstream apps: look up
+  `grossMOIC` and get its cell + base-case value to spot-check on import.
+  Derived from the manifest's resolved outputs (a drift test pins it to
+  `resolveBaseCaseOutputs`), enriched from the workbook's defined-name
+  table. A defined name that disagrees with heuristic detection **overrides**
+  it (the model owner's curated cell wins; the displaced cell is recorded
+  as `manifestCell`).
+- **`named-inputs.json`** — `name → { cell, type, default, referencedBy }`
+  for every Excel **defined-name** cell that is **read by ≥1 formula**
+  (curated, load-bearing inputs only — not every numeric constant).
+  `affectsOutputs` is intentionally deferred until the dependency-graph
+  artifact lands (Round 2). Requires the source `.xlsx`.
+- **`cell-types.json`** — `cell → "number" | "label" | "boolean" |
+  "empty"`. Lets consumers tell a label string from a numeric output, and a
+  real `0` (present, `"number"`) from a never-computed cell (absent from the
+  map) — closing the silent-zero ambiguity in the engine's `get()` default.
+
+### Implementation
+
+- New `lib/manifest-maps.mjs`: `collectNamedOutputs`, `collectNamedInputs`,
+  `collectCellTypes`, `emitManifestMaps`. Outputs + cell-types need only
+  manifest + ground truth (no `xlsx` dependency); inputs + defined-name
+  enrichment use the workbook when reachable and **degrade gracefully**
+  (e.g. under `--reuse-parse`) with a recorded skip reason.
+- `ete manifest maps <chunkedDir> [--excel <path>]` regenerates the maps for
+  an already-parsed model without a re-parse.
+- **Fix:** `loadWorkbook` now reads bytes via Node `fs` and parses with
+  `XLSX.read(buffer)` instead of `XLSX.readFile`. The SheetJS ESM build
+  ships without an fs binding, so `readFile` threw "Cannot access file" —
+  this path was previously unexercised (init parses via Rust, not SheetJS).
+- `buildNamedRangeMap` exported from `lib/excel-parser.mjs`.
+
+### Tests
+
+- `tests/cli/test-manifest-maps.mjs` (40 assertions): output shape +
+  no-drift guard, defined-name enrichment + override, cell-type
+  classification incl. the real-0-vs-missing distinction, named-input
+  detection (incl. excluding named-but-unreferenced cells), and
+  `emitManifestMaps` end-to-end with and without an `.xlsx`. Added to
+  `npm test`.
+
+### Scope
+
+Round 1 JS half. The engine-API items from the same request — convergence
+telemetry, `unknownOverrides`/strict mode, typed cell returns — are the
+Rust half (`generate_orchestrator`) and land next. `model-map.json`
+slimming, the dependency-graph artifact, and engine-perf work are Round 2+.
+
 ## 2026-05-07 — Security audit pass (PR #13, v0.2.0)
 
 External security review by @shanedog. Two commits, 8 files, 397/397

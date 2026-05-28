@@ -1,5 +1,39 @@
 # excel-to-engine — Roadmap
 
+## Now — Engine-integration contract (Mippy request, 2026-05-27)
+
+Surfaced by a production consumer wiring the chunked engine into a Tier-1
+RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
+(`generate_orchestrator` in `pipelines/rust/src/chunked_emitter.rs`, queued).
+
+**Done (JS half, 2026-05-27):**
+- `named-outputs.json`, `named-inputs.json`, `cell-types.json` emitted by
+  `ete init`; `ete manifest maps` to regenerate. See CHANGELOG.
+
+**Next (Rust half — engine API):**
+- **Convergence telemetry.** The cluster loop already computes `iter` /
+  `maxDelta` / stall but discards them at `return { values, kpis }`. Surface
+  `meta: { converged, iterations, maxDelta }`; `converged:false` when a
+  cluster hits `MAX_ITER`. Consumers refuse to lock a non-converged result.
+- **Reject unknown overrides.** `engine.run({ "Bogus!Z9": 1 })` silently
+  no-ops today. Add `{ strict }` / `unknownOverrides[]` using the set of
+  cells read by ≥1 formula (the transpiler already extracts refs).
+- **Typed cell returns / cell-types parity at the API** so `0` (computed)
+  is distinguishable from never-computed at the engine boundary, not just
+  via the sidecar.
+
+**Round 2:**
+- **`dependency-graph.json`** (slim cell→cell edges). Unblocks
+  `affectsOutputs` in named-inputs.json and read-set validation for strict
+  overrides. (The request's #3 and #10 are the same artifact.)
+- **`model-map.json` slimming** — shard or zstd; debug artifacts behind
+  `--emit-debug`. Target <100 MB default output.
+- **Engine perf** — base-case hot cache + partial recompute for the grid
+  generator; revisit only if parallel cloud workers prove insufficient.
+- **MIP gating (request #7)** is a model-owner question, not a pipeline bug
+  (engine faithfully reproduces an Excel base case of 0). Surface via a
+  `requiredFor` field if/when named-inputs gains one.
+
 ## Now — Security Hardening Follow-ups (post-PR #13)
 
 Non-blocking items surfaced during the v0.2.0 security audit pass. Open

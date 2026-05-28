@@ -17,6 +17,7 @@ import {
   generateManifest, validateManifest, loadGroundTruth, loadManifest,
   resolveCell, FIELD_RANGES, inFieldRange,
 } from '../../lib/manifest.mjs';
+import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
 import { runManifestRefine } from './manifest-refine.mjs';
 
 /**
@@ -36,9 +37,41 @@ export function runManifestCommand(subcommand, targetPath, args, extraArgs = [])
       return runSet(targetPath, extraArgs[0], extraArgs[1], args);
     case 'export':
       return runExport(targetPath, args);
+    case 'maps':
+      return runMaps(targetPath, args);
     default:
-      return { error: 'Usage: ete manifest <generate|validate|refine|doctor|set|export> <path>' };
+      return { error: 'Usage: ete manifest <generate|validate|refine|doctor|set|export|maps> <path>' };
   }
+}
+
+/**
+ * (Re)emit the downstream contract maps (named-outputs/inputs, cell-types)
+ * for an already-parsed chunked dir. Pass --excel <path> to source defined-name
+ * inputs + enrich outputs from the workbook's named-cell table.
+ */
+function runMaps(chunkedDir, args) {
+  const result = emitManifestMaps(chunkedDir, {
+    excelPath: args.excel,
+    modelTitle: args.title,
+    version: args.modelVersion,
+  });
+
+  const lines = [];
+  if (result.written.length > 0) {
+    lines.push(`Wrote: ${result.written.join(', ')}`);
+    const s = result.stats;
+    if (s.outputs != null) lines.push(`  Outputs: ${s.outputs} (${s.outputsFromDefinedNames || 0} from defined-names)`);
+    if (s.inputs != null) lines.push(`  Inputs: ${s.inputs}`);
+    if (s.cellTypes != null) lines.push(`  Cell types: ${s.cellTypes}`);
+  }
+  for (const sk of result.skipped) {
+    lines.push(`Skipped ${sk.file}: ${sk.reason}`);
+  }
+  if (result.written.length === 0 && result.skipped.some(s => s.file === '*')) {
+    return { error: result.skipped[0].reason };
+  }
+
+  return { ...result, _formatted: lines.join('\n') };
 }
 
 /**
