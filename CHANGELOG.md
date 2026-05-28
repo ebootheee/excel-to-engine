@@ -1,5 +1,47 @@
 # excel-to-engine — Changelog
 
+## 2026-05-27 — Dependency graph + closures (Round 2, part 1)
+
+Round 2 of the Mippy request — the dependency-graph artifact (#3/#10), which
+unblocks the grid-generator's "which outputs does this input affect?" question.
+
+### New artifact + closure fields
+
+- **`chunked/dependency-graph.json`** — cell-level forward edges
+  (`cell → [cells it reads]`), emitted by the Rust parser. Ranges are expanded
+  to every interior cell, so the graph is complete for transitive reachability.
+  Only formula cells are keys. Format-tagged `cell-dependency-edges-v1`.
+- **`named-outputs.json` → `dependsOnNamedInputs`** and **`named-inputs.json` →
+  `affectsOutputs`** — transitive closures computed (BFS over the edge map) in
+  `emitManifestMaps`. `affectsOutputs` lets a consumer invalidate only the
+  affected outputs on a what-if instead of regenerating an entire grid.
+
+### Correctness fix in `extract_refs` (dependency.rs)
+
+Same-sheet ranges were **silently truncated**: `is_cell_ref("A1:A3")` required
+consuming the whole string, so the range branch was skipped and only the
+post-colon endpoint (`A3`) was captured — `SUM(A1:A3)` recorded a dependency on
+`A3` but **not** `A1`/`A2`. Any named input in the interior of a same-sheet range
+would have been invisible to the closure. `is_cell_ref` now accepts a range, so
+the full span is expanded. (Cross-sheet ranges already took a correct path.)
+This also makes intra-sheet cycle detection and the sheet DAG more accurate.
+
+### Tests
+
+- `npm run test:depgraph` (11 assertions): graph emission, range expansion,
+  cross-sheet edges, and closures end-to-end (real parse → graph → maps).
+- `test-manifest-maps.mjs` +7: `attachDependencyClosures` unit tests
+  (multi-hop transitive, inverse `affectsOutputs`, leaf/unused, self-consistency).
+
+### Scope / caveat
+
+Round 2 part 1. The full `dependency-graph.json` can be large for big models
+(ranges expand) — **`model-map.json` slimming / sharding / `--emit-debug`
+gating (#8)** and **engine perf (#9)** are still open. The high-value closures
+live in the named maps (small) regardless of graph size. `affectsOutputs`
+requires the source `.xlsx` (named inputs are defined-name-sourced); without it
+the closures are skipped and the graph still emits for consumer-side use.
+
 ## 2026-05-27 — Engine run() API: telemetry, override pinning, strict (Round 1, Rust half)
 
 Round 1 Rust half of the Mippy request. All changes are in

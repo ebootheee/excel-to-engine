@@ -11,7 +11,7 @@ use crate::sheet_partition::{
 };
 use crate::transpiler::{transpile, TranspileConfig};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -157,6 +157,30 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
         label_count,
         human_size(labels_json.len()),
         t_lbl.elapsed().as_millis()
+    );
+
+    // 4.5 Emit dependency-graph.json — cell-level forward edges (cell → cells
+    //     it reads). Lets consumers compute a named output's dependency closure
+    //     without re-running the engine or parsing the 636MB model-map.
+    eprint!("[chunked] Building dependency graph...");
+    std::io::stderr().flush().ok();
+    let t_dep = Instant::now();
+    let dep_edges = build_dependency_edges(&partitions);
+    let dep_doc = serde_json::json!({
+        "format": "cell-dependency-edges-v1",
+        "note": "Forward edges: cell -> [cells it reads]. Ranges expanded to individual cells. Only formula cells appear as keys.",
+        "edgeCount": dep_edges.len(),
+        "edges": dep_edges,
+    });
+    let dep_json = serde_json::to_string(&dep_doc)
+        .map_err(|e| format!("Failed to serialize dependency graph: {}", e))?;
+    fs::write(output_dir.join("dependency-graph.json"), &dep_json)
+        .map_err(|e| format!("Failed to write dependency-graph.json: {}", e))?;
+    eprintln!(
+        " done — {} formula cells ({}) in {}ms",
+        dep_edges.len(),
+        human_size(dep_json.len()),
+        t_dep.elapsed().as_millis()
     );
 
     // 5. Emit engine.js orchestrator
@@ -790,6 +814,26 @@ function numToCol(n) {
 
 /// Detect cells within a single sheet that form circular references.
 /// Returns the set of qualified addresses involved in cycles.
+/// Build the full cell-level forward dependency edge map (cell → cells it
+/// reads) across all sheets. extract_refs expands ranges to individual cells,
+/// so the graph is complete for transitive reachability. Only formula cells
+/// appear as keys; literal/input cells have no outgoing edges. BTreeMap keeps
+/// the output deterministic across builds.
+fn build_dependency_edges(partitions: &[SheetPartition]) -> BTreeMap<String, Vec<String>> {
+    let mut edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for partition in partitions {
+        for cell in &partition.formula_cells {
+            if let Some(formula) = &cell.formula {
+                let refs = extract_refs(formula, &partition.name);
+                if !refs.is_empty() {
+                    edges.insert(format!("{}!{}", partition.name, cell.address), refs);
+                }
+            }
+        }
+    }
+    edges
+}
+
 fn detect_intra_sheet_cycles(partition: &SheetPartition, sheet_name: &str) -> Vec<String> {
     // Build intra-sheet dependency graph
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();

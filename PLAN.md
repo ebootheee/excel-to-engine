@@ -1,5 +1,21 @@
 # excel-to-engine — Plan
 
+## Status: Dependency graph + closures (Round 2, part 1) — landed 2026-05-27
+
+The Rust parser now emits `chunked/dependency-graph.json` (cell-level forward
+edges, ranges expanded), and `emitManifestMaps` uses it to attach
+`dependsOnNamedInputs` (named outputs) + `affectsOutputs` (named inputs) — the
+closure that lets a consumer invalidate only affected outputs on a what-if.
+Fixed a real `extract_refs` bug: same-sheet ranges were truncated to the
+post-colon endpoint (`SUM(A1:A3)` saw only `A3`), so interior named inputs were
+invisible to the closure; `is_cell_ref` now accepts ranges. New
+`npm run test:depgraph` (11) + closure unit tests.
+
+**Still open in Round 2:** `model-map.json` / `dependency-graph.json` slimming
+(sharding or zstd; `--emit-debug` gating, #8) — the full graph can be large on
+big models. Engine perf (#9: base-case hot cache, partial recompute for the
+grid generator). MIP gating (#7) remains a model-owner question.
+
 ## Status: Engine run() API — telemetry + override pinning + strict (Round 1, Rust half) — landed 2026-05-27
 
 `generate_orchestrator` now emits a `run()` that returns `meta` (convergence

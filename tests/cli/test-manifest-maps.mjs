@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { resolveBaseCaseOutputs } from '../../lib/manifest.mjs';
 import {
   collectNamedOutputs, collectNamedInputs, collectCellTypes, enumerateOutputCells,
-  emitManifestMaps,
+  emitManifestMaps, attachDependencyClosures,
 } from '../../lib/manifest-maps.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -142,6 +142,42 @@ function buildWorkbook() {
   assert(inputs.Exit_Year?.referencedBy >= 1, 'Exit_Year confirmed read by ≥1 formula');
   assert(!('Scratch' in inputs), 'named-but-unreferenced cell excluded (not a real input)');
   assert(inputs.Exit_Year?.affectsOutputs === undefined, 'affectsOutputs absent in Round 1');
+}
+
+// ---------------------------------------------------------------------------
+// attachDependencyClosures (Round 2) — transitive, multi-hop, inverse
+// ---------------------------------------------------------------------------
+console.log('Testing: attachDependencyClosures');
+{
+  // Out1 -> Mid -> InB, and Out1 -> InA directly; Out2 -> InA; OutLeaf has no edges.
+  const edges = {
+    'S!Out1': ['S!Mid', 'S!InA'],
+    'S!Mid': ['S!InB'],
+    'S!Out2': ['S!InA'],
+  };
+  const namedOutputs = {
+    Out1: { cell: 'S!Out1' }, Out2: { cell: 'S!Out2' }, OutLeaf: { cell: 'S!Leaf' },
+  };
+  const namedInputs = {
+    InA: { cell: 'S!InA' }, InB: { cell: 'S!InB' }, Unused: { cell: 'S!InC' },
+  };
+  attachDependencyClosures(namedOutputs, namedInputs, edges);
+
+  assert(JSON.stringify(namedOutputs.Out1.dependsOnNamedInputs) === '["InA","InB"]',
+    `Out1 depends on InA + InB (transitive via Mid): ${JSON.stringify(namedOutputs.Out1.dependsOnNamedInputs)}`);
+  assert(JSON.stringify(namedOutputs.Out2.dependsOnNamedInputs) === '["InA"]', 'Out2 depends on InA only');
+  assert(JSON.stringify(namedOutputs.OutLeaf.dependsOnNamedInputs) === '[]', 'leaf output depends on nothing');
+  assert(JSON.stringify(namedInputs.InA.affectsOutputs) === '["Out1","Out2"]', 'InA affects Out1 + Out2');
+  assert(JSON.stringify(namedInputs.InB.affectsOutputs) === '["Out1"]', 'InB affects Out1 only');
+  assert(JSON.stringify(namedInputs.Unused.affectsOutputs) === '[]', 'unused input affects nothing');
+
+  // Self-consistency: every name in dependsOnNamedInputs exists in namedInputs.
+  const inputNames = new Set(Object.keys(namedInputs));
+  let consistent = true;
+  for (const o of Object.values(namedOutputs)) {
+    for (const dep of o.dependsOnNamedInputs) if (!inputNames.has(dep)) consistent = false;
+  }
+  assert(consistent, 'every dependsOnNamedInputs entry exists in namedInputs');
 }
 
 // ---------------------------------------------------------------------------
