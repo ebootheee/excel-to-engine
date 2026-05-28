@@ -336,7 +336,7 @@ Excel (.xlsx)
     → Per-sheet JS modules (formulas transpiled to JavaScript)
     → Ground truth JSON (every cell value from Excel)
     → Model manifest (semantic mapping of financial concepts to cells)
-    → Downstream contract maps (named-outputs/inputs.json, cell-types.json, dependency-graph.json)
+    → Downstream contract maps (named-outputs/inputs.json + closures, cell-types.json)
       → CLI scenario engine (delta cascade: adjustments → P&L → TV → equity → returns → carry)
 ```
 
@@ -352,7 +352,7 @@ bug you get from guessing the wrong cell):
 | **`named-outputs.json`** | `name → { cell, label, type, format, baseCaseValue, source, dependsOnNamedInputs }` | The contract for downstream apps. Look up `grossMOIC`, get its cell + base-case value, spot-check on import. If your observed value ≠ `baseCaseValue`, your cell map is stale — fail the build. |
 | **`named-inputs.json`** | `name → { cell, type, default, referencedBy, affectsOutputs }` | Drive `engine.run({ [cell]: value })` for what-ifs. `affectsOutputs` says which outputs to invalidate (don't regenerate the whole grid). Only Excel **defined-name** cells **read by ≥1 formula** are listed. |
 | **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label string from a numeric output, and a real `0` (present, `"number"`) from a never-computed cell (absent from this map). |
-| **`dependency-graph.json`** | `{ edges: cell → [cells it reads] }` | Cell-level forward edges (ranges expanded). Compute a named output's dependency closure without re-running the engine. Emitted by the Rust parser; large on big models (slimming is a follow-up). |
+| **`dependency-graph.json`** *(debug)* | `{ edges: cell → [cells it reads] }` | Cell-level forward edges (ranges expanded) — the raw material for the `dependsOnNamedInputs` / `affectsOutputs` closures above. **Removed from the default output** once those closures are baked into the named maps; it's the largest artifact on big models (ranges expand). Re-run `ete init --emit-debug` to keep it (plus `_graph.json` and the root `model-map.json`) for offline analysis or closure recomputation. |
 
 **Names come from the workbook's defined-name table** (the model owner's
 curated named cells) when present — these are authoritative and override
@@ -363,6 +363,15 @@ heuristic detection. Regenerate without a re-parse:
 > source `.xlsx`. Without it (e.g. `--reuse-parse`), outputs + cell-types still
 > emit from the manifest and ground truth; inputs are skipped with a recorded
 > reason.
+
+**Default output stays small.** `ete init` keeps only what consumers and the
+CLI actually read: the engine modules, `_ground-truth.json` (compact),
+`_labels.json`, the contract maps, and the manifest. The large
+intermediate/debug artifacts — the cell-level `dependency-graph.json`, the
+sheet-level `_graph.json`, and the root `model-map.json` (600+ MB on the
+biggest models) — are dropped after the closures are computed. The high-value
+data survives as the closures inside the named maps. Pass `--emit-debug` to
+retain everything.
 
 ### The Delta Cascade
 

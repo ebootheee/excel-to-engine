@@ -34,11 +34,15 @@ fn main() {
         eprintln!("             uses compact JSON, and filters engine to referenced cells only.");
         eprintln!("  --chunked  Emit chunked output (Option C): per-sheet .mjs modules,");
         eprintln!("             _graph.json, _ground-truth.json, and engine.js orchestrator.");
+        eprintln!("  --emit-debug  Retain large debug artifacts that are otherwise skipped");
+        eprintln!("             in --chunked mode (root model-map.json). The cell-level");
+        eprintln!("             dependency-graph.json is always emitted (closures consume it).");
         std::process::exit(1);
     }
 
     let compact_flag = args.iter().any(|a| a == "--compact");
     let chunked_flag = args.iter().any(|a| a == "--chunked");
+    let emit_debug = args.iter().any(|a| a == "--emit-debug");
 
     // Filter out flags from positional args
     let positional: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with("--")).collect();
@@ -93,35 +97,48 @@ fn main() {
     );
 
     // Phase 2: Build model-map.json
-    let t1 = Instant::now();
-    let model_map = build_model_map(&workbook, &source_name);
-    let model_map_json = if compact {
-        // In compact mode, write a slim version: stats + sheet summaries only (no raw cell dumps)
-        let slim = serde_json::json!({
-            "version": model_map.version,
-            "source": model_map.source,
-            "stats": model_map.stats,
-            "sheets": model_map.sheets.iter().map(|s| serde_json::json!({
-                "name": s.name,
-                "row_count": s.row_count,
-                "col_count": s.col_count,
-                "cell_count": s.cell_count,
-                "formula_count": s.formula_count,
-                // Only include formula cells (not raw numeric/text) in compact mode
-                "formula_cells": s.formula_cells,
-            })).collect::<Vec<_>>()
-        });
-        serde_json::to_string(&slim).expect("JSON serialization failed")
-    } else {
-        serde_json::to_string_pretty(&model_map).expect("JSON serialization failed")
-    };
+    // In --chunked mode the CLI + downstream consumers read exclusively from
+    // chunked/; the root model-map.json (600+ MB on big models) serves no
+    // consumer and was already being deleted by `ete init`. Skip building it
+    // entirely unless --emit-debug is set — this both keeps the default output
+    // small (request #8) and avoids the large in-memory build + write-then-delete
+    // on the biggest models.
     let model_map_path = output_dir.join("model-map.json");
-    fs::write(&model_map_path, &model_map_json).expect("Failed to write model-map.json");
-    println!(
-        "[rust-parser] model-map.json written in {}ms ({})",
-        t1.elapsed().as_millis(),
-        human_size(model_map_json.len())
-    );
+    let emit_model_map = !chunked_flag || emit_debug;
+    let mut model_map_size: usize = 0;
+    if emit_model_map {
+        let t1 = Instant::now();
+        let model_map = build_model_map(&workbook, &source_name);
+        let model_map_json = if compact {
+            // In compact mode, write a slim version: stats + sheet summaries only (no raw cell dumps)
+            let slim = serde_json::json!({
+                "version": model_map.version,
+                "source": model_map.source,
+                "stats": model_map.stats,
+                "sheets": model_map.sheets.iter().map(|s| serde_json::json!({
+                    "name": s.name,
+                    "row_count": s.row_count,
+                    "col_count": s.col_count,
+                    "cell_count": s.cell_count,
+                    "formula_count": s.formula_count,
+                    // Only include formula cells (not raw numeric/text) in compact mode
+                    "formula_cells": s.formula_cells,
+                })).collect::<Vec<_>>()
+            });
+            serde_json::to_string(&slim).expect("JSON serialization failed")
+        } else {
+            serde_json::to_string_pretty(&model_map).expect("JSON serialization failed")
+        };
+        fs::write(&model_map_path, &model_map_json).expect("Failed to write model-map.json");
+        model_map_size = model_map_json.len();
+        println!(
+            "[rust-parser] model-map.json written in {}ms ({})",
+            t1.elapsed().as_millis(),
+            human_size(model_map_size)
+        );
+    } else {
+        println!("[rust-parser] Skipping root model-map.json (chunked mode; pass --emit-debug to emit)");
+    }
 
     // Phase 3: Build formulas.json (parse + transpile all formulas)
     // In --chunked mode, skip full transpilation — the chunked emitter does its own.
@@ -358,7 +375,9 @@ fn main() {
     // Summary
     println!("");
     println!("Output files:");
-    println!("  {} ({})", model_map_path.display(), human_size(model_map_json.len()));
+    if emit_model_map {
+        println!("  {} ({})", model_map_path.display(), human_size(model_map_size));
+    }
     println!("  {} ({})", formulas_path.display(), human_size(formulas_written_size));
     if !chunked_flag {
         println!("  {} ({})", output_dir.join("dependency-graph.json").display(), 0);

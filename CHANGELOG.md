@@ -1,5 +1,51 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Artifact slimming (Round 2, part 2)
+
+Round 2 of the Mippy request, #8: keep the default `chunked/` output small.
+A production consumer wires the engine into a Tier-1 RPC service; shipping a
+600 MB+ artifact set per model is a non-starter. The large artifacts are all
+either intermediate (their high-value derivative is already extracted) or pure
+debug, so they move behind `--emit-debug`.
+
+### Default output drops the large debug/intermediate artifacts
+
+- **`dependency-graph.json`** (cell-level forward edges, ranges expanded → the
+  biggest file on real models) is now **removed from the default output** after
+  `ete init` bakes its closures (`dependsOnNamedInputs` / `affectsOutputs`) into
+  the named maps. The parser still emits it so the closure pass can consume it;
+  init deletes it afterward. The high-value data survives in the named maps.
+- **`_graph.json`** (sheet-level DAG) — nothing in the toolkit reads it — is
+  removed from the default output too.
+- **root `model-map.json`** (600+ MB on big models) is no longer written by the
+  Rust parser in `--chunked` mode. It was already being deleted by `ete init`;
+  now it's never materialized, avoiding the write-then-delete and the large
+  in-memory build on the biggest models.
+- **`--emit-debug`** (on both `ete init` and the Rust parser) retains all three.
+
+### Load-bearing artifacts that stay are smaller
+
+- **`_ground-truth.json`** (read by the CLI + manifest, so it must ship) and
+  **`_graph.json`** now serialize as compact JSON instead of pretty-printed —
+  roughly halves the on-disk size of the ground truth for no functional change
+  (it's machine-read).
+
+### Tests
+
+- `npm run test:slimming` (`tests/cli/test-artifact-slimming.mjs`, 13
+  assertions): runs `runInit` end-to-end through the real parser and asserts the
+  default output excludes the debug artifacts while the named-input closures
+  survive, that ground truth is compact, and that `--emit-debug` retains
+  everything. Skips cleanly if the parser isn't built.
+- Smoke (78/78), `test:depgraph` (11), `test:engine` (21), and the full JS
+  suite (132/132) all still green — the parser still emits the graph for the
+  closure pipeline; only the *default-output* lifecycle changed.
+
+### Still open in Round 2
+
+- **Engine perf (#9)** — base-case hot cache + partial recompute for the grid
+  generator. MIP gating (#7) remains a model-owner question.
+
 ## 2026-05-27 — Dependency graph + closures (Round 2, part 1)
 
 Round 2 of the Mippy request — the dependency-graph artifact (#3/#10), which

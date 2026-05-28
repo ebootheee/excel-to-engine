@@ -206,7 +206,9 @@ Commands:
   init <model.xlsx>          Parse Excel model + generate manifest
                              Flags: --output <dir>, --template <name>, --no-template,
                                     --strict (hard-fail on doctor errors),
-                                    --reuse-parse (skip Rust parse if chunked/ exists)
+                                    --reuse-parse (skip Rust parse if chunked/ exists),
+                                    --emit-debug (retain dependency-graph.json,
+                                    _graph.json, model-map.json for offline analysis)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   query <modelDir> [args]    Query ground truth cells
   pnl <modelDir>             Extract annual P&L by segment

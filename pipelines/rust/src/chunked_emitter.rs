@@ -115,10 +115,11 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
         human_size(total_bytes_emitted)
     );
 
-    // 2. Emit _graph.json
+    // 2. Emit _graph.json (compact — machine-read only; pretty-printing roughly
+    //    doubled the on-disk size for no consumer benefit)
     eprint!("[chunked] Writing _graph.json...");
     std::io::stderr().flush().ok();
-    let graph_json = serde_json::to_string_pretty(&sheet_graph)
+    let graph_json = serde_json::to_string(&sheet_graph)
         .map_err(|e| format!("Failed to serialize graph: {}", e))?;
     fs::write(output_dir.join("_graph.json"), &graph_json)
         .map_err(|e| format!("Failed to write _graph.json: {}", e))?;
@@ -129,7 +130,9 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
     std::io::stderr().flush().ok();
     let t0 = Instant::now();
     let ground_truth = extract_ground_truth(workbook);
-    let gt_json = serde_json::to_string_pretty(&ground_truth)
+    // Compact — load-bearing (CLI + manifest read it) so it must ship, but
+    // pretty-printing ~doubled its size. It is machine-read; compact is fine.
+    let gt_json = serde_json::to_string(&ground_truth)
         .map_err(|e| format!("Failed to serialize ground truth: {}", e))?;
     fs::write(output_dir.join("_ground-truth.json"), &gt_json)
         .map_err(|e| format!("Failed to write _ground-truth.json: {}", e))?;

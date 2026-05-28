@@ -108,6 +108,12 @@ Silently falls through to a normal parse if `chunked/_ground-truth.json` is
 missing — safe to default on when iterating. Turns the tighten-the-manifest
 loop from minutes to seconds.
 
+**Default output is slim.** `ete init` drops the large debug/intermediate
+artifacts (`dependency-graph.json`, `_graph.json`, root `model-map.json`) once
+the dependency closures are baked into `named-outputs.json` / `named-inputs.json`.
+If you need the raw cell-level graph (e.g. to recompute closures for non-named
+cells, or debug a parse), re-run with `--emit-debug`.
+
 If the model's sheet set matches a known family signature, init auto-applies
 that template (printing `Template auto-applied: <name>`). Pass `--no-template`
 to opt out for the run, or select a specific one with `--template <name>`:

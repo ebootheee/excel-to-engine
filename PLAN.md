@@ -1,5 +1,21 @@
 # excel-to-engine — Plan
 
+## Status: Artifact slimming (Round 2, part 2) — landed 2026-05-28
+
+`ete init`'s default `chunked/` output no longer ships the large
+debug/intermediate artifacts (request #8). The cell-level
+`dependency-graph.json` (ranges expand → the biggest file) is consumed for its
+closures, baked into the named maps, then deleted; the sheet-level `_graph.json`
+(read by nothing) is deleted; and the Rust parser no longer writes the root
+`model-map.json` (600+ MB) in `--chunked` mode at all. `--emit-debug` (on both
+`ete init` and the parser) retains them. The load-bearing `_ground-truth.json`
+that must ship is now compact JSON (≈half the size). New `npm run test:slimming`
+(13). The high-value data is preserved as the closures inside the named maps.
+
+**Still open in Round 2:** engine perf (#9: base-case hot cache, partial
+recompute for the grid generator). MIP gating (#7) remains a model-owner
+question.
+
 ## Status: Dependency graph + closures (Round 2, part 1) — landed 2026-05-27
 
 The Rust parser now emits `chunked/dependency-graph.json` (cell-level forward

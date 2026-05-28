@@ -26,11 +26,16 @@ RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
   (request #3/#10). Fixed an `extract_refs` same-sheet range-truncation bug
   along the way. `npm run test:depgraph`.
 
+**Round 2 — done (part 2, 2026-05-28):**
+- **Artifact slimming (request #8)** — default `chunked/` output drops the
+  large debug/intermediate artifacts: `dependency-graph.json` (consumed for its
+  closures, then deleted), `_graph.json` (read by nothing), and the root
+  `model-map.json` (no longer written by the parser in `--chunked` mode).
+  `--emit-debug` retains them. `_ground-truth.json` (load-bearing) is now
+  compact JSON. The high-value closures live in the named maps regardless.
+  `npm run test:slimming`.
+
 **Round 2 — still open:**
-- **`model-map.json` / `dependency-graph.json` slimming** — shard or zstd;
-  debug artifacts behind `--emit-debug`. Target <100 MB default output. The
-  full dependency graph can be large on big models (ranges expand); the
-  high-value closures live in the named maps regardless. (request #8)
 - **Engine perf** — base-case hot cache + partial recompute for the grid
   generator; revisit only if parallel cloud workers prove insufficient. (#9)
 - **MIP gating (request #7)** is a model-owner question, not a pipeline bug
