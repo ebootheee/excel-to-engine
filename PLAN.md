@@ -1,5 +1,14 @@
 # excel-to-engine — Plan
 
+## Status: Continuous integration — landed 2026-05-28
+
+`.github/workflows/ci.yml` runs the full test matrix (Rust build + 11 unit
+tests, the 7 JS suites = 132 assertions, and smoke/depgraph/engine/slimming)
+on `ubuntu-latest` + `windows-latest` for every push/PR to `main`. Nothing
+guarded the suite on push before. First item of the Polish→Publish phase
+checked off; the rest (lib/ unit tests, npm publish prep, example project,
+contributing guide) remain.
+
 ## Status: Artifact slimming (Round 2, part 2) — landed 2026-05-28
 
 `ete init`'s default `chunked/` output no longer ships the large
@@ -250,7 +259,8 @@ excel-to-engine/
 
 ## Next Phase — Polish + Publish
 - [ ] Unit tests for all lib/ modules
-- [ ] GitHub Actions CI
+- [x] GitHub Actions CI — `.github/workflows/ci.yml` (ubuntu + windows; Rust
+      build/tests + JS suite + smoke/depgraph/engine/slimming), landed 2026-05-28
 - [ ] npm publish preparation
 - [ ] Example project with synthetic data
 - [ ] Contributing guide
