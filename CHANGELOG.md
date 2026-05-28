@@ -1,5 +1,54 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Outpost accuracy benchmark + eval-tooling fixes
+
+Stood up a repeatable accuracy + efficacy benchmark over the real ~200 MB
+Outpost models so improvements can be tracked over time, and fixed the eval
+tooling that was silently broken on them.
+
+### Benchmark (`benchmarks/outpost-bench.mjs`, `npm run bench:outpost`)
+
+- Wraps `eval/per-sheet-eval.mjs` (live engine-vs-ground-truth) for every model
+  under a root dir; reports overall accuracy, per-sheet pass/skip counts, and
+  timings. **Aggregate-only** results go to the committed `benchmarks/BASELINE.md`;
+  full per-sheet detail stays in the gitignored `benchmarks/results/`. No cell
+  value or label is ever committed.
+- **Baseline (2026-05-28):** outpost-a1 **84.3%**, outpost-a2 **85.5%** on the
+  standalone sheets. (The 17-sheet circular cluster and the 190 MB PP&E sheet are
+  skipped for now — see below.)
+
+### per-sheet-eval fixes (it wasn't in CI, so these went unnoticed)
+
+- **Windows crash fixed.** The generated per-sheet wrapper imported each sheet's
+  `compute()` by a bare absolute path (`"C:\\..."`), which Node ESM rejects on
+  Windows — so *every* sheet "crashed" at load (0% accuracy) on Windows and on
+  the real engines. Now uses `pathToFileURL()`. New `tests/cli/test-per-sheet-eval.mjs`
+  (6) guards it; CI runs it on **windows-latest** too.
+- **`--skip-clusters`** flag: record circular-cluster sheets as skipped instead
+  of evaluating them. The current convergence path re-runs the *whole* cluster
+  once per member sheet (O(cluster²)), which is infeasible on big models; this
+  yields a fast, real number for the standalone sheets while the single-pass
+  orchestrator eval is built (ROADMAP).
+
+### searchByLabel: lazy numerics (query / carry)
+
+`searchByLabel` previously scanned the entire ground truth once per matched row
+to collect adjacent numerics. It now probes the row's columns on demand (same
+approach as the refiner), with a directed `caseColumn` lookup probing its exact
+cell so a far scenario column is never missed. Behavior-preserving (query/carry/
+ai-interface suites green).
+
+### Findings that scope the accuracy-blocker work
+
+- The 190 MB PP&E sheet exceeds the 150 MB per-sheet limit → **large-sheet eval**
+  blocker confirmed.
+- The circular cluster is **17 of 21 sheets** and is evaluated redundantly
+  (once per member) → the concrete reason behind "circular-cluster won't
+  evaluate." Single-pass orchestrator eval is the fix.
+- `_computed-values.json` in these engines is **byte-identical to ground truth**
+  (a seeded copy), so it is not a valid accuracy source — accuracy must come from
+  live recompute.
+
 ## 2026-05-28 — `init` parses the ground truth once (shared across the pipeline)
 
 The real driver behind the "~2.5 min" refine loop wasn't one command — it was

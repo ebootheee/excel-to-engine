@@ -96,8 +96,10 @@ when we next touch the monitor server or auth surface.
     ~70 KB) but extracting it cheaply would couple the parser to refine's metric
     vocabulary. Not worth it on these models; revisit only if a genuinely
     giant-grid model (mostly unlabeled numeric grids) shows up.
-  - **Still open:** apply the same lazy-numerics path to `searchByLabel`
-    (`query` / `carry`) so they stop scanning the GT for adjacent values.
+  - **Done (2026-05-28):** applied the same lazy-numerics path to `searchByLabel`
+    (`query` / `carry`) — probes the matched row's columns instead of scanning
+    the whole GT, with a directed `caseColumn` probe so a far scenario column is
+    never missed.
 - Manifest migration tooling for model updates (vN → vN+1 shape diff).
 
 ---
@@ -147,14 +149,29 @@ when we next touch the monitor server or auth surface.
 - **Pref compounding for long holds** — 12-year 8% compound pref = 2.52x hurdle, which exceeds many MOIC targets. Need to detect when models use quarterly cash flow waterfalls vs bullet maturity and adjust accordingly.
 
 ### Eval System
-- Increase blind eval question diversity (computed questions, cross-sheet aggregations)
-- Add time-period-aware questions ("What was X in Q3 2025?")
-- Profile and optimize per-sheet eval for sheets >150MB
+- **Done (2026-05-28):** repeatable accuracy + efficacy benchmark over the real
+  Outpost models — `benchmarks/outpost-bench.mjs` → `benchmarks/BASELINE.md`
+  (aggregate-only). Baseline: a1 84.3%, a2 85.5% on standalone sheets. Also
+  **fixed a Windows crash** in `per-sheet-eval` (bare absolute ESM import →
+  `pathToFileURL`; it had zeroed accuracy on Windows/real engines and wasn't in
+  CI — now guarded by `test-per-sheet-eval`, run on windows-latest).
+- **Large-sheet eval (190 MB PP&E):** confirmed it exceeds the 150 MB per-sheet
+  limit and is skipped. Needs streaming/sharded per-sheet eval or a higher limit
+  with chunked compute. The standalone sheets at ~85% also need attention (array
+  formulas / wide-sheet disambiguation) — visible now that the eval runs.
+- Increase blind eval question diversity; add time-period-aware questions.
 
 ### Convergence Loop Accuracy
-- The 62-sheet circular cluster in the large model is the biggest accuracy blocker
-- Investigate running eval through the orchestrator (not per-sheet isolation) for circular sheets
-- Consider lazy subgraph evaluation (only compute transitive closure of target cells)
+- **Diagnosed (2026-05-28):** on the real models the circular cluster is **17 of
+  21 sheets**, and `per-sheet-eval` re-runs the *entire* cluster convergence once
+  per member sheet (O(cluster²)) — that's why clustered big models "won't
+  evaluate." The array-formula Headcount sheet lives inside this cluster, so it's
+  unmeasurable until this is fixed. `--skip-clusters` skips them for now.
+- **Fix:** single-pass orchestrator eval — converge the cluster once, then score
+  every member sheet from that converged state (then drop `--skip-clusters` from
+  the benchmark). Also scope the convergence diff to written cells (it currently
+  diffs all ~6M seeded cells per iteration).
+- Consider lazy subgraph evaluation (only compute transitive closure of targets).
 
 ## Near-Term
 

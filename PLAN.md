@@ -1,5 +1,29 @@
 # excel-to-engine — Plan
 
+## Status: Outpost accuracy benchmark + eval fixes — in progress 2026-05-28
+
+Standing up the multi-wave "next wave" effort on `feat/next-wave`, keystone
+first: a repeatable accuracy + efficacy benchmark over the real Outpost models
+(`benchmarks/outpost-bench.mjs` → `benchmarks/BASELINE.md`, aggregate-only).
+
+**Baseline:** outpost-a1 84.3%, outpost-a2 85.5% on standalone sheets; the
+17-sheet circular cluster and the 190 MB PP&E sheet are skipped pending deeper
+fixes. Landed alongside: a **Windows crash fix** in `per-sheet-eval` (bare
+absolute ESM import → `pathToFileURL`; it had silently zeroed accuracy on
+Windows/real engines and wasn't in CI — now guarded by `test-per-sheet-eval`),
+a `--skip-clusters` flag, and the **searchByLabel lazy-numerics** wave
+(query/carry stop scanning the full GT for adjacent values).
+
+**Wave status (this branch):**
+- ✅ Keystone benchmark + baseline; ✅ searchByLabel (query/carry).
+- 🔜 Accuracy blockers — now precisely diagnosed: single-pass orchestrator eval
+  for the 17-sheet cluster (it's re-run once per member today), large-sheet eval
+  (190 MB PP&E > 150 MB limit), array formulas (the Headcount sheet lives inside
+  the cluster). `_computed-values.json` is a GT copy — not an accuracy source.
+- 🔜 Manifest-pipeline perf (generate detectors / maps cell-types on ~6M cells).
+- 🔜 Polish→Publish (lib/ unit tests, npm publish prep, example project,
+  contributing guide).
+
 ## Status: single GT parse per init — landed 2026-05-28
 
 `ete init` now loads the ground truth once and shares the parsed object across
