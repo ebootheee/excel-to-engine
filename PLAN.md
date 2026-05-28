@@ -1,5 +1,19 @@
 # excel-to-engine — Plan
 
+## Status: refine label-index optimization — landed 2026-05-28
+
+`ete manifest refine` now sources labels from the parser's `_labels.json`
+(O(labels), no full GT scan) and resolves same-row numerics lazily by probing,
+instead of bucketing every numeric in the workbook up front (`buildIndex`). The
+giant unlabeled grids that dominate big models — the very thing that made refine
+slow — are no longer touched. Behavior-preserving (rankings unchanged; suites
+green). New `tests/cli/test-refine-label-index.mjs` (14) proves consumption +
+parity. The remaining cost floor is the ground-truth JSON parse; lifting that
+would need a parser-emitted row-values artifact (Tier B). The same lazy-numerics
+treatment is still open for `searchByLabel` (the `query`/`carry` path), and the
+per-command GT re-parse multiplier in `init` (generate → refine → doctor → maps
+each reload the GT) remains a separate follow-up.
+
 ## Status: Continuous integration — landed 2026-05-28
 
 `.github/workflows/ci.yml` runs the full test matrix (Rust build + 11 unit

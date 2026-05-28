@@ -11,7 +11,10 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { loadManifest, loadGroundTruth, resolveCell, MANIFEST_VERSION } from '../../lib/manifest.mjs';
+import {
+  loadManifest, loadGroundTruth, resolveCell, MANIFEST_VERSION,
+  loadLabelIndex, buildLabelIndex,
+} from '../../lib/manifest.mjs';
 
 // ---------------------------------------------------------------------------
 // Required fields and their search strategies
@@ -100,34 +103,73 @@ const REQUIRED_FIELDS = [
   },
 ];
 
+// Excel's hard column ceiling (XFD = 16384). numericsForRow probes a row's
+// columns left-to-right and stops after this many consecutive empty columns —
+// generous enough to span any realistic financial layout (and far-right
+// restated copies lose to the canonical leftmost cell in ranking anyway), while
+// bounding the probe cost on a label-only row to a few hundred hash lookups.
+const MAX_PROBE_COL = 16384;
+const MAX_PROBE_GAP = 256;
+
 /**
- * Build a pre-index of the ground truth for fast searching.
- * Groups string labels by sheet+row and numeric values by sheet+row.
+ * Build a search index over the ground truth.
+ *
+ * Labels come from the Rust parser's pre-built index (`chunked/_labels.json`)
+ * when present — an O(labels) read instead of scanning every cell — and fall
+ * back to a one-time ground-truth scan (`buildLabelIndex`) for legacy engines
+ * that predate the index.
+ *
+ * Numeric values are resolved **lazily, per matched row**, by direct probing
+ * (see `numericsForRow`). The refiner only ever inspects numerics on a label's
+ * own row, so the old approach — bucketing every numeric in a multi-million-cell
+ * workbook up front — was almost entirely wasted: on a big model the bulk of
+ * those cells live in giant *unlabeled* grids (e.g. a PP&E depreciation
+ * schedule) the refiner never consults. Skipping that build is the win; the
+ * one remaining full pass is the unavoidable JSON parse of the ground truth.
+ *
+ * @param {Object} gt - Ground truth { addr: value }
+ * @param {string} [modelDir] - Model dir, for loading `_labels.json`
+ * @returns {{ labels: Array, numericsForRow: (sheet: string, row: number) => Array }}
  */
-function buildIndex(gt) {
-  const labels = [];       // { addr, text, sheet, col, row }
-  const numsByRow = {};    // "sheet!row" → [{ addr, value, col }]
-
-  for (const [addr, val] of Object.entries(gt)) {
-    const bang = addr.lastIndexOf('!');
-    if (bang < 0) continue;
-    const sheet = addr.substring(0, bang);
-    const cellPart = addr.substring(bang + 1);
-    const match = cellPart.match(/^([A-Z]+)(\d+)$/);
-    if (!match) continue;
-    const col = match[1];
-    const row = parseInt(match[2], 10);
-    const rowKey = `${sheet}!${row}`;
-
-    if (typeof val === 'string' && val.length > 2 && val.length < 200) {
-      labels.push({ addr, text: val, sheet, col, row, rowKey });
-    } else if (typeof val === 'number') {
-      if (!numsByRow[rowKey]) numsByRow[rowKey] = [];
-      numsByRow[rowKey].push({ addr, value: val, col });
+function buildIndex(gt, modelDir) {
+  const labelIndex = (modelDir && loadLabelIndex(modelDir)) || buildLabelIndex(gt);
+  const labels = [];
+  for (const entries of Object.values(labelIndex)) {
+    for (const e of entries) {
+      labels.push({
+        addr: `${e.sheet}!${e.col}${e.row}`,
+        text: e.text,
+        sheet: e.sheet,
+        col: e.col,
+        row: e.row,
+        rowKey: `${e.sheet}!${e.row}`,
+      });
     }
   }
 
-  return { labels, numsByRow };
+  const rowCache = new Map();   // "sheet!row" → [{ addr, value, col }]
+  function numericsForRow(sheet, row) {
+    const key = `${sheet}!${row}`;
+    const cached = rowCache.get(key);
+    if (cached) return cached;
+    const nums = [];
+    let gap = 0;
+    for (let c = 1; c <= MAX_PROBE_COL && gap < MAX_PROBE_GAP; c++) {
+      const col = numToCol(c);
+      const addr = `${sheet}!${col}${row}`;
+      const v = gt[addr];
+      if (typeof v === 'number') {
+        nums.push({ addr, value: v, col });
+        gap = 0;
+      } else {
+        gap++;
+      }
+    }
+    rowCache.set(key, nums);
+    return nums;
+  }
+
+  return { labels, numericsForRow };
 }
 
 /**
@@ -141,8 +183,9 @@ export function runManifestRefine(modelDir, args) {
   const manifest = loadManifest(modelDir);
   const gt = loadGroundTruth(manifest, modelDir);
 
-  // Pre-index for fast searching (single pass over GT)
-  const index = buildIndex(gt);
+  // Pre-index for fast searching. Labels come from `_labels.json` when the
+  // parser emitted it (no GT scan); numerics are probed lazily per matched row.
+  const index = buildIndex(gt, modelDir);
 
   // Resolve refinement hints: either passed in via args.hints (used by init
   // when a template has been applied), or read from a hand-edited manifest
@@ -279,7 +322,7 @@ function searchForFieldIndexed(index, field, opts = {}) {
 
   // Pass 2: For each matching label, select the best same-row numeric cell.
   for (const lm of labelMatches) {
-    const rowNums = index.numsByRow[lm.rowKey] || [];
+    const rowNums = index.numericsForRow(lm.sheet, lm.row);
     const labelColNum = colToNum(lm.col);
 
     const inRange = rowNums.filter(n => {
@@ -442,4 +485,16 @@ function colToNum(col) {
     num = num * 26 + (col.charCodeAt(i) - 64);
   }
   return num;
+}
+
+// Inverse of colToNum: 1 → "A", 26 → "Z", 27 → "AA". Used by numericsForRow to
+// reconstruct cell addresses when probing a row's columns.
+function numToCol(num) {
+  let col = '';
+  while (num > 0) {
+    const rem = (num - 1) % 26;
+    col = String.fromCharCode(65 + rem) + col;
+    num = Math.floor((num - 1) / 26);
+  }
+  return col;
 }
