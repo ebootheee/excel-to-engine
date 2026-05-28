@@ -146,8 +146,13 @@ when we next touch the monitor server or auth surface.
 - Tests for `lib/excel-parser.mjs` fingerprinting with synthetic workbooks
 
 ### CI Pipeline
-- GitHub Actions: cargo build + smoke test + blind eval on synthetic model
-- Regression detection: compare accuracy against previous run
+- **Done (2026-05-28):** `.github/workflows/ci.yml` — on push/PR to `main`,
+  matrix across `ubuntu-latest` + `windows-latest`: `cargo build`/`cargo test`
+  (release) + the full JS suite (`npm test`) + `smoke` / `test:depgraph` /
+  `test:engine` / `test:slimming`. Rust + npm caching; concurrency-cancel.
+- Still open: blind-eval-on-synthetic gate + accuracy regression detection
+  (compare against previous run) — needs a committed synthetic model + a
+  baseline-accuracy artifact to diff against.
 
 ### Synthetic Example Project
 - Create a dummy PE fund model in Excel (no real data)
