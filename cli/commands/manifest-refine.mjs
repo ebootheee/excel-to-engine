@@ -129,10 +129,11 @@ const MAX_PROBE_GAP = 256;
  *
  * @param {Object} gt - Ground truth { addr: value }
  * @param {string} [modelDir] - Model dir, for loading `_labels.json`
+ * @param {Object} [injectedLabelIndex] - Pre-loaded label index (init shares one)
  * @returns {{ labels: Array, numericsForRow: (sheet: string, row: number) => Array }}
  */
-function buildIndex(gt, modelDir) {
-  const labelIndex = (modelDir && loadLabelIndex(modelDir)) || buildLabelIndex(gt);
+function buildIndex(gt, modelDir, injectedLabelIndex) {
+  const labelIndex = injectedLabelIndex || (modelDir && loadLabelIndex(modelDir)) || buildLabelIndex(gt);
   const labels = [];
   for (const entries of Object.values(labelIndex)) {
     for (const e of entries) {
@@ -181,11 +182,14 @@ function buildIndex(gt, modelDir) {
  */
 export function runManifestRefine(modelDir, args) {
   const manifest = loadManifest(modelDir);
-  const gt = loadGroundTruth(manifest, modelDir);
+  // Reuse init's shared ground truth + label index when provided (both
+  // read-only here), so the manifest pipeline parses the GT once across
+  // generate → refine → doctor → maps instead of once per command.
+  const gt = args?._gt || loadGroundTruth(manifest, modelDir);
 
   // Pre-index for fast searching. Labels come from `_labels.json` when the
   // parser emitted it (no GT scan); numerics are probed lazily per matched row.
-  const index = buildIndex(gt, modelDir);
+  const index = buildIndex(gt, modelDir, args?._labelIndex);
 
   // Resolve refinement hints: either passed in via args.hints (used by init
   // when a template has been applied), or read from a hand-edited manifest

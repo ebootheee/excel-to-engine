@@ -111,8 +111,10 @@ loop from minutes to seconds.
 The refine step inside that loop is also faster on big models: it reads labels
 from the parser's `chunked/_labels.json` and probes only the matched rows for
 values, instead of indexing every cell (it used to scan the whole ground truth,
-including giant unlabeled grids it never consults). Transparent — same command,
-same result.
+including giant unlabeled grids it never consults). And `init` now parses the
+ground truth **once** and shares it across generate → refine → doctor → maps,
+instead of each step re-parsing the full 200 MB+ file. Transparent — same
+commands, same results.
 
 **Default output is slim.** `ete init` drops the large debug/intermediate
 artifacts (`dependency-graph.json`, `_graph.json`, root `model-map.json`) once
