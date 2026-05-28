@@ -41,7 +41,7 @@
     "test:engine": "node pipelines/rust/tests/test-engine-runtime.mjs",
     "test:depgraph": "node pipelines/rust/tests/test-dependency-graph.mjs",
     "test:slimming": "node tests/cli/test-artifact-slimming.mjs",
-    "test": "node tests/cli/test-cli.mjs && node tests/cli/test-manifest-improvements.mjs && node tests/cli/test-manifest-maps.mjs && node tests/cli/test-refine-label-index.mjs && node tests/cli/test-init-shared-gt.mjs && node tests/cli/test-per-sheet-eval.mjs && node tests/cli/test-ai-interface.mjs && node tests/cli/test-e2e4-fixes.mjs && node tests/cli/test-ship-ready.mjs && node tests/cli/use-case-suite.mjs",
+    "test": "node tests/lib/test-lib.mjs && node tests/cli/test-cli.mjs && node tests/cli/test-manifest-improvements.mjs && node tests/cli/test-manifest-maps.mjs && node tests/cli/test-refine-label-index.mjs && node tests/cli/test-init-shared-gt.mjs && node tests/cli/test-per-sheet-eval.mjs && node tests/cli/test-ai-interface.mjs && node tests/cli/test-e2e4-fixes.mjs && node tests/cli/test-ship-ready.mjs && node tests/cli/use-case-suite.mjs",
     "bench:outpost": "node benchmarks/outpost-bench.mjs"
   },
   "devDependencies": {}

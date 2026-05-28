@@ -176,10 +176,13 @@ when we next touch the monitor server or auth surface.
 ## Near-Term
 
 ### Unit Test Suite
-- Tests for `lib/irr.mjs` with known IRR cases
-- Tests for `lib/waterfall.mjs` with standard structures
-- Tests for `lib/calibration.mjs` convergence and edge cases
-- Tests for `lib/excel-parser.mjs` fingerprinting with synthetic workbooks
+- **Done (2026-05-28):** `tests/lib/test-lib.mjs` (43) — `lib/irr.mjs` (known
+  IRR/NPV/XIRR cases), `lib/waterfall.mjs` (American/European/MOIC-hurdle +
+  conservation invariant), `lib/calibration.mjs` (nested get/set, validate),
+  `lib/sensitivity.mjs` (flattenOutputs). In `npm test` / CI.
+- Still open: `lib/calibration.mjs` convergence/edge cases (calibrate loop),
+  `lib/sensitivity.mjs` surface extraction + elasticity/breakpoints, and
+  `lib/excel-parser.mjs` fingerprinting with synthetic workbooks.
 
 ### CI Pipeline
 - **Done (2026-05-28):** `.github/workflows/ci.yml` — on push/PR to `main`,

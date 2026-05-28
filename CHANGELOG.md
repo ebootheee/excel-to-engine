@@ -1,5 +1,22 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Unit tests for lib/ (Polish→Publish)
+
+The shared financial libraries had no direct coverage. Added
+`tests/lib/test-lib.mjs` (43 known-answer assertions), wired into `npm test`
+(runs first) so CI guards them on every push:
+
+- **`lib/irr.mjs`** — NPV/NPV-derivative identities; IRR of classic cash-flow
+  series (−100→+150 = 50%, −1000 then 200×8 ≈ 11.89%, 3-year bullet); Newton ≡
+  bisection agreement; NPV(IRR) ≈ 0; null on no-sign-change; XIRR on dated flows.
+- **`lib/waterfall.mjs`** — American 80/20 + 8% pref + catch-up (LP/GP splits,
+  carry %), no-catch-up variant, loss case (no carry), the flat-MOIC-hurdle
+  promote (incl. the hold-period-independence invariant), European builder; the
+  LP+GP = distributed conservation invariant across structures.
+- **`lib/calibration.mjs`** — nested get/set; `validateOutputs` pass/fail +
+  suggested corrective factor.
+- **`lib/sensitivity.mjs`** — `flattenOutputs` group/type filtering.
+
 ## 2026-05-28 — Outpost accuracy benchmark + eval-tooling fixes
 
 Stood up a repeatable accuracy + efficacy benchmark over the real ~200 MB

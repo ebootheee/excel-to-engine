@@ -315,7 +315,8 @@ excel-to-engine/
 - [ ] Wide sheet column disambiguation for blind eval
 
 ## Next Phase — Polish + Publish
-- [ ] Unit tests for all lib/ modules
+- [x] Unit tests for all lib/ modules — `tests/lib/test-lib.mjs` (43: irr,
+      waterfall, calibration, sensitivity), in `npm test`/CI (2026-05-28)
 - [x] GitHub Actions CI — `.github/workflows/ci.yml` (ubuntu + windows; Rust
       build/tests + JS suite + smoke/depgraph/engine/slimming), landed 2026-05-28
 - [ ] npm publish preparation
