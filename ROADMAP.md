@@ -20,14 +20,19 @@ RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
 - Request #4 (typed returns) satisfied by the `cell-types.json` sidecar;
   the breaking Option A (typed `values`) deliberately not pursued.
 
-**Round 2:**
-- **`dependency-graph.json`** (slim cell→cell edges). Unblocks
-  `affectsOutputs` in named-inputs.json and read-set validation for strict
-  overrides. (The request's #3 and #10 are the same artifact.)
-- **`model-map.json` slimming** — shard or zstd; debug artifacts behind
-  `--emit-debug`. Target <100 MB default output.
+**Round 2 — done (part 1, 2026-05-27):**
+- **`dependency-graph.json`** (cell→cells forward edges, ranges expanded) +
+  `dependsOnNamedInputs` / `affectsOutputs` closures on the named maps
+  (request #3/#10). Fixed an `extract_refs` same-sheet range-truncation bug
+  along the way. `npm run test:depgraph`.
+
+**Round 2 — still open:**
+- **`model-map.json` / `dependency-graph.json` slimming** — shard or zstd;
+  debug artifacts behind `--emit-debug`. Target <100 MB default output. The
+  full dependency graph can be large on big models (ranges expand); the
+  high-value closures live in the named maps regardless. (request #8)
 - **Engine perf** — base-case hot cache + partial recompute for the grid
-  generator; revisit only if parallel cloud workers prove insufficient.
+  generator; revisit only if parallel cloud workers prove insufficient. (#9)
 - **MIP gating (request #7)** is a model-owner question, not a pipeline bug
   (engine faithfully reproduces an Excel base case of 0). Surface via a
   `requiredFor` field if/when named-inputs gains one.

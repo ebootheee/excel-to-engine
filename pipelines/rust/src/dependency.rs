@@ -211,30 +211,46 @@ fn read_cell_or_range(s: &str) -> Option<(Vec<String>, usize)> {
 /// Check if a string looks like a cell reference (letters + digits, e.g. A1, B12, AA100)
 fn is_cell_ref(s: &str) -> bool {
     let bytes = s.as_bytes();
-    if bytes.is_empty() {
+
+    // Consume one A1-style address starting at `i`; return the end index, or
+    // None if `i` doesn't begin a valid address.
+    fn consume_cell(bytes: &[u8], mut i: usize) -> Option<usize> {
+        if i < bytes.len() && bytes[i] == b'$' {
+            i += 1;
+        }
+        let col_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_uppercase() {
+            i += 1;
+        }
+        if i == col_start || i - col_start > 3 {
+            return None;
+        }
+        if i < bytes.len() && bytes[i] == b'$' {
+            i += 1;
+        }
+        let row_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i == row_start {
+            return None;
+        }
+        Some(i)
+    }
+
+    // Accept a single cell ("A1") or a range ("A1:B10"). A range must fully
+    // consume the string — otherwise "A1:A3" failed this guard and the
+    // same-sheet range branch was skipped, dropping the interior cells.
+    let Some(mut i) = consume_cell(bytes, 0) else {
         return false;
+    };
+    if i < bytes.len() && bytes[i] == b':' {
+        match consume_cell(bytes, i + 1) {
+            Some(j) => i = j,
+            None => return false,
+        }
     }
-    let mut i = 0;
-    // Optional $
-    if bytes[i] == b'$' {
-        i += 1;
-    }
-    let col_start = i;
-    while i < bytes.len() && bytes[i].is_ascii_uppercase() {
-        i += 1;
-    }
-    if i == col_start || i - col_start > 3 {
-        return false;
-    }
-    // Optional $
-    if i < bytes.len() && bytes[i] == b'$' {
-        i += 1;
-    }
-    let row_start = i;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
-    }
-    i > row_start && i == bytes.len()
+    i == bytes.len()
 }
 
 /// Expand a range like A1:C3 into all cell addresses.
