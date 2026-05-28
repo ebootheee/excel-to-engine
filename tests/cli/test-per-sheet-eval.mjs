@@ -68,6 +68,32 @@ console.log('Testing: --skip-clusters produces a report without error');
   if (r) assert(typeof r.summary.overallAccuracy === 'number', 'summary present with --skip-clusters');
 }
 
+console.log('Testing: circular-cluster convergence (synthetic SheetA↔SheetB fixture)');
+{
+  const CLUSTER = join(ROOT, 'tests', 'cli', 'fixtures', 'cluster-model', 'chunked');
+  if (existsSync(join(CLUSTER, '_graph.json'))) {
+    const ctmp = mkdtempSync(join(tmpdir(), 'pse-cl-'));
+    const cchunked = join(ctmp, 'chunked');
+    cpSync(CLUSTER, cchunked, { recursive: true });
+    const out = join(ctmp, 'report.json');
+    try {
+      execFileSync('node', [EVAL, cchunked, '--output', out], { encoding: 'utf-8', stdio: 'pipe', maxBuffer: 32 * 1024 * 1024 });
+    } catch { /* inspect report */ }
+    const r = existsSync(out) ? JSON.parse(readFileSync(out, 'utf-8')) : null;
+    assert(r !== null, 'cluster report written');
+    if (r) {
+      assert(r.summary.sheetsEvaluated === 2, `both cluster sheets evaluated (got ${r.summary.sheetsEvaluated})`);
+      assert(r.summary.sheetsWithErrors === 0, `cluster converged without error (errors: ${r.summary.sheetsWithErrors})`);
+      // Converges to a=50,b=50,c=100,d=100 — exercises the convergence loop and
+      // the scoped (written-cells-only) convergence diff.
+      assert(r.summary.overallAccuracy === 100, `cluster fixture 100% via convergence (got ${r.summary.overallAccuracy})`);
+    }
+    rmSync(ctmp, { recursive: true, force: true });
+  } else {
+    console.log('  (skip: cluster fixture missing)');
+  }
+}
+
 rmSync(tmp, { recursive: true, force: true });
 console.log('');
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

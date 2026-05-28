@@ -1,5 +1,31 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Circular-cluster eval: scoped convergence diff + first cluster test
+
+Progress on the circular-cluster accuracy blocker (the 17-of-21-sheet cluster on
+the real models that wouldn't evaluate).
+
+- **Scoped convergence diff.** The cluster convergence loop in
+  `per-sheet-eval.mjs` checked for a fixed point by diffing **every** cell in the
+  context each iteration — and the context is seeded with the full (multi-million-
+  cell) ground truth, so that was O(all cells) × up to 200 iterations. It now
+  tracks the cells `compute()` actually writes (`ctx._written`) and diffs only
+  those (the cluster's own outputs). Behavior-preserving; large constant-factor
+  win on big clusters.
+- **First circular-cluster test + fixture.** `tests/cli/fixtures/cluster-model/`
+  is a synthetic 2-sheet circular model (SheetA ↔ SheetB, converges to
+  a=50,b=50,c=100,d=100). `tests/cli/test-per-sheet-eval.mjs` now evaluates it
+  through the convergence loop and asserts 100% — the cluster path had no
+  coverage before, and this guards the scoped-diff change.
+
+**Still the key fix (cluster-once):** measured on the real model, scoped-diff
+alone is *not* enough — `per-sheet-eval` re-runs the entire cluster convergence
+**once per member sheet** (17×), and engine inaccuracies keep some clusters from
+converging (200 iters). The remaining work is single-pass orchestrator eval:
+converge the cluster once, then score every member from that converged state
+(one task per cluster, not per sheet). The fixture above is the ready-made test
+oracle. Until then the benchmark runs with `--skip-clusters`.
+
 ## 2026-05-28 — Unit tests for lib/ (Polish→Publish)
 
 The shared financial libraries had no direct coverage. Added

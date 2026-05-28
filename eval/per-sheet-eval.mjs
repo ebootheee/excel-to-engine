@@ -212,21 +212,22 @@ async function main() {
   const clusterFns = [${clusterModules.map(m => `compute_${m.sanitized}`).join(', ')}];
   const MAX_ITER = 200;
   const TOL = 1e-6;
-  let prevSnapshot = {};
+  const prevSnapshot = {};
   for (let _ci = 0; _ci < MAX_ITER; _ci++) {
     for (const fn of clusterFns) fn(ctx);
-    // Check convergence on numeric values
+    // Convergence is about the cluster's *computed* cells stabilizing, so diff
+    // only the cells the cluster wrote (ctx._written) — not every seeded
+    // ground-truth cell. On a model with millions of seeded cells the old
+    // O(all-cells)-per-iteration diff was a dominant cost (and × 200 iters).
     let maxDelta = 0;
-    const snapshot = {};
-    for (const [k, v] of Object.entries(ctx.values)) {
-      if (typeof v === 'number') {
-        snapshot[k] = v;
-        const prev = prevSnapshot[k] || 0;
-        const d = Math.abs(v - prev);
-        if (d > maxDelta) maxDelta = d;
-      }
+    for (const k of ctx._written) {
+      const v = ctx.values[k];
+      if (typeof v !== 'number') continue;
+      const prev = prevSnapshot[k] || 0;
+      const d = Math.abs(v - prev);
+      if (d > maxDelta) maxDelta = d;
+      prevSnapshot[k] = v;
     }
-    prevSnapshot = snapshot;
     if (_ci > 0 && maxDelta < TOL) break;
   }
 `
@@ -247,8 +248,9 @@ const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
 const ctx = {
   values: {},
+  _written: new Set(),  // cells written by compute() — the cluster convergence diffs only these
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
-  set(addr, value) { this.values[addr] = value; },
+  set(addr, value) { this.values[addr] = value; this._written.add(addr); },
   _parseRange(rangeStr) {
     const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
     if (!m) return null;

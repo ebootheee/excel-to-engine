@@ -167,10 +167,15 @@ when we next touch the monitor server or auth surface.
   per member sheet (O(cluster²)) — that's why clustered big models "won't
   evaluate." The array-formula Headcount sheet lives inside this cluster, so it's
   unmeasurable until this is fixed. `--skip-clusters` skips them for now.
-- **Fix:** single-pass orchestrator eval — converge the cluster once, then score
-  every member sheet from that converged state (then drop `--skip-clusters` from
-  the benchmark). Also scope the convergence diff to written cells (it currently
-  diffs all ~6M seeded cells per iteration).
+- **Done (2026-05-28):** scoped the convergence diff to written cells
+  (`ctx._written`) instead of all ~6M seeded cells per iteration. Added a
+  synthetic 2-sheet circular fixture (`tests/cli/fixtures/cluster-model/`) + the
+  first cluster test. Measured: scoped-diff alone is **not** enough — the 17×
+  per-member redundancy dominates.
+- **Remaining key fix (cluster-once):** single-pass orchestrator eval — converge
+  the cluster once, then score every member from that converged state (one task
+  per cluster, not per sheet); then drop `--skip-clusters` from the benchmark.
+  The cluster fixture is the ready test oracle.
 - Consider lazy subgraph evaluation (only compute transitive closure of targets).
 
 ## Near-Term
