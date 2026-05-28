@@ -2,6 +2,7 @@
 
 > Turn any Excel financial model into a queryable scenario engine. Three commands from `.xlsx` to IRR sensitivity tables.
 
+[![CI](https://github.com/ebootheee/excel-to-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/ebootheee/excel-to-engine/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## From Excel to Scenario Analysis in 60 Seconds

@@ -1,5 +1,31 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Continuous integration (GitHub Actions)
+
+The test suite is now substantial (132 JS assertions across 7 suites, plus the
+Rust unit tests and the `smoke` / `test:depgraph` / `test:engine` /
+`test:slimming` integration suites) but nothing guarded it on push. Added
+`.github/workflows/ci.yml`.
+
+### What runs
+
+- **On every push to `main` and every PR to `main`**, a matrix across
+  **`ubuntu-latest` + `windows-latest`** (this project is developed on Windows
+  but ships cross-platform, so both are required; `fail-fast: false` so one
+  OS's failure doesn't mask the other).
+- Steps per OS: `npm ci` → `cargo build --release` → `cargo test --release`
+  (11 Rust unit tests) → `npm test` (the 7 JS suites) → `npm run smoke`
+  (78/78 chunked-engine accuracy) → `test:depgraph` → `test:engine` →
+  `test:slimming`. Each integration suite is its own step for clear failure
+  attribution.
+- Rust builds are cached with `Swatinem/rust-cache`; npm via `setup-node`'s
+  built-in cache. `concurrency` cancels superseded runs on the same ref;
+  `permissions: contents: read` keeps the token least-privilege.
+
+This unblocks the Polish→Publish track (a green CI badge is table stakes before
+npm publish) and makes every subsequent refactor safer by guarding the whole
+suite automatically.
+
 ## 2026-05-28 — Artifact slimming (Round 2, part 2)
 
 Round 2 of the Mippy request, #8: keep the default `chunked/` output small.
