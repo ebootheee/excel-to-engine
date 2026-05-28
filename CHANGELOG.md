@@ -1,5 +1,41 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — `init` parses the ground truth once (shared across the pipeline)
+
+The real driver behind the "~2.5 min" refine loop wasn't one command — it was
+that `ete init` runs **generate → refine → doctor → maps** in sequence and
+**each independently re-read and re-parsed the full ground truth** from disk. On
+the real ~200 MB Outpost models that's four parses of a 200 MB+ file at ~3.6 s
+each, plus each command's own O(N) scan.
+
+### What changed
+
+- `init` now loads the ground truth (and label index) **once**, after the parse,
+  and shares the parsed object across all four manifest steps. The GT is
+  read-only in every consumer (verified — no `gt[...] =` / `delete` / `assign`
+  anywhere), so a single shared object is safe.
+- Each consumer (`runGenerate`, `runManifestRefine`, `runDoctor`,
+  `emitManifestMaps`) gained an optional injected GT (`_gt` / `opts.gt`) and
+  label index. When absent — i.e. standalone `ete manifest generate|refine|
+  doctor|maps` — they load from disk exactly as before. Fully backward-compatible.
+- Eliminates 3 of the 4 full-GT parses per init (~11 s on a 200 MB GT) at **zero
+  disk cost** — and it's independent of model shape, unlike a row-values artifact.
+
+### Why not the row-values artifact (Tier B)
+
+Measured on both real ~200 MB Outpost models: they're **dense-label** (≈90% of
+rows labeled, ≈93% of numerics on labeled rows), not the giant-grid case Tier B's
+big win assumed. A general row-values artifact would be ≈30% of GT (≈60% of the
+post-#17 compact GT) — only ~1.6× on refine while inflating output ~60%, fighting
+the #17 slimming. Deprioritized in favor of this shared-parse change. See ROADMAP.
+
+### Tests
+
+- `tests/cli/test-init-shared-gt.mjs` (8), wired into `npm test`: with **no**
+  `_ground-truth.json` on disk, an injected GT makes generate/refine/doctor/maps
+  all succeed and produce correct results (a consumer that read disk would
+  error); a negative control confirms disk is otherwise the only source.
+
 ## 2026-05-28 — refine consumes `_labels.json` + lazy numeric probes
 
 `ete manifest refine` rebuilt a full label+numeric index over the **entire**

@@ -12,6 +12,14 @@ eval/models/
 eval/.env
 tests/eval-results.json
 
+# Real/proprietary models + their parsed engines (public repo — never commit
+# real financials, cell values, or participant names). Source .xlsx are already
+# covered by *.xlsx above; this also excludes the parsed engine output dirs.
+engines/
+
+# Transient test artifacts (scenario save/load test writes here on every run)
+tests/cli/fixtures/scenarios/
+
 # Stale extraction artifacts
 _extract*
 _extracted/

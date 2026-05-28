@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
 import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
+import { loadLabelIndex } from '../../lib/manifest.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = join(__dirname, '..', '..', 'templates');
@@ -134,11 +135,29 @@ export function runInit(excelPath, args) {
     }
   }
 
+  // Load the ground truth + label index ONCE and share them across the entire
+  // manifest pipeline below (generate → refine → doctor → maps). Each of those
+  // steps previously re-read and re-parsed the full ground truth independently —
+  // up to four parses of a file that can exceed 200 MB, which was the dominant
+  // cost of `init` on large models. The GT is read-only in all of them, so a
+  // single shared parse is safe. Falls back to per-command loading if it can't
+  // be pre-loaded.
+  let sharedGt = null;
+  let sharedLabelIndex = null;
+  try {
+    sharedGt = JSON.parse(readFileSync(groundTruthPath, 'utf-8'));
+    sharedLabelIndex = loadLabelIndex(chunkedDir); // null if parser didn't emit _labels.json
+  } catch (e) {
+    lines.push(`  (Note: could not pre-load ground truth for sharing — commands will load it individually: ${e.message})`);
+  }
+  const shared = sharedGt ? { _gt: sharedGt, _labelIndex: sharedLabelIndex } : {};
+
   // Step 2: Generate manifest
   lines.push('');
   lines.push('Step 2/4: Generating manifest...');
   const manifestResult = runManifestCommand('generate', chunkedDir, {
     source: excelPath.split('/').pop(),
+    ...shared,
   });
 
   if (manifestResult.error) {
@@ -193,6 +212,7 @@ export function runInit(excelPath, args) {
     const refineResult = runManifestCommand('refine', chunkedDir, {
       apply: true,
       hints: templateApplied ? templateApplied.hints : null,
+      ...shared,
     });
     if (refineResult._formatted) {
       // Show just the found/not-found summary, not the full report
@@ -224,7 +244,7 @@ export function runInit(excelPath, args) {
   let doctorResult;
   let quarantined = [];
   try {
-    doctorResult = runManifestCommand('doctor', chunkedDir, {});
+    doctorResult = runManifestCommand('doctor', chunkedDir, { ...shared });
     const errors = (doctorResult.issues || []).filter(i => i.severity === 'error');
     const warnings = (doctorResult.issues || []).filter(i => i.severity === 'warn');
     if (errors.length > 0) {
@@ -265,7 +285,7 @@ export function runInit(excelPath, args) {
   lines.push('');
   lines.push('Step 5/6: Emitting downstream contract maps...');
   try {
-    const maps = emitManifestMaps(chunkedDir, { excelPath });
+    const maps = emitManifestMaps(chunkedDir, { excelPath, gt: sharedGt });
     if (maps.written.length > 0) {
       lines.push(`  Wrote: ${maps.written.join(', ')}`);
       const s = maps.stats;

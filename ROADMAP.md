@@ -83,14 +83,21 @@ when we next touch the monitor server or auth surface.
     lazily by probing — so it no longer indexes the giant unlabeled grids that
     dominate big models. The removed `buildIndex` pass was ~7.9 s on a 6.4 M-cell
     GT; the work skipped scales with total cell count. `test-refine-label-index`.
-  - **Still open (Tier B):** the remaining floor is the ground-truth JSON parse.
-    A parser-emitted *row-values* artifact (numerics for label-bearing rows
-    only) would let refine skip the GT entirely — a large win on giant-grid
-    models, ~GT-sized (no win) on dense-label models, so gate it on a
-    real-model size measurement first.
+  - **Done (2026-05-28): single GT parse per `init`.** `init` now loads the
+    ground truth once and shares the parsed object across
+    generate → refine → doctor → maps (each previously re-parsed the full
+    200 MB+ GT). The GT is read-only in all of them. `test-init-shared-gt`.
+  - **Tier B (row-values artifact) — measured and deprioritized.** Gauged on
+    the two real ~200 MB Outpost models: both are **dense-label** (≈90% of rows
+    labeled, ≈93% of numerics on labeled rows), *not* the giant-grid case the
+    100× idea assumed. A general row-values artifact is ≈30% of GT (≈60% of the
+    post-#17 compact GT) → only ~1.6× on refine while inflating output ~60%,
+    which fights the #17 slimming. Refine's *actual* need is tiny (~100 rows /
+    ~70 KB) but extracting it cheaply would couple the parser to refine's metric
+    vocabulary. Not worth it on these models; revisit only if a genuinely
+    giant-grid model (mostly unlabeled numeric grids) shows up.
   - **Still open:** apply the same lazy-numerics path to `searchByLabel`
-    (`query` / `carry`), and build the GT index *once* per `init` so
-    generate → refine → doctor → maps stop each re-parsing it.
+    (`query` / `carry`) so they stop scanning the GT for adjacent values.
 - Manifest migration tooling for model updates (vN → vN+1 shape diff).
 
 ---

@@ -1,5 +1,24 @@
 # excel-to-engine — Plan
 
+## Status: single GT parse per init — landed 2026-05-28
+
+`ete init` now loads the ground truth once and shares the parsed object across
+the whole manifest pipeline — generate → refine → doctor → maps — instead of
+each step re-reading and re-parsing the full ground truth from disk (up to four
+parses of a 200 MB+ file; ~3.6 s per parse on the real Outpost models). This was
+the dominant cost of init on large models and the real driver behind the
+"~2.5 min" refine loop. The GT is read-only in all four consumers, so a single
+shared object is safe; each command falls back to loading the GT itself when no
+injection is supplied (standalone `ete manifest …` is unchanged). New
+`test-init-shared-gt.mjs` (8) proves each consumer honors the injected GT and
+never touches disk for it.
+
+This closes the refine-perf thread opened by the label-index work; Tier B (the
+row-values artifact) was measured on the real ~200 MB models and deprioritized
+(they're dense-label, so it'd be only ~1.6× while inflating output ~60% — see
+ROADMAP). Remaining follow-up: apply the same lazy-numerics path to
+`searchByLabel` (`query`/`carry`).
+
 ## Status: refine label-index optimization — landed 2026-05-28
 
 `ete manifest refine` now sources labels from the parser's `_labels.json`
