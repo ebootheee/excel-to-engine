@@ -83,9 +83,13 @@ export function runInit(excelPath, args) {
     // backticks, or quote characters inject commands.
     try {
       lines.push('Step 1/3: Running Rust parser...');
+      // --emit-debug retains the large root model-map.json (the parser skips it
+      // in chunked mode by default; see request #8 slimming).
+      const parserArgs = [resolve(excelPath), absOutput, '--chunked'];
+      if (args.emitDebug) parserArgs.push('--emit-debug');
       const result = spawnSync(
         parserBin,
-        [resolve(excelPath), absOutput, '--chunked'],
+        parserArgs,
         { encoding: 'utf-8', timeout: 600000, maxBuffer: 50 * 1024 * 1024 }
       );
       if (result.error) throw result.error;
@@ -109,10 +113,13 @@ export function runInit(excelPath, args) {
     }
   }
 
-  // Clean up redundant root-level model-map.json in chunked mode. The CLI
-  // reads exclusively from chunked/. On large models the root file can be
-  // 600+ MB while serving no downstream consumer. Opt out with --keep-model-map.
-  if (!canReuse && !args.keepModelMap) {
+  // Clean up redundant root-level model-map.json / formulas.json in chunked
+  // mode. The CLI reads exclusively from chunked/. The parser now skips writing
+  // the 600+ MB root model-map.json by default (request #8), so this is mostly a
+  // safety net for older parser binaries — but it also clears the small root
+  // formulas.json stub. Skipped under --emit-debug (keep everything the parser
+  // emitted) or --keep-model-map.
+  if (!canReuse && !args.keepModelMap && !args.emitDebug) {
     const rootModelMap = join(absOutput, 'model-map.json');
     const rootFormulas = join(absOutput, 'formulas.json');
     if (existsSync(rootModelMap)) {
@@ -270,6 +277,28 @@ export function runInit(excelPath, args) {
     }
   } catch (e) {
     lines.push(`  (Map emission skipped: ${e.message})`);
+  }
+
+  // Step 5b: Slim the default chunked/ output. The cell-level
+  // dependency-graph.json (ranges expanded → the largest artifact on big
+  // models) and the sheet-level _graph.json are intermediate/debug: the
+  // high-value derivative — the dependsOnNamedInputs / affectsOutputs closures —
+  // was just baked into the named maps by Step 5, and nothing in the toolkit
+  // reads _graph.json. Remove them unless --emit-debug (request #8: keep the
+  // default output small; the contract lives in the named maps).
+  if (!args.emitDebug) {
+    let freed = 0;
+    for (const f of ['dependency-graph.json', '_graph.json']) {
+      const p = join(chunkedDir, f);
+      if (existsSync(p)) {
+        try { freed += statSync(p).size; unlinkSync(p); } catch { /* ignore */ }
+      }
+    }
+    if (freed > 1e6) {
+      lines.push(`  Slimmed debug artifacts: ${(freed / 1e6).toFixed(0)} MB freed (--emit-debug to retain)`);
+    }
+  } else {
+    lines.push('  --emit-debug: retained dependency-graph.json + _graph.json');
   }
 
   // Step 6: Print summary
