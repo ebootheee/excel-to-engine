@@ -336,8 +336,32 @@ Excel (.xlsx)
     → Per-sheet JS modules (formulas transpiled to JavaScript)
     → Ground truth JSON (every cell value from Excel)
     → Model manifest (semantic mapping of financial concepts to cells)
+    → Downstream contract maps (named-outputs/inputs.json, cell-types.json)
       → CLI scenario engine (delta cascade: adjustments → P&L → TV → equity → returns → carry)
 ```
+
+### Downstream contract artifacts
+
+`ete init` emits three small JSON files into `chunked/` so other apps can wire
+up the engine **by name, at build time** — without running the engine to
+discover which cells hold the outputs (and without shipping the silent-`NaN`
+bug you get from guessing the wrong cell):
+
+| File | Shape | Use |
+|------|-------|-----|
+| **`named-outputs.json`** | `name → { cell, label, type, format, baseCaseValue, source }` | The contract for downstream apps. Look up `grossMOIC`, get its cell + base-case value, spot-check on import. If your observed value ≠ `baseCaseValue`, your cell map is stale — fail the build. |
+| **`named-inputs.json`** | `name → { cell, type, default, referencedBy }` | Drive `engine.run({ [cell]: value })` for what-ifs. Only Excel **defined-name** cells that are **read by ≥1 formula** are listed (curated inputs, not every constant). |
+| **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label string from a numeric output, and a real `0` (present, `"number"`) from a never-computed cell (absent from this map). |
+
+**Names come from the workbook's defined-name table** (the model owner's
+curated named cells) when present — these are authoritative and override
+heuristic detection. Regenerate without a re-parse:
+`ete manifest maps ./my-model/chunked/ --excel model.xlsx`.
+
+> Note: `named-inputs.json` and defined-name enrichment of outputs require the
+> source `.xlsx`. Without it (e.g. `--reuse-parse`), outputs + cell-types still
+> emit from the manifest and ground truth; inputs are skipped with a recorded
+> reason.
 
 ### The Delta Cascade
 
@@ -373,6 +397,7 @@ excel-to-engine/
 | Library | Purpose |
 |---------|---------|
 | `lib/manifest.mjs` | Manifest schema, auto-generation, validation, cell resolvers, label search |
+| `lib/manifest-maps.mjs` | Downstream contract maps (named-outputs/inputs.json, cell-types.json) |
 | `lib/irr.mjs` | Newton-Raphson IRR with bisection fallback, XIRR for irregular dates |
 | `lib/waterfall.mjs` | American + European PE waterfall structures |
 | `lib/calibration.mjs` | Scale factor calibration against Excel targets |

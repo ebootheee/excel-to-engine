@@ -553,80 +553,130 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
         lines.push(String::new());
     }
 
-    // run() function
-    lines.push("/**".to_string());
-    lines.push(" * Execute the full model.".to_string());
-    lines.push(" * @param {Object} [inputs] - Optional overrides: { \"Sheet!A1\": value, ... }".to_string());
-    lines.push(" * @returns {{ values: Object, kpis: Object }}".to_string());
-    lines.push(" */".to_string());
-    lines.push("export function run(inputs = {}) {".to_string());
-    lines.push("  const ctx = new ComputeContext();".to_string());
-    lines.push(String::new());
-    lines.push("  // Apply input overrides".to_string());
-    lines.push("  for (const [addr, val] of Object.entries(inputs)) {".to_string());
-    lines.push("    ctx.set(addr, val);".to_string());
-    lines.push("  }".to_string());
-    lines.push(String::new());
+    // run() function — shared preamble (overrides + read-tracking + meta scaffold)
+    lines.push(r#"/**
+ * Execute the full model.
+ * @param {Object} [inputs] - Optional cell overrides: { "Sheet!A1": value, ... }
+ * @param {Object} [options]
+ * @param {boolean} [options.strict] - Throw if any override cell is not read by a formula.
+ * @returns {{ values: Object, kpis: Object, meta: Object, unknownOverrides: string[] }}
+ */
+export function run(inputs = {}, options = {}) {
+  const ctx = new ComputeContext();
+  const _t0 = Date.now();
+  const TOL = 1e-6;
+  const _clusterMeta = [];
+
+  // Track which override cells are actually read by a formula. Only instrument
+  // when overrides are present so the base case stays zero-overhead. Lets the
+  // engine report no-op overrides (typos, missing sheet prefix, stale cells).
+  const _overrideKeys = Object.keys(inputs);
+  const _readOverrides = new Set();
+  if (_overrideKeys.length > 0) {
+    const _oset = new Set(_overrideKeys);
+    const _origGet = ctx.get.bind(ctx);
+    ctx.get = (addr) => { if (_oset.has(addr)) _readOverrides.add(addr); return _origGet(addr); };
+  }
+
+  // Apply input overrides, then pin them so each sheet's literal/input pass
+  // can't clobber them back to base case.
+  for (const [addr, val] of Object.entries(inputs)) {
+    ctx.values[addr] = val;
+  }
+  if (_overrideKeys.length > 0) ctx._locked = new Set(_overrideKeys);
+"#.to_string());
 
     if graph.sheet_clusters.is_empty() {
-        // Simple case: no circular deps, just execute in topo order
-        lines.push("  // Execute sheets in topological order".to_string());
-        lines.push("  for (const sheetName of TOPO_ORDER) {".to_string());
-        lines.push("    const computeFn = SHEET_COMPUTE[sheetName];".to_string());
-        lines.push("    if (computeFn) computeFn(ctx);".to_string());
-        lines.push("  }".to_string());
+        lines.push(r#"
+  // Execute sheets in topological order (no circular deps)
+  for (const sheetName of TOPO_ORDER) {
+    const computeFn = SHEET_COMPUTE[sheetName];
+    if (computeFn) computeFn(ctx);
+  }
+"#.to_string());
     } else {
-        // Complex case: execute with convergence loops for clusters
-        lines.push("  // Execute sheets in topological order with convergence loops for circular deps".to_string());
-        lines.push("  const MAX_ITER = 200;".to_string());
-        lines.push("  const TOL = 1e-6;".to_string());
-        lines.push("  const executed = new Set();".to_string());
-        lines.push(String::new());
-        lines.push("  for (const sheetName of TOPO_ORDER) {".to_string());
-        lines.push("    if (executed.has(sheetName)) continue;".to_string());
-        lines.push(String::new());
-        lines.push("    // Check if this sheet is part of a cluster".to_string());
-        lines.push("    if (CLUSTER_SHEETS.has(sheetName)) {".to_string());
-        lines.push("      const cluster = SHEET_CLUSTERS.find(c => c.includes(sheetName));".to_string());
-        lines.push("      if (cluster && !cluster.some(s => executed.has(s))) {".to_string());
-        lines.push("        // Run the entire cluster in a convergence loop".to_string());
-        lines.push("        let _prevClusterDelta = Infinity, _clusterStale = 0;".to_string());
-        lines.push("        for (let iter = 0; iter < MAX_ITER; iter++) {".to_string());
-        lines.push("          const snapshot = JSON.stringify(ctx.values);".to_string());
-        lines.push("          for (const s of cluster) {".to_string());
-        lines.push("            const fn = SHEET_COMPUTE[s];".to_string());
-        lines.push("            if (fn) fn(ctx);".to_string());
-        lines.push("          }".to_string());
-        lines.push("          // Check convergence".to_string());
-        lines.push("          const after = ctx.values;".to_string());
-        lines.push("          const before = JSON.parse(snapshot);".to_string());
-        lines.push("          let maxDelta = 0;".to_string());
-        lines.push("          for (const key in after) {".to_string());
-        lines.push("            if (typeof after[key] === 'number' && typeof before[key] === 'number') {".to_string());
-        lines.push("              maxDelta = Math.max(maxDelta, Math.abs(after[key] - before[key]));".to_string());
-        lines.push("            }".to_string());
-        lines.push("          }".to_string());
-        lines.push("          if (maxDelta < TOL) break;".to_string());
-        lines.push("          _clusterStale = (Math.abs(maxDelta - _prevClusterDelta) < TOL * 0.01) ? _clusterStale + 1 : 0;".to_string());
-        lines.push("          if (_clusterStale >= 5) break; // stale — values stopped improving".to_string());
-        lines.push("          _prevClusterDelta = maxDelta;".to_string());
-        lines.push("        }".to_string());
-        lines.push("        for (const s of cluster) executed.add(s);".to_string());
-        lines.push("      }".to_string());
-        lines.push("    } else {".to_string());
-        lines.push("      const computeFn = SHEET_COMPUTE[sheetName];".to_string());
-        lines.push("      if (computeFn) computeFn(ctx);".to_string());
-        lines.push("      executed.add(sheetName);".to_string());
-        lines.push("    }".to_string());
-        lines.push("  }".to_string());
+        lines.push(r#"
+  // Execute sheets in topological order, with convergence loops for clusters
+  const MAX_ITER = 200;
+  const executed = new Set();
+  for (const sheetName of TOPO_ORDER) {
+    if (executed.has(sheetName)) continue;
+    if (CLUSTER_SHEETS.has(sheetName)) {
+      const cluster = SHEET_CLUSTERS.find(c => c.includes(sheetName));
+      if (cluster && !cluster.some(s => executed.has(s))) {
+        // Run the entire cluster in a convergence loop, recording telemetry.
+        let _prevClusterDelta = Infinity, _clusterStale = 0;
+        let _iters = 0, _lastDelta = Infinity, _conv = false;
+        for (let iter = 0; iter < MAX_ITER; iter++) {
+          _iters = iter + 1;
+          const snapshot = JSON.stringify(ctx.values);
+          for (const s of cluster) {
+            const fn = SHEET_COMPUTE[s];
+            if (fn) fn(ctx);
+          }
+          const after = ctx.values;
+          const before = JSON.parse(snapshot);
+          let maxDelta = 0;
+          for (const key in after) {
+            if (typeof after[key] !== 'number') continue;
+            const _b = before[key];
+            // A cell going undefined -> number is a change, not convergence.
+            // (The original loop skipped these, so the first pass — where every
+            // cluster cell is newly computed — looked like maxDelta=0 and
+            // falsely "converged" after one iteration.)
+            if (typeof _b !== 'number') { maxDelta = Infinity; break; }
+            maxDelta = Math.max(maxDelta, Math.abs(after[key] - _b));
+          }
+          _lastDelta = maxDelta;
+          if (maxDelta < TOL) { _conv = true; break; }
+          _clusterStale = (Math.abs(maxDelta - _prevClusterDelta) < TOL * 0.01) ? _clusterStale + 1 : 0;
+          if (_clusterStale >= 5) break; // stale — values stopped improving
+          _prevClusterDelta = maxDelta;
+        }
+        _clusterMeta.push({ sheets: cluster.slice(), iterations: _iters, converged: _conv, maxDelta: _lastDelta });
+        for (const s of cluster) executed.add(s);
+      }
+    } else {
+      const computeFn = SHEET_COMPUTE[sheetName];
+      if (computeFn) computeFn(ctx);
+      executed.add(sheetName);
+    }
+  }
+"#.to_string());
     }
 
-    lines.push(String::new());
-    lines.push("  return {".to_string());
-    lines.push("    values: { ...ctx.values },".to_string());
-    lines.push("    kpis: ctx.kpis(),".to_string());
-    lines.push("  };".to_string());
-    lines.push("}".to_string());
+    // Shared meta computation + return. converged is true for a no-cluster model
+    // (every() over an empty array). converged=false means a cluster exhausted
+    // MAX_ITER (or stalled) — a non-converged result is silently garbage, so
+    // consumers should refuse to lock on it.
+    lines.push(r#"
+  const _converged = _clusterMeta.every(c => c.converged);
+  const _maxDelta = _clusterMeta.reduce((m, c) => Math.max(m, c.maxDelta), 0);
+  const _iterations = _clusterMeta.reduce((m, c) => Math.max(m, c.iterations), 0);
+  const _perSheetIterations = {};
+  for (const c of _clusterMeta) for (const s of c.sheets) _perSheetIterations[s] = c.iterations;
+  const meta = {
+    converged: _converged,
+    iterations: _iterations,
+    maxDelta: _maxDelta,
+    convergenceTolerance: TOL,
+    clusters: _clusterMeta,
+    perSheetIterations: _perSheetIterations,
+    elapsedMs: Date.now() - _t0,
+  };
+
+  const unknownOverrides = _overrideKeys.filter(k => !_readOverrides.has(k));
+  if (options.strict && unknownOverrides.length > 0) {
+    throw new Error('engine.run(): unknown override cell(s) not read by any formula: ' + unknownOverrides.join(', '));
+  }
+
+  return {
+    values: { ...ctx.values },
+    kpis: ctx.kpis(),
+    meta,
+    unknownOverrides,
+  };
+}"#.to_string());
     lines.push(String::new());
 
     // Default export
@@ -644,6 +694,8 @@ class ComputeContext {
   constructor() {
     /** @type {Object<string, any>} */
     this.values = {};
+    /** @type {Set<string>|null} Pinned override cells — set() is a no-op for these. */
+    this._locked = null;
   }
 
   /**
@@ -656,9 +708,12 @@ class ComputeContext {
   }
 
   /**
-   * Set a cell value by qualified address.
+   * Set a cell value by qualified address. Pinned override cells are not
+   * overwritten — without this, a sheet's "literal/input cells" pass would
+   * clobber run() overrides back to their base-case values.
    */
   set(addr, value) {
+    if (this._locked !== null && this._locked.has(addr)) return;
     this.values[addr] = value;
   }
 

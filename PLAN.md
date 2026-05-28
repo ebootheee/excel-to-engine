@@ -1,5 +1,42 @@
 # excel-to-engine — Plan
 
+## Status: Engine run() API — telemetry + override pinning + strict (Round 1, Rust half) — landed 2026-05-27
+
+`generate_orchestrator` now emits a `run()` that returns `meta` (convergence
+telemetry: converged/iterations/maxDelta/perSheetIterations/clusters/elapsedMs)
+and `unknownOverrides` (override cells not read by any formula), with
+`run(inputs, { strict: true })` throwing on unknowns. Additive return — existing
+`values`/`kpis` unchanged. Building it exposed and fixed two latent correctness
+bugs: input-cell overrides were clobbered by the sheet literal pass (now pinned
+via `ComputeContext._locked`), and the cross-sheet cluster loop falsely
+"converged" after one iteration (undefined→number now counts as a change). New
+`npm run test:engine` (21 assertions). Request #4 (typed returns) is satisfied
+by the JS-half `cell-types.json` sidecar — Option A (breaking) not pursued.
+
+**Next (Round 2):** dependency-graph artifact (unblocks `affectsOutputs` +
+read-set override validation), `model-map.json` slimming, engine perf. MIP
+gating (#7) is a model-owner question, not a pipeline bug.
+
+## Status: Downstream contract maps (Round 1, JS half) — landed 2026-05-27
+
+A production consumer (Mippy) integrating the chunked engine had no
+build-time manifest of which cells hold the named outputs/inputs, so it ran
+the engine (9 min/call) to discover them — and shipped a silent-`NaN` bug
+from guessing wrong. `ete init` now emits three small artifacts into
+`chunked/`: `named-outputs.json` (the downstream contract: name → cell +
+base-case value, defined-name-authoritative), `named-inputs.json`
+(defined-name cells read by ≥1 formula), and `cell-types.json` (label vs
+number vs empty; disambiguates real-0 from never-computed). New
+`lib/manifest-maps.mjs` + `ete manifest maps` subcommand; new
+`test-manifest-maps.mjs` (40 assertions) in `npm test`. Also fixed
+`loadWorkbook` (SheetJS ESM has no fs binding → read via buffer).
+
+**Next (Round 1, Rust half):** convergence telemetry, strict/`unknownOverrides`
+overrides, and typed cell returns in `generate_orchestrator`
+(`pipelines/rust/src/chunked_emitter.rs`). Then Round 2: dependency-graph
+artifact (unblocks `affectsOutputs` + read-set validation), `model-map.json`
+slimming, engine-perf.
+
 ## Status: Security audit pass (v0.2.0) — landed 2026-05-07
 
 External security review (PR #13) closed five concrete attack primitives:

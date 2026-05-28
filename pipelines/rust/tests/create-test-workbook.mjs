@@ -16,6 +16,7 @@
  */
 
 import XLSX from 'xlsx';
+import { writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -150,7 +151,8 @@ XLSX.utils.book_append_sheet(wb, buildCashflowsSheet(), 'Cashflows');
 XLSX.utils.book_append_sheet(wb, buildSummarySheet(), 'Summary');
 
 const outPath = join(__dir, 'test-model.xlsx');
-XLSX.writeFile(wb, outPath);
+// Write via buffer (the SheetJS ESM build has no fs binding, so writeFile throws).
+writeFileSync(outPath, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 
 console.log(`Written: ${outPath}`);
 console.log(`\nExpected ground truth:`);

@@ -1,5 +1,37 @@
 # excel-to-engine — Roadmap
 
+## Now — Engine-integration contract (Mippy request, 2026-05-27)
+
+Surfaced by a production consumer wiring the chunked engine into a Tier-1
+RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
+(`generate_orchestrator` in `pipelines/rust/src/chunked_emitter.rs`, queued).
+
+**Done (JS half, 2026-05-27):**
+- `named-outputs.json`, `named-inputs.json`, `cell-types.json` emitted by
+  `ete init`; `ete manifest maps` to regenerate. See CHANGELOG.
+
+**Done (Rust half, 2026-05-27):**
+- `engine.run()` returns `meta` (convergence telemetry) + `unknownOverrides`;
+  `run(inputs, { strict })` throws on unknowns. Additive return.
+- Bonus fixes the telemetry exposed: input-cell overrides were clobbered
+  (now pinned via `ComputeContext._locked`); cross-sheet cluster loop
+  falsely "converged" after one iteration (undefined→number now a change).
+- `npm run test:engine` (21 assertions).
+- Request #4 (typed returns) satisfied by the `cell-types.json` sidecar;
+  the breaking Option A (typed `values`) deliberately not pursued.
+
+**Round 2:**
+- **`dependency-graph.json`** (slim cell→cell edges). Unblocks
+  `affectsOutputs` in named-inputs.json and read-set validation for strict
+  overrides. (The request's #3 and #10 are the same artifact.)
+- **`model-map.json` slimming** — shard or zstd; debug artifacts behind
+  `--emit-debug`. Target <100 MB default output.
+- **Engine perf** — base-case hot cache + partial recompute for the grid
+  generator; revisit only if parallel cloud workers prove insufficient.
+- **MIP gating (request #7)** is a model-owner question, not a pipeline bug
+  (engine faithfully reproduces an Excel base case of 0). Surface via a
+  `requiredFor` field if/when named-inputs gains one.
+
 ## Now — Security Hardening Follow-ups (post-PR #13)
 
 Non-blocking items surfaced during the v0.2.0 security audit pass. Open

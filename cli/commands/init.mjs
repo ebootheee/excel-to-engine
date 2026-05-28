@@ -13,6 +13,7 @@ import { join, resolve, dirname, sep as PATH_SEP } from 'path';
 import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
+import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = join(__dirname, '..', '..', 'templates');
@@ -57,9 +58,11 @@ export function runInit(excelPath, args) {
     // install location, not process.cwd() — running `ete init` from an
     // attacker-controlled directory shouldn't pick up a hostile binary at
     // `./pipelines/rust/target/release/rust-parser`.
+    // Windows builds the binary as rust-parser.exe; Unix has no extension.
+    const exe = process.platform === 'win32' ? '.exe' : '';
     const parserPaths = [
-      join(PACKAGE_ROOT, 'pipelines/rust/target/release/rust-parser'),
-      join(PACKAGE_ROOT, 'pipelines/rust/target/debug/rust-parser'),
+      join(PACKAGE_ROOT, `pipelines/rust/target/release/rust-parser${exe}`),
+      join(PACKAGE_ROOT, `pipelines/rust/target/debug/rust-parser${exe}`),
     ];
 
     const parserBin = parserPaths.find(p => existsSync(p));
@@ -248,9 +251,30 @@ export function runInit(excelPath, args) {
     lines.push(`  (Doctor skipped: ${e.message})`);
   }
 
-  // Step 5: Print summary
+  // Step 5: Emit downstream contract maps (named-outputs/inputs, cell-types).
+  // These let production consumers wire up cells by name without re-running the
+  // engine to discover them. named-inputs needs the .xlsx (defined-names);
+  // outputs + cell-types come from manifest + ground truth alone.
   lines.push('');
-  lines.push('Step 5/5: Model summary');
+  lines.push('Step 5/6: Emitting downstream contract maps...');
+  try {
+    const maps = emitManifestMaps(chunkedDir, { excelPath });
+    if (maps.written.length > 0) {
+      lines.push(`  Wrote: ${maps.written.join(', ')}`);
+      const s = maps.stats;
+      lines.push(`  Outputs: ${s.outputs ?? 0} (${s.outputsFromDefinedNames ?? 0} from defined-names)` +
+        (s.inputs != null ? `, inputs: ${s.inputs}` : ''));
+    }
+    for (const sk of maps.skipped) {
+      lines.push(`  Skipped ${sk.file}: ${sk.reason}`);
+    }
+  } catch (e) {
+    lines.push(`  (Map emission skipped: ${e.message})`);
+  }
+
+  // Step 6: Print summary
+  lines.push('');
+  lines.push('Step 6/6: Model summary');
   lines.push('─'.repeat(60));
 
   try {
