@@ -1,5 +1,56 @@
 # excel-to-engine — Changelog
 
+## 2026-05-27 — Engine run() API: telemetry, override pinning, strict (Round 1, Rust half)
+
+Round 1 Rust half of the Mippy request. All changes are in
+`generate_orchestrator` (`pipelines/rust/src/chunked_emitter.rs`); the
+generated `run()` return is **additive** (existing `values`/`kpis` unchanged).
+
+### `engine.run()` now returns `meta` + `unknownOverrides`
+
+- **`meta`** — convergence telemetry: `{ converged, iterations, maxDelta,
+  convergenceTolerance, clusters: [{ sheets, iterations, converged, maxDelta }],
+  perSheetIterations, elapsedMs }`. `converged:false` means a circular-dependency
+  cluster exhausted `MAX_ITER` (or stalled) — a non-converged result is silently
+  garbage, so consumers should refuse to lock on it. No-cluster models report
+  `converged:true, iterations:0`.
+- **`unknownOverrides`** — override cells not read by any formula. `run()`
+  instruments `ctx.get` (only when overrides are present, so the base case stays
+  zero-overhead) to record which override keys are actually consumed. Catches
+  typos, missing sheet prefixes, and stale cell maps after a model rebuild.
+- **`run(inputs, { strict: true })`** throws if any override is unknown.
+
+### Two correctness fixes the telemetry exposed
+
+- **Override pinning.** Generated sheet modules set their literal/input cells
+  unconditionally, so an override applied before compute was **clobbered back to
+  base case** — input-cell overrides silently no-op'd (exactly the "silently
+  running base-case math" failure Mippy feared). `ComputeContext` now carries a
+  `_locked` set; `set()` skips pinned override cells, so overrides propagate.
+- **Cross-sheet convergence false-positive.** The cluster loop's delta only
+  compared cells that were numbers in *both* snapshots, so the first pass — where
+  every cluster cell goes `undefined → number` — looked like `maxDelta=0` and
+  "converged" after one iteration (returning garbage, e.g. `A=100, B=0` for a
+  fixed point of `A≈105.26, B≈52.63`). Newly-computed cells now count as a
+  change. The bug was latent because no committed model had a cross-sheet cycle.
+
+### Tests
+
+- `pipelines/rust/tests/test-engine-runtime.mjs` (21 assertions, `npm run
+  test:engine`): builds models, parses with the real rust-parser, imports
+  `engine.js`, and asserts telemetry, override pinning/propagation,
+  `unknownOverrides`, strict mode, and cross-sheet cluster convergence to the
+  correct fixed point. Skips cleanly if the parser isn't built.
+- Fixed `create-test-workbook.mjs` (`XLSX.writeFile` → buffer write, same
+  SheetJS-ESM-no-fs-binding issue as `loadWorkbook`). Smoke test still 78/78.
+
+### Note on request #4 (typed cell returns)
+
+Satisfied by the `cell-types.json` sidecar from the JS half (Mippy's Option B).
+Option A (changing `values` to typed `CellValue` objects) is a breaking API
+change with broad blast radius (CLI, eval, smoke all read `values` directly) and
+is **not** done — the sidecar already meets the acceptance criteria.
+
 ## 2026-05-27 — Downstream contract maps (Round 1, JS half)
 
 Driven by the Mippy engine-integration request (2026-05-27): a consumer

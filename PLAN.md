@@ -1,5 +1,22 @@
 # excel-to-engine — Plan
 
+## Status: Engine run() API — telemetry + override pinning + strict (Round 1, Rust half) — landed 2026-05-27
+
+`generate_orchestrator` now emits a `run()` that returns `meta` (convergence
+telemetry: converged/iterations/maxDelta/perSheetIterations/clusters/elapsedMs)
+and `unknownOverrides` (override cells not read by any formula), with
+`run(inputs, { strict: true })` throwing on unknowns. Additive return — existing
+`values`/`kpis` unchanged. Building it exposed and fixed two latent correctness
+bugs: input-cell overrides were clobbered by the sheet literal pass (now pinned
+via `ComputeContext._locked`), and the cross-sheet cluster loop falsely
+"converged" after one iteration (undefined→number now counts as a change). New
+`npm run test:engine` (21 assertions). Request #4 (typed returns) is satisfied
+by the JS-half `cell-types.json` sidecar — Option A (breaking) not pursued.
+
+**Next (Round 2):** dependency-graph artifact (unblocks `affectsOutputs` +
+read-set override validation), `model-map.json` slimming, engine perf. MIP
+gating (#7) is a model-owner question, not a pipeline bug.
+
 ## Status: Downstream contract maps (Round 1, JS half) — landed 2026-05-27
 
 A production consumer (Mippy) integrating the chunked engine had no

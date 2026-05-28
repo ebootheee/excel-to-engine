@@ -10,17 +10,15 @@ RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
 - `named-outputs.json`, `named-inputs.json`, `cell-types.json` emitted by
   `ete init`; `ete manifest maps` to regenerate. See CHANGELOG.
 
-**Next (Rust half — engine API):**
-- **Convergence telemetry.** The cluster loop already computes `iter` /
-  `maxDelta` / stall but discards them at `return { values, kpis }`. Surface
-  `meta: { converged, iterations, maxDelta }`; `converged:false` when a
-  cluster hits `MAX_ITER`. Consumers refuse to lock a non-converged result.
-- **Reject unknown overrides.** `engine.run({ "Bogus!Z9": 1 })` silently
-  no-ops today. Add `{ strict }` / `unknownOverrides[]` using the set of
-  cells read by ≥1 formula (the transpiler already extracts refs).
-- **Typed cell returns / cell-types parity at the API** so `0` (computed)
-  is distinguishable from never-computed at the engine boundary, not just
-  via the sidecar.
+**Done (Rust half, 2026-05-27):**
+- `engine.run()` returns `meta` (convergence telemetry) + `unknownOverrides`;
+  `run(inputs, { strict })` throws on unknowns. Additive return.
+- Bonus fixes the telemetry exposed: input-cell overrides were clobbered
+  (now pinned via `ComputeContext._locked`); cross-sheet cluster loop
+  falsely "converged" after one iteration (undefined→number now a change).
+- `npm run test:engine` (21 assertions).
+- Request #4 (typed returns) satisfied by the `cell-types.json` sidecar;
+  the breaking Option A (typed `values`) deliberately not pursued.
 
 **Round 2:**
 - **`dependency-graph.json`** (slim cell→cell edges). Unblocks
