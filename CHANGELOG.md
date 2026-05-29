@@ -1,5 +1,53 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Chunked-build scaling walls: streamed emit, borrowed partitions, opt-in lazy engine (#22)
+
+With the partition-hang fixed, a clean `ete init` on the real models got *past*
+partitioning but then drove the parser past 18 GB in the module-emit step (and a
+complete build was still slow to *run* as an oracle). Three walls closed — two
+internal memory fixes done unconditionally, one opt-in runtime feature.
+
+- **Wall C — streamed module emit (`chunked_emitter.rs`).** The emit did
+  `partitions.par_iter().map(generate_sheet_module).collect()` and wrote in a
+  *second* pass — holding **all ~800 MB** of generated JS in memory at once (on
+  top of the multi-million-cell workbook), with nothing in `sheets/` until every
+  module finished. It now **writes each module the instant it's generated and
+  drops the string**; the few "heavy" sheets (≥200k formula cells) are emitted
+  one-at-a-time (peak ≈ one big module) while the many light sheets stay parallel.
+  Files land incrementally; a write failure is still fatal.
+- **Wall B — `SheetPartition` borrows cells instead of cloning
+  (`sheet_partition.rs`).** `partition_sheets` did `cell.clone()` into the
+  partition while `workbook.sheets` still held the originals — a full second copy
+  of ~6M `CellData` (addresses + values + formula strings) → peak-memory doubling.
+  `SheetPartition<'a>` now holds `Vec<&'a CellData>` (the workbook outlives every
+  partition), so the partition is a few pointers per cell. The four consumers are
+  read-only, so they're unchanged beyond the borrow.
+- **Wall A — opt-in `--lazy-engine` (`chunked_emitter.rs`, `main.rs`,
+  `cli/`).** The default `engine.js` statically imports every sheet module, so
+  `import('engine.js')` pulls ~800 MB into the heap before `run()` can be called.
+  `ete init --lazy-engine` (parser `--lazy-engine`) now emits a lazy orchestrator:
+  sheet modules load on demand via `export async function load(options)` (with
+  **output-cone scoping** — `load({ sheets })` / `load({ cells })` loads only the
+  requested sheets' transitive dependency closure, expanding whole clusters), a
+  synchronous `run()` guarded against being called before any load, and
+  `runScoped(inputs, options)` (load + run in one await). **The default engine is
+  unchanged** — it stays eager + synchronous, so the Mippy contract, `ete eval`,
+  the smoke test, and the engine suite are untouched. The eager and lazy engines
+  share the `run()` body via `emit_run_function`, so they can't drift.
+- New `npm run test:lazy-engine` (19) + CI step: asserts the lazy engine has no
+  static sheet imports, exports `run`/`load`/`runScoped`, throws before load,
+  matches the eager engine's `run()` output after load (base + cross-sheet
+  override), and that cone scoping loads only the closure.
+- Validated: `cargo build --release`, `cargo test` 17/17, `smoke` 78/78,
+  `test:engine` 21/21, `test:runnable` 20/20, `test:depgraph` 11/11,
+  `test:lazy-engine` 19/19, `test:slimming` 13/13, `test:golden` 20/20, full
+  `npm test`, and an `ete init --lazy-engine` end-to-end build.
+- **Residual (deeper, deferred):** `generate_sheet_module` builds a `Vec<String>`
+  of lines then `.join("\n")` — ~2× a monster module transiently; and even one
+  ~200 MB monster module is heavy to import. Row-chunking the monster sheets
+  (Owned_Asset_PP_E, Future_Owned_Acquisitions, Technology) into smaller lazy
+  modules is the next step to make them usable, not just emittable.
+
 ## 2026-05-29 — Fix chunked-build hang in `partition_sheets` (range-expansion blowup)
 
 A clean `ete init` on the full real models hung for ~12h in the chunked emitter,

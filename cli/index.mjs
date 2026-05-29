@@ -212,7 +212,10 @@ Commands:
                                     --assert-no-fallbacks (hard-fail if any named
                                     output resolves through an _fn() stub),
                                     --emit-debug (retain dependency-graph.json,
-                                    _graph.json, model-map.json for offline analysis)
+                                    _graph.json, model-map.json for offline analysis),
+                                    --lazy-engine (engine.js loads sheet modules on
+                                    demand via async load()/runScoped() + output-cone
+                                    scoping; run() stays sync — await load() first)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   query <modelDir> [args]    Query ground truth cells
   pnl <modelDir>             Extract annual P&L by segment

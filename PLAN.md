@@ -1,12 +1,43 @@
 # excel-to-engine — Plan
 
-> **Next session:** the real-model chunked build now gets *past* `partition_sheets`
-> (the 12h hang is fixed). The remaining scaling walls are about actually
-> *running* the oracle at this size — the partition step still clones every cell
-> (peak-memory doubling) and `engine.js` eagerly imports ~800 MB of sheet modules
-> (Node load-time wall). Both fold into **P3 (#22) output-cone scoping / lazy
-> sheet loading**. Also still open: deeper transpiler coverage (the 11,813 `_fn`
-> offenders behind #26) and cluster-once eval.
+> **Next session:** the three chunked-build scaling walls are closed (#22) — the
+> emit streams module-by-module (was: hold all ~800 MB before writing), partitions
+> borrow cells instead of cloning (was: peak-memory doubling), and `ete init
+> --lazy-engine` emits an on-demand engine so a consumer can run the oracle without
+> importing ~800 MB up front. **Next: a full clean regen on the real A1/A2 models
+> to confirm the emit now completes within memory** (couldn't be measured here —
+> the models are gitignored), then the deeper residual: **row-chunk the 3 monster
+> sheets** (Owned_Asset_PP_E, Future_Owned_Acquisitions, Technology) so even one is
+> small to generate + import. Also still open: deeper transpiler coverage (the
+> 11,813 `_fn` offenders behind #26) and cluster-once eval.
+
+## Status: Chunked-build scaling walls closed (streamed emit + borrowed partitions + opt-in lazy engine) — landed 2026-05-29
+
+With the partition hang fixed, a clean build got *past* partitioning but then the
+module-emit step drove the parser past 18 GB (it materialized all ~800 MB of
+generated module strings before writing any), and even a complete ~800 MB engine
+was slow to *run* (eager imports). Three walls (#22) closed:
+
+- **Wall C — streamed emit (`chunked_emitter.rs`).** Each sheet module is written
+  to disk the instant it's generated and the string dropped, instead of
+  collect-all-then-write; heavy sheets (≥200k formulas) emit one-at-a-time, light
+  ones in parallel. Peak emit memory ≈ one monster module, not the whole output.
+- **Wall B — borrowed partitions (`sheet_partition.rs`).** `SheetPartition<'a>`
+  holds `Vec<&'a CellData>` instead of cloning ~6M cells; removes the second
+  full copy that doubled peak memory during emit.
+- **Wall A — opt-in `--lazy-engine` (`chunked_emitter.rs`, `main.rs`, `cli/`).**
+  Emits a chunked `engine.js` whose sheet modules load on demand via async
+  `load()`/`runScoped()` with output-cone scoping; sync `run()` is preserved
+  (guarded against pre-load calls). **Default engine.js is unchanged** (eager +
+  sync) — the Mippy contract and all in-repo consumers are untouched. Eager/lazy
+  share the `run()` body, so they can't drift.
+
+New `npm run test:lazy-engine` (19) + CI. Validated: `cargo test` 17/17, `smoke`
+78/78, `test:engine`/`test:runnable`/`test:depgraph` 21/20/11, `test:lazy-engine`
+19/19, `test:slimming`/`test:golden` 13/20, full `npm test`, `ete init
+--lazy-engine` e2e. **Residual (deferred):** `generate_sheet_module` still builds
+a `Vec<String>` then joins (~2× a monster transiently), and a single monster
+module is still heavy to import — row-chunking the monster sheets is the next step.
 
 ## Status: Chunked-build partition hang fixed — landed 2026-05-29
 

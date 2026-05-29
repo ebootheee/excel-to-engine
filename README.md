@@ -385,6 +385,42 @@ synthetic fixture (`npm run test:golden`); point it at a real build with
 `ETE_GOLDEN_DIR` + a gitignored `canonical-returns.json` to verify a regenerated
 model still reproduces the hand-port's gross/net MOIC & IRR exactly.
 
+### Lazy engine for large models (`--lazy-engine`)
+
+The default `engine.js` statically imports every per-sheet module, so
+`import('engine.js')` pulls **all** of them into memory (hundreds of MB on the
+big PE models — dominated by a couple of monster sheets) before `run()` can be
+called. For a consumer that only needs to *sample* the model (the calibration-
+oracle use case), that load is the wall.
+
+`ete init --lazy-engine` emits an engine that imports sheet modules **on demand**:
+
+```js
+import engine from './my-model/chunked/engine.js';
+
+// Load only what you need, then run() synchronously (same return shape as always).
+await engine.load({ cells: ['Returns!D22', 'Returns!E22'] }); // loads just the
+                                                               // dependency cone
+const { values, meta } = engine.run({ 'Assumptions!B3': 18 });  // override + run
+
+// Or do both in one call:
+const r = await engine.runScoped({ 'Assumptions!B3': 18 }, { cells: ['Returns!D22'] });
+```
+
+- **`load(options)`** — `{ sheets: [...] }` and/or `{ cells: ['Sheet!A1', ...] }`
+  loads only those sheets plus their transitive dependency closure (whole
+  circular clusters are pulled in as a unit). No options ⇒ load everything (still
+  lazy, but complete). To scope to named outputs, map their names → cells via
+  `named-outputs.json`, then pass `cells`.
+- **`run(inputs, options)`** — unchanged synchronous semantics; throws if called
+  before anything is loaded. Sheets outside the loaded cone are simply skipped.
+- **`runScoped(inputs, options)`** — `await load(options)` then `run(inputs, options)`.
+
+The **default build is unchanged** — `engine.js` stays eager and `run()` stays
+synchronous, so existing integrations are untouched. `--lazy-engine` is purely
+opt-in. (Per-sheet modules are emitted either way; the flag only changes how
+`engine.js` loads them.)
+
 ### The Delta Cascade
 
 When you run a scenario, the CLI doesn't re-execute the full engine (which can take 10+ minutes on large models). Instead, it:

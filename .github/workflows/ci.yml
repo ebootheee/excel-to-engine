@@ -77,6 +77,9 @@ jobs:
       - name: Runnable engine + build manifest
         run: npm run test:runnable
 
+      - name: Lazy engine (--lazy-engine load()/runScoped() + cone scoping)
+        run: npm run test:lazy-engine
+
       - name: Artifact slimming
         run: npm run test:slimming
 
