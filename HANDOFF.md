@@ -6,6 +6,13 @@ memory files (`project_outpost_models_shape`, `project_mippy_contract`).
 
 _Last updated: 2026-05-28._
 
+## The job, in one line
+
+**Make the full Outpost model a reliable Mippy calibration oracle: runnable,
+with the MIP coefficients exposed as named-outputs, and no stubbed value cells.**
+Everything Mippy-specific stays in Mippy — this repo just produces a trustworthy,
+sample-able engine + contract.
+
 ## Where things stand
 
 **Merged to `main` this session:** artifact slimming (#17), GitHub Actions CI
@@ -20,120 +27,104 @@ and the Mippy regeneration findings in ROADMAP. **If #21 isn't merged yet, branc
 off `feat/next-wave`; otherwise off `main`.**
 
 **Baseline (real models, `npm run bench:outpost`):** outpost-a1 **84.3%**,
-outpost-a2 **85.5%** — but **standalone sheets only**. The 17-sheet circular
-cluster and the 190 MB PP&E sheet are skipped, so ~80% of each model is currently
-unmeasured (see P0 below).
+outpost-a2 **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
 
 ## How to run
 
 ```bash
-npm test                 # full JS suite (387 assertions): lib, cli, manifest, eval, etc.
+npm test                 # full JS suite (387 assertions)
 npm run smoke            # chunked-engine accuracy 78/78
 npm run bench:outpost --  --root "<abs path>/engines"   # accuracy + efficacy on the real models
-# per-sheet accuracy on one engine (skips clusters by default in the bench):
 node eval/per-sheet-eval.mjs <chunkedDir> --concurrency 3 [--skip-clusters]
-cd pipelines/rust && cargo build --release   # the parser (needed by smoke/slimming/bench)
+cd pipelines/rust && cargo build --release   # the parser
 ```
 
-The real Outpost models live in the **gitignored** `engines/` dir (proprietary —
+Real Outpost models live in the **gitignored** `engines/` dir (proprietary —
 never commit values/labels). The Mippy agent's fresh regen is in
-`engines/outpost-a{1,2}-v2/` (the *better* build: dates fixed, slimmed); the old
-build is alongside in `engines/outpost-a{1,2}/`.
+`engines/outpost-a{1,2}-v2/` (the *better* build: dates fixed, slimmed) alongside
+the old `engines/outpost-a{1,2}/`.
 
-## Prioritized backlog (do in this order)
+## P1–P3 — Mippy calibration-oracle feature set (do in this order)
 
-### P0 — Cluster-once eval (THE keystone) ★ highest impact
-Unblocks measuring ~80% of each model. The circular cluster is **17 of 21
-sheets** (and the array-formula `Headcount` sheet is *inside* it). Today
-`eval/per-sheet-eval.mjs` re-runs the **entire** cluster convergence once per
-member sheet (17×) → it won't finish on the real model, so the benchmark runs
-`--skip-clusters`. **Fix:** one task per cluster — converge once, score every
-member from that converged state — then drop `--skip-clusters` from the
-benchmark and re-baseline.
-- Files: `eval/per-sheet-eval.mjs` (task-building loop ~120-185, `evalOneSheet`
-  ~190-365, the cluster `evalScript` template ~230-320, aggregation ~375-390).
-- Test oracle READY: `tests/cli/fixtures/cluster-model/` (synthetic SheetA↔SheetB
-  converging to a=50,b=50,c=100,d=100). Add a cluster-once assertion to
-  `tests/cli/test-per-sheet-eval.mjs` (it already runs that fixture).
-- Validate: fixture 100% + smoke unaffected + then a real `--with-clusters` run
-  on `engines/outpost-a1-v2` completes in reasonable time and yields a cluster
-  accuracy. The scoped-diff (already landed) helps but is NOT sufficient alone.
+All filed on ebootheee/excel-to-engine. Done-criteria are the contract.
 
-### P0/P1 — Generation robustness on big models (issue #23) — blocks clean builds
-A clean `ete init` on a real model **does not complete**: the Rust parser is
-OOM-killed at the cell-level dependency-graph step, and `ete init`'s 10-min
-`spawnSync` cap times out → `engine.js` (the `run()` orchestrator) and
-`dependency-graph.json` closures don't land (they're written after the OOM
-step); the Mippy regen worked around it with direct-parse + `--reuse-parse`.
-- Fix directions: stream/incrementalize the dep-graph build or raise its memory
-  headroom; within-sheet parallelism; streaming writes; configurable init
-  timeout. Mostly `pipelines/rust/` + `cli/commands/init.mjs` timeout.
-- Impact: until fixed, the downstream consumer can't get a clean full artifact
-  set (closures + orchestrator) from one command.
+### P1 · #23 + #24 — reliably emit a runnable `engine.js` ★ blocks everything
+A clean `ete init` on a real model currently **does not finish**: the Rust parser
+is OOM-killed at the cell-level dependency-graph step, and `ete init` hits its
+10-min `spawnSync` cap → `engine.js` (the `run()` orchestrator) + the
+`dependency-graph.json` closures **don't land** (written after the OOM step).
+- **Done =** `chunked/engine.js` with `export function run()` exists on **every**
+  build; the build **errors hard** if it can't — **never a partial artifact**.
+- #24 also: **lock the artifact layout + emit a content hash** so downstream
+  consumes without per-version reconciliation.
+- Without a runnable engine we can't sample MIP to calibrate/validate — this
+  gates everything below.
+- Files: `pipelines/rust/` (dep-graph build: stream/incrementalize or raise
+  headroom; fail-loud), `cli/commands/init.mjs` (configurable timeout; don't
+  swallow a failed emit).
 
-### P1 — Transpiler coverage: 11,813 `_fn()` fallbacks ★ big accuracy lever
-That many formula cells per engine transpile to a generic unsupported-function
-stub (unchanged old→new, so it predates this work). Almost certainly a large
-slice of the ~15% standalone-sheet gap. **Inventory which Excel functions hit
-the `_fn()` fallback, rank by frequency, implement the top offenders.**
-- Files: `pipelines/rust/src/` (transpiler). Measure on `engines/*-v2`.
+### P2 · #25 — pin the value-bearing cells as named-outputs
+Per-class **MIP Proceeds**, **hurdle/threshold**, **participation %**, **equity
+basis**, **valuation / shares** — not just MOIC/IRR.
+- **Done =** those appear in `named-outputs.json` with base-case values. **These
+  ARE the parametric coefficients Mippy calibrates against.**
+- Files: `lib/manifest-maps.mjs` (`enumerateOutputCells` — extend beyond
+  MOIC/IRR/TV/carry; `customCells` is the current escape hatch),
+  `cli/commands/manifest*.mjs`. Pin per-model (the auto-manifest mis-maps —
+  see the refiner fix under "supporting").
 
-### P1 — Refiner mis-maps returns to the "UW Comparison" tab ★ quick + concrete
-Auto-manifest picks an underwriting-comparison cell (2.305x) over the canonical
-Version Tracker returns (2.349x) because `SUMMARY_SHEET_PATTERN` over-ranks
-"UW Comparison" — forcing manual per-model pinning. Make the refiner recognize
-canonical returns / "Version Tracker" tabs, or de-prioritize
-underwriting-comparison tabs.
-- File: `cli/commands/manifest-refine.mjs` (`SUMMARY_SHEET_PATTERN` line ~24,
-  ranking in `searchForFieldIndexed`). Add/extend a manifest **invariant** so it
-  can't silently revert. Validate with `tests/cli/test-refine-label-index.mjs`.
+### P2 · #26 — `_fn` fallback audit: emit `_fn-fallbacks.json` (correctness gate)
+- **Done =** we can **assert no MIP / value / return cell resolves through an
+  unsupported-function stub.** (Auditing/gating the value cells — distinct from
+  fixing all 11,813 fallbacks, which is the deeper transpiler work below.)
+- Files: `pipelines/rust/` (emit the audit during transpile) + a check that the
+  P2/#25 named-output cells aren't in it.
 
-### P1 — Golden-master CI assert ★ near-free regression guard
-A-1's regenerated ground truth reproduces the hand-port's canonical returns to
-full float precision (Version Tracker row 22: grossMOIC L22 ≈2.34916, grossIRR
-M22 ≈0.19233, netMOIC T22 ≈2.23137, netIRR U22 ≈0.18240). The committed
-`named-outputs.json` `baseCaseValue`s (for a pinned A-1 manifest) make a ready
-golden-master. **Add a CI test that diffs those against the known values.** Note:
-the engine artifacts are gitignored; commit only the small contract JSON (or
-hard-code the canonical values in the test).
+### P3 (nice-to-have) · #22 — output-cone scoping
+Scope generated artifacts to the consumer's need (skip the ~752 MB per-sheet
+emit). Makes the oracle cheaper to run; **not required** — we don't ship the blob.
 
-### P2 — `--output-profile` / guided `ete create` (issue #22)
-Skip the ~752 MB per-sheet engine emit when a consumer only needs ground truth +
-contract maps. Scope artifacts to the actual need.
+## Supporting work — makes the oracle *trustworthy* (after P1, alongside P2/P3)
 
-### P2 — Large-sheet eval (190 MB PP&E)
-Exceeds the 150 MB per-sheet limit in `per-sheet-eval` → skipped. Needs
-streaming/sharded per-sheet eval or a higher limit with chunked compute.
+These aren't on Mippy's critical path but back the "reliable" in "reliable
+calibration oracle":
+- **Golden-master CI assert** — A-1's regenerated GT matches the hand-port's
+  canonical returns to full float precision (Version Tracker row 22: grossMOIC
+  L22 ≈2.34916, grossIRR M22 ≈0.19233, netMOIC T22 ≈2.23137, netIRR U22
+  ≈0.18240). Add a CI test diffing the committed `named-outputs.baseCaseValue`s
+  (or hard-coded values; engine artifacts are gitignored). Pairs with #25/#26.
+- **Refiner mis-maps returns to a "UW Comparison" tab** (2.305x vs canonical
+  2.349x) — `SUMMARY_SHEET_PATTERN` over-ranks it. Fix so #25's value cells pin
+  to canonical/Version-Tracker tabs without manual per-model pinning. Add a
+  manifest invariant. File: `cli/commands/manifest-refine.mjs`.
+- **Deeper transpiler coverage** — the 11,813 `_fn()` offenders behind #26's
+  audit; inventory by frequency, implement top ones. `pipelines/rust/src/`.
+- **Cluster-once eval** (our accuracy harness, not Mippy's path): the 17-sheet
+  cluster is unmeasured because `per-sheet-eval` re-runs the whole convergence
+  once per member (17×). Make it one task per cluster (converge once, score all),
+  then drop `--skip-clusters` and re-baseline. Lets us *verify* the oracle's
+  cluster math. Fixture oracle ready: `tests/cli/fixtures/cluster-model/`. (The
+  shipped `engine.js` `run()` converges clusters itself — this is measurement.)
+- **Large-sheet eval** (190 MB PP&E > 150 MB limit) and **manifest-pipeline
+  perf** (generate detectors / maps cell-types / refine fallback on ~6M cells).
 
-### P2 — Manifest-pipeline perf on ~6M-cell models
-`generate` detectors, `maps` cell-type pass, and `refine`'s `buildLabelIndex`
-fallback are O(N) on the full GT and slow. Profile + optimize. (Distinct from the
-Rust-side #23; this is the JS pipeline.)
-
-### P3 — Polish → Publish remainder
-lib/ unit tests done. Remaining: npm publish prep (`bin`, `files`, repo
-metadata), synthetic example project, contributing guide. (Arguably hold publish
-until accuracy blockers close.)
-
-### P3 — Lower priority / model-owner
-- `named-inputs.json` is empty when a workbook has no formula-referenced
-  defined-names (the Outpost case) — heuristic fallback or documented manual path.
-- MIP-as-output (request #7): modeled across per-block "MIP Proceeds" cells, not
-  a single GT cell — a model-owner question, surface via aggregate mapping.
+## Polish → Publish
+lib/ unit tests done. Remaining: npm publish prep (`bin`, `files`, metadata),
+synthetic example project, contributing guide. Lower: empty `named-inputs.json`
+fallback (no formula-referenced defined-names in the Outpost workbooks);
+MIP-as-output beyond the pinned cells is a model-owner question.
 
 ## Gotchas (will bite you)
 
-- **`engines/` is gitignored** (real financials). Read-only; report only
-  aggregate metrics. `_eval_tmp/` and `benchmarks/results/` are gitignored too.
+- **`engines/` is gitignored** (real financials). Read-only; aggregate metrics
+  only. `_eval_tmp/` + `benchmarks/results/` are gitignored too.
 - **`_computed-values.json` in these engines is a byte-identical COPY of ground
-  truth** (seeded). It is NOT a valid accuracy source — accuracy must be live
-  recompute (per-sheet-eval). The benchmark already avoids it.
-- **per-sheet-eval was Windows-broken** (bare absolute ESM import). Fixed via
-  `pathToFileURL`; guarded by `tests/cli/test-per-sheet-eval.mjs` on windows CI.
-  Don't reintroduce bare absolute `import` paths.
-- **`benchmarks/outpost-bench.mjs` `discoverModels()` gates on `engine.js`** —
-  but the `-v2` regen dirs may LACK `engine.js` (OOM, see #23) while having
-  `_graph.json` + `sheets/` (what per-sheet-eval actually needs). If the bench
-  skips `-v2`, relax the gate to `_graph.json` + `sheets/`.
-- **CI runs ubuntu + windows.** Anything touching child-process paths or the
-  parser binary must work on both.
+  truth** (seeded). NOT a valid accuracy source — use live recompute.
+- **per-sheet-eval was Windows-broken** (bare absolute ESM import → `pathToFileURL`
+  fix; guarded by `tests/cli/test-per-sheet-eval.mjs` on windows CI). Don't
+  reintroduce bare absolute `import` paths.
+- **`benchmarks/outpost-bench.mjs` `discoverModels()` gates on `engine.js`** — but
+  the `-v2` regen dirs may LACK it (the #23 OOM) while having `_graph.json` +
+  `sheets/`. If the bench skips `-v2`, relax the gate. (Fixing #23 makes this moot.)
+- **CI runs ubuntu + windows** — child-process/path/parser code must work on both.
+- After any change, update CHANGELOG/PLAN/ROADMAP per CLAUDE.md.

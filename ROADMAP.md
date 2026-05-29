@@ -42,6 +42,38 @@ RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
   (engine faithfully reproduces an Excel base case of 0). Surface via a
   `requiredFor` field if/when named-inputs gains one.
 
+## Now — Mippy calibration oracle (e2e agent's job, priority feature set)
+
+The refined "fully ready for Mippy" target: make the full model a **reliable
+calibration oracle** — runnable, with the MIP coefficients exposed as
+named-outputs, and no stubbed value cells. Everything Mippy-specific stays in
+Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract):
+
+- **P1 · [#23] + [#24] — reliably emit a runnable `engine.js`.** Fix the
+  dep-graph OOM; **fail the build loud, never emit a partial artifact.**
+  **Done =** `chunked/engine.js` with `export function run()` exists on every
+  build; build errors hard if it can't. #24 also locks the artifact layout +
+  emits a content hash (consume downstream without per-version reconciliation).
+  Gates everything: without a runnable engine we can't sample MIP to calibrate.
+- **P2 · [#25] — pin the value-bearing cells as named-outputs.** Per-class MIP
+  Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares —
+  not just MOIC/IRR. **Done =** they appear in `named-outputs.json` with
+  base-case values. These ARE the parametric coefficients.
+- **P2 · [#26] — `_fn` fallback audit (`_fn-fallbacks.json`).** **Done =** assert
+  no MIP/value/return cell resolves through an unsupported-function stub.
+- **P3 (nice-to-have) · [#22] — output-cone scoping.** Cheaper oracle; not
+  required (we don't ship the blob).
+
+Supporting (makes the oracle trustworthy, not on the critical path): golden-master
+CI assert (A-1 canonical returns), the refiner UW-Comparison fix (so #25's cells
+pin to canonical tabs), deeper transpiler coverage (the 11,813 `_fn` offenders
+behind #26), cluster-once eval (our accuracy harness), large-sheet eval, pipeline
+perf. See `HANDOFF.md` for the full ordering + Done criteria.
+
+[#24]: https://github.com/ebootheee/excel-to-engine/issues/24
+[#25]: https://github.com/ebootheee/excel-to-engine/issues/25
+[#26]: https://github.com/ebootheee/excel-to-engine/issues/26
+
 ## Now — Outpost regeneration findings (Mippy consumer, 2026-05-28)
 
 The downstream Mippy agent regenerated both Outpost engines from `main` (current

@@ -1,5 +1,24 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Mippy calibration-oracle feature set (priority amendment)
+
+Refined the "fully ready for Mippy" target: the e2e agent's job is to make the
+full model a **reliable calibration oracle** — runnable, MIP coefficients exposed
+as named-outputs, no stubbed value cells. Documented the priority order in
+ROADMAP ("Now — Mippy calibration oracle") and HANDOFF.md, and in the
+`project_mippy_contract` memory:
+
+- **P1 · #23 + #24** — reliably emit a runnable `engine.js` (fix dep-graph OOM;
+  fail loud, never a partial artifact; lock layout + content hash).
+- **P2 · #25** — pin value-bearing cells (per-class MIP Proceeds, hurdle,
+  participation %, equity basis, valuation/shares) as named-outputs.
+- **P2 · #26** — emit `_fn-fallbacks.json`; assert no value cell uses an
+  unsupported-function stub.
+- **P3 · #22** — output-cone scoping (nice-to-have).
+
+Supporting/trustworthiness (off critical path): golden-master CI, refiner
+UW-Comparison fix, deeper `_fn` coverage, cluster-once eval.
+
 ## 2026-05-28 — HANDOFF.md (fresh-agent entry point)
 
 Added `HANDOFF.md` — the prioritized next-session plan (P0 cluster-once eval →
