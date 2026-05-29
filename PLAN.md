@@ -4,13 +4,13 @@
 > (P0 cluster-once eval → generation robustness → `_fn()` coverage → refiner
 > fix → golden-master CI → …), current state, run commands, and gotchas.
 
-## Status: Outpost accuracy benchmark + eval fixes — in progress 2026-05-28
+## Status: PE-model accuracy benchmark + eval fixes — in progress 2026-05-28
 
 Standing up the multi-wave "next wave" effort on `feat/next-wave`, keystone
-first: a repeatable accuracy + efficacy benchmark over the real Outpost models
-(`benchmarks/outpost-bench.mjs` → `benchmarks/BASELINE.md`, aggregate-only).
+first: a repeatable accuracy + efficacy benchmark over the real PE models
+(`benchmarks/bench.mjs` → `benchmarks/BASELINE.md`, aggregate-only).
 
-**Baseline:** outpost-a1 84.3%, outpost-a2 85.5% on standalone sheets; the
+**Baseline:** Model A 84.3%, Model B 85.5% on standalone sheets; the
 17-sheet circular cluster and the 190 MB PP&E sheet are skipped pending deeper
 fixes. Landed alongside: a **Windows crash fix** in `per-sheet-eval` (bare
 absolute ESM import → `pathToFileURL`; it had silently zeroed accuracy on
@@ -33,7 +33,7 @@ a `--skip-clusters` flag, and the **searchByLabel lazy-numerics** wave
 `ete init` now loads the ground truth once and shares the parsed object across
 the whole manifest pipeline — generate → refine → doctor → maps — instead of
 each step re-reading and re-parsing the full ground truth from disk (up to four
-parses of a 200 MB+ file; ~3.6 s per parse on the real Outpost models). This was
+parses of a 200 MB+ file; ~3.6 s per parse on the real PE models). This was
 the dominant cost of init on large models and the real driver behind the
 "~2.5 min" refine loop. The GT is read-only in all four consumers, so a single
 shared object is safe; each command falls back to loading the GT itself when no

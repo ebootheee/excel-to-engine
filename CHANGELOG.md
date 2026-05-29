@@ -1,5 +1,24 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Privacy scrub: genericize the real model name + figures
+
+This repo is public; CLAUDE.md forbids committing real financials or participant
+names. Two cleanups before merging the next-wave PR:
+
+- **Removed the real return figures** (gross/net MOIC & IRR, the UW-comparison
+  multiple, the MIP dollar amount) from the committed docs. The findings stay
+  (golden-master match on Version Tracker row 22; refiner UW-Comparison mis-map;
+  MIP is a hand-port calibration) — only the numbers are gone. Canonical values
+  live in the gitignored artifacts + local notes and feed the golden-master test
+  from there.
+- **Genericized the real model name** out of all committed files: renamed
+  `benchmarks/outpost-bench.mjs` → `benchmarks/bench.mjs` (npm script `bench`),
+  and the benchmark now **anonymizes model identity** in printed + committed
+  output (Model A, Model B, …) — real dir names stay only in the gitignored
+  detail JSON. Prose in HANDOFF/ROADMAP/PLAN/CHANGELOG now says "the real PE
+  models" / "Model A/B". (The `test-e2e4-fixes` scrub-guard that asserts template
+  names are generic is intentionally kept.)
+
 ## 2026-05-28 — Mippy calibration-oracle feature set (priority amendment)
 
 Refined the "fully ready for Mippy" target: the e2e agent's job is to make the
@@ -28,10 +47,10 @@ state, run commands, and the gotchas (gitignored real models, the GT-copy
 `_computed-values.json`, the per-sheet-eval Windows fix, the bench
 `discoverModels` gate vs the `-v2` regen). PLAN points to it.
 
-## 2026-05-28 — Roadmap: Outpost regeneration findings (Mippy consumer)
+## 2026-05-28 — Roadmap: PE-model regeneration findings (Mippy consumer)
 
-The downstream Mippy agent regenerated both Outpost engines from `main` and
-reported back. Captured the findings in ROADMAP.md ("Now — Outpost regeneration
+The downstream Mippy agent regenerated both PE engines from `main` and
+reported back. Captured the findings in ROADMAP.md ("Now — PE-model regeneration
 findings"). Confirmed wins vs the old build: **dates fixed** (old leaked
 `ExcelDateTime { … }` debug strings — 2,686 in A-1; new emits serial numbers, 0
 leaks), **~42–45% smaller** (model-map.json + the GT-copy `_computed-values.json`
@@ -89,20 +108,20 @@ The shared financial libraries had no direct coverage. Added
   suggested corrective factor.
 - **`lib/sensitivity.mjs`** — `flattenOutputs` group/type filtering.
 
-## 2026-05-28 — Outpost accuracy benchmark + eval-tooling fixes
+## 2026-05-28 — PE-model accuracy benchmark + eval-tooling fixes
 
 Stood up a repeatable accuracy + efficacy benchmark over the real ~200 MB
-Outpost models so improvements can be tracked over time, and fixed the eval
+PE models so improvements can be tracked over time, and fixed the eval
 tooling that was silently broken on them.
 
-### Benchmark (`benchmarks/outpost-bench.mjs`, `npm run bench:outpost`)
+### Benchmark (`benchmarks/bench.mjs`, `npm run bench`)
 
 - Wraps `eval/per-sheet-eval.mjs` (live engine-vs-ground-truth) for every model
   under a root dir; reports overall accuracy, per-sheet pass/skip counts, and
   timings. **Aggregate-only** results go to the committed `benchmarks/BASELINE.md`;
   full per-sheet detail stays in the gitignored `benchmarks/results/`. No cell
   value or label is ever committed.
-- **Baseline (2026-05-28):** outpost-a1 **84.3%**, outpost-a2 **85.5%** on the
+- **Baseline (2026-05-28):** Model A **84.3%**, Model B **85.5%** on the
   standalone sheets. (The 17-sheet circular cluster and the 190 MB PP&E sheet are
   skipped for now — see below.)
 
@@ -143,7 +162,7 @@ ai-interface suites green).
 The real driver behind the "~2.5 min" refine loop wasn't one command — it was
 that `ete init` runs **generate → refine → doctor → maps** in sequence and
 **each independently re-read and re-parsed the full ground truth** from disk. On
-the real ~200 MB Outpost models that's four parses of a 200 MB+ file at ~3.6 s
+the real ~200 MB PE models that's four parses of a 200 MB+ file at ~3.6 s
 each, plus each command's own O(N) scan.
 
 ### What changed
@@ -161,7 +180,7 @@ each, plus each command's own O(N) scan.
 
 ### Why not the row-values artifact (Tier B)
 
-Measured on both real ~200 MB Outpost models: they're **dense-label** (≈90% of
+Measured on both real ~200 MB PE models: they're **dense-label** (≈90% of
 rows labeled, ≈93% of numerics on labeled rows), not the giant-grid case Tier B's
 big win assumed. A general row-values artifact would be ≈30% of GT (≈60% of the
 post-#17 compact GT) — only ~1.6× on refine while inflating output ~60%, fighting

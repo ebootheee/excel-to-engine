@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Outpost benchmark — repeatable accuracy + efficacy tracking over the real
+ * model benchmark — repeatable accuracy + efficacy tracking over the real
  * models, so we can see whether each improvement actually moves the needle.
  *
  * It wraps `eval/per-sheet-eval.mjs` (which runs each sheet module live against
@@ -19,7 +19,7 @@
  * printed or committed.
  *
  * Usage:
- *   node benchmarks/outpost-bench.mjs [--root <dir>] [--concurrency 3] [--stamp <label>]
+ *   node benchmarks/bench.mjs [--root <dir>] [--concurrency 3] [--stamp <label>]
  *
  * Run it after any change that could affect accuracy or pipeline speed, then
  * diff benchmarks/BASELINE.md to see the delta.
@@ -102,15 +102,21 @@ async function benchModel(model) {
 const models = discoverModels(ROOT);
 if (models.length === 0) {
   console.error(`No models found under ${ROOT} (need <model>/chunked/engine.js + _ground-truth.json).`);
-  console.error('Point --root at a dir of parsed engines (the real Outpost engines live in the gitignored engines/).');
+  console.error('Point --root at a dir of parsed engines (the real PE engines live in the gitignored engines/).');
   process.exit(2);
 }
 
-console.log(`Outpost benchmark — ${models.length} model(s) under ${ROOT}\n`);
+// Anonymize model identity in printed + committed output (Model A, B, …). Real
+// dir names stay only in the gitignored detail JSON + the operator's local
+// notes — this repo is public and must not name the real models.
+models.forEach((m, i) => { m.label = `Model ${String.fromCharCode(65 + (i % 26))}`; });
+
+console.log(`model benchmark — ${models.length} model(s) under ${ROOT}\n`);
 const results = [];
 for (const m of models) {
-  process.stdout.write(`  ${m.name} ... `);
+  process.stdout.write(`  ${m.label} ... `);
   const r = await benchModel(m);
+  r.label = m.label;
   results.push(r);
   if (r.evalError && !r.summary) console.log(`eval FAILED (${r.evalError})`);
   else {
@@ -128,7 +134,7 @@ console.log(`\nDetail (gitignored): ${detailPath}`);
 // ── Committed aggregate (no values, no full sheet inventory) ──────────────────
 function renderBaseline(stamp, results) {
   const L = [];
-  L.push('# Outpost benchmark — baseline & history');
+  L.push('# model benchmark — baseline & history');
   L.push('');
   L.push('Real accuracy: each standalone sheet recomputed live vs ground truth via');
   L.push('`eval/per-sheet-eval.mjs` (numbers within 1% rel. tol, strings exact).');
@@ -136,7 +142,7 @@ function renderBaseline(stamp, results) {
   L.push('the Skipped column + blockers below) pending the single-pass orchestrator');
   L.push('eval; run with `--with-clusters` once that lands. Aggregate-only — no cell');
   L.push('values or full sheet inventory. Regenerate:');
-  L.push('`node benchmarks/outpost-bench.mjs --root <engines>`. Full per-sheet detail');
+  L.push('`node benchmarks/bench.mjs --root <engines>`. Full per-sheet detail');
   L.push('lands in the gitignored `benchmarks/results/`.');
   L.push('');
   L.push(`_Last run: ${stamp}_`);
@@ -144,9 +150,9 @@ function renderBaseline(stamp, results) {
   L.push('| Model | Accuracy | Cells matched | Sheets ≥95% | Skipped | Eval time | GT |');
   L.push('|-------|---------:|------:|:-----------:|:-------:|----------:|---:|');
   for (const r of results) {
-    if (!r.summary) { L.push(`| ${r.name} | eval failed | — | — | — | — | ${r.efficacy.gtSizeMB} MB |`); continue; }
+    if (!r.summary) { L.push(`| ${r.label} | eval failed | — | — | — | — | ${r.efficacy.gtSizeMB} MB |`); continue; }
     const s = r.summary;
-    L.push(`| ${r.name} | ${s.overallAccuracy}% | ${s.totalCellsCorrect}/${s.totalCellsTested} | ` +
+    L.push(`| ${r.label} | ${s.overallAccuracy}% | ${s.totalCellsCorrect}/${s.totalCellsTested} | ` +
       `${s.sheetsPassing}/${s.sheetsEvaluated} | ${s.sheetsSkipped} | ${(r.efficacy.wallMs / 1000).toFixed(0)}s | ${r.efficacy.gtSizeMB} MB |`);
   }
   L.push('');
@@ -156,12 +162,12 @@ function renderBaseline(stamp, results) {
   L.push('');
   const PUBLIC = [/pp&?e/i, /headcount/i];
   for (const r of results) {
-    if (!r.summary) { L.push(`- **${r.name}**: eval failed`); continue; }
+    if (!r.summary) { L.push(`- **${r.label}**: eval failed`); continue; }
     const blockers = [];
     for (const sk of r.skipped) if (PUBLIC.some(re => re.test(sk.name))) blockers.push(`${sk.name} (skipped: ${sk.reason})`);
     for (const sh of r.sheets) if (PUBLIC.some(re => re.test(sh.name))) blockers.push(`${sh.name} ${sh.accuracy}%`);
     const lowest = r.sheets.filter(s => s.status !== 'ok' || s.accuracy < 95).length;
-    L.push(`- **${r.name}**: ${r.summary.sheetsEvaluated - lowest}/${r.summary.sheetsEvaluated} sheets clean; ` +
+    L.push(`- **${r.label}**: ${r.summary.sheetsEvaluated - lowest}/${r.summary.sheetsEvaluated} sheets clean; ` +
       `blockers: ${blockers.join('; ') || 'none surfaced'}`);
   }
   L.push('');

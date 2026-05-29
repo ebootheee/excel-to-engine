@@ -74,10 +74,10 @@ perf. See `HANDOFF.md` for the full ordering + Done criteria.
 [#25]: https://github.com/ebootheee/excel-to-engine/issues/25
 [#26]: https://github.com/ebootheee/excel-to-engine/issues/26
 
-## Now — Outpost regeneration findings (Mippy consumer, 2026-05-28)
+## Now — PE-model regeneration findings (Mippy consumer, 2026-05-28)
 
-The downstream Mippy agent regenerated both Outpost engines from `main` (current
-excel-to-engine) → `engines/outpost-a{1,2}-v2/`, old build left alongside.
+The downstream Mippy agent regenerated both PE engines from `main` (current
+excel-to-engine) → `the regenerated `-v2` engine dirs`, old build left alongside.
 Confirmed the new build is clearly better and surfaced concrete follow-ups.
 Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
 
@@ -117,7 +117,7 @@ Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
   canonical returns / Version-Tracker tabs (or de-prioritize
   underwriting-comparison tabs) so returns don't need manual per-model pinning.
 - **`named-inputs.json` empty** when a workbook exposes no formula-referenced
-  defined-names (the Outpost case) — ADR-019 ranged inputs can't be auto-derived;
+  defined-names (this case) — ADR-019 ranged inputs can't be auto-derived;
   needs a heuristic fallback or a documented manual-input path.
 - **MIP isn't a generated output (request #7).** The MIP figure is a hand-port
   calibration, not a single GT cell — MIP is modeled across per-block "MIP
@@ -173,7 +173,7 @@ when we next touch the monitor server or auth surface.
     generate → refine → doctor → maps (each previously re-parsed the full
     200 MB+ GT). The GT is read-only in all of them. `test-init-shared-gt`.
   - **Tier B (row-values artifact) — measured and deprioritized.** Gauged on
-    the two real ~200 MB Outpost models: both are **dense-label** (≈90% of rows
+    the two real ~200 MB PE models: both are **dense-label** (≈90% of rows
     labeled, ≈93% of numerics on labeled rows), *not* the giant-grid case the
     100× idea assumed. A general row-values artifact is ≈30% of GT (≈60% of the
     post-#17 compact GT) → only ~1.6× on refine while inflating output ~60%,
@@ -223,7 +223,7 @@ when we next touch the monitor server or auth surface.
 
 ### Transpiler Coverage
 - **Measured (Mippy regen, 2026-05-28): 11,813 `_fn()` unsupported-function
-  fallbacks per Outpost engine** — that many formula cells transpile to a generic
+  fallbacks per the PE model engine** — that many formula cells transpile to a generic
   stub instead of real logic, a prime accuracy suspect. First step: inventory
   which Excel functions hit the fallback and rank by frequency, then implement
   the top offenders. (Was unchanged old→new, so it predates our work.)
@@ -240,7 +240,7 @@ when we next touch the monitor server or auth surface.
 
 ### Eval System
 - **Done (2026-05-28):** repeatable accuracy + efficacy benchmark over the real
-  Outpost models — `benchmarks/outpost-bench.mjs` → `benchmarks/BASELINE.md`
+  PE models — `benchmarks/bench.mjs` → `benchmarks/BASELINE.md`
   (aggregate-only). Baseline: a1 84.3%, a2 85.5% on standalone sheets. Also
   **fixed a Windows crash** in `per-sheet-eval` (bare absolute ESM import →
   `pathToFileURL`; it had zeroed accuracy on Windows/real engines and wasn't in

@@ -10,7 +10,7 @@
  * smoke engine and asserts no sheet crashed and accuracy is the known-good 100%,
  * so the regression can't come back (CI runs it on ubuntu AND windows).
  *
- * Also exercises --skip-clusters (used by the Outpost benchmark).
+ * Also exercises --skip-clusters (used by the model benchmark).
  *
  * Pure JS; uses the committed smoke chunked fixture (no parser needed).
  */

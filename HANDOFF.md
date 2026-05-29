@@ -1,14 +1,15 @@
 # HANDOFF — excel-to-engine next session
 
 Start-here doc for a fresh agent. Read this, then `ROADMAP.md` (full backlog),
-`PLAN.md` (status), `benchmarks/BASELINE.md` (accuracy numbers), and the two
-memory files (`project_outpost_models_shape`, `project_mippy_contract`).
+`PLAN.md` (status), `benchmarks/BASELINE.md` (accuracy numbers), and your two
+project memory files (the Mippy contract + the real-model shape/baseline notes,
+auto-loaded from your memory index).
 
 _Last updated: 2026-05-28._
 
 ## The job, in one line
 
-**Make the full Outpost model a reliable Mippy calibration oracle: runnable,
+**Make the full PE model a reliable Mippy calibration oracle: runnable,
 with the MIP coefficients exposed as named-outputs, and no stubbed value cells.**
 Everything Mippy-specific stays in Mippy — this repo just produces a trustworthy,
 sample-able engine + contract.
@@ -20,29 +21,29 @@ sample-able engine + contract.
 single-GT-parse per `init` (#20).
 
 **Open PR — review/merge first:** **#21 `feat/next-wave`** (CI green). Contains
-the Outpost accuracy **benchmark + baseline**, a **per-sheet-eval Windows crash
+the the PE model accuracy **benchmark + baseline**, a **per-sheet-eval Windows crash
 fix**, `searchByLabel` lazy numerics, **lib/ unit tests** (43), the
 **scoped cluster-convergence diff** + the first circular-cluster fixture/test,
 and the Mippy regeneration findings in ROADMAP. **If #21 isn't merged yet, branch
 off `feat/next-wave`; otherwise off `main`.**
 
-**Baseline (real models, `npm run bench:outpost`):** outpost-a1 **84.3%**,
-outpost-a2 **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
+**Baseline (real models, `npm run bench`):** Model A **84.3%**,
+Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
 
 ## How to run
 
 ```bash
 npm test                 # full JS suite (387 assertions)
 npm run smoke            # chunked-engine accuracy 78/78
-npm run bench:outpost --  --root "<abs path>/engines"   # accuracy + efficacy on the real models
+npm run bench --  --root "<abs path>/engines"   # accuracy + efficacy on the real models
 node eval/per-sheet-eval.mjs <chunkedDir> --concurrency 3 [--skip-clusters]
 cd pipelines/rust && cargo build --release   # the parser
 ```
 
-Real Outpost models live in the **gitignored** `engines/` dir (proprietary —
+The real PE models live in the **gitignored** `engines/` dir (proprietary —
 never commit values/labels). The Mippy agent's fresh regen is in
-`engines/outpost-a{1,2}-v2/` (the *better* build: dates fixed, slimmed) alongside
-the old `engines/outpost-a{1,2}/`.
+`the regenerated `-v2` engine dirs` (the *better* build: dates fixed, slimmed) alongside
+the old `the `engines/` model dirs`.
 
 ## P1–P3 — Mippy calibration-oracle feature set (do in this order)
 
@@ -111,7 +112,7 @@ calibration oracle":
 ## Polish → Publish
 lib/ unit tests done. Remaining: npm publish prep (`bin`, `files`, metadata),
 synthetic example project, contributing guide. Lower: empty `named-inputs.json`
-fallback (no formula-referenced defined-names in the Outpost workbooks);
+fallback (no formula-referenced defined-names in the PE workbooks);
 MIP-as-output beyond the pinned cells is a model-owner question.
 
 ## Gotchas (will bite you)
@@ -123,7 +124,7 @@ MIP-as-output beyond the pinned cells is a model-owner question.
 - **per-sheet-eval was Windows-broken** (bare absolute ESM import → `pathToFileURL`
   fix; guarded by `tests/cli/test-per-sheet-eval.mjs` on windows CI). Don't
   reintroduce bare absolute `import` paths.
-- **`benchmarks/outpost-bench.mjs` `discoverModels()` gates on `engine.js`** — but
+- **`benchmarks/bench.mjs` `discoverModels()` gates on `engine.js`** — but
   the `-v2` regen dirs may LACK it (the #23 OOM) while having `_graph.json` +
   `sheets/`. If the bench skips `-v2`, relax the gate. (Fixing #23 makes this moot.)
 - **CI runs ubuntu + windows** — child-process/path/parser code must work on both.
