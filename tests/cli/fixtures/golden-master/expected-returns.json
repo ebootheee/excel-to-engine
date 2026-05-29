@@ -1,0 +1,9 @@
+{
+  "_comment": "SYNTHETIC canonical returns for the committed test fixture (NOT real financials). Mirrors the gitignored per-model canonical-returns.json a real golden-master run diffs against. Values come from tests/cli/fixtures/_ground-truth.json.",
+  "grossMOIC": 2.85,
+  "grossIRR": 0.284,
+  "netMOIC": 2.45,
+  "netIRR": 0.241,
+  "totalCarry": 50287893,
+  "terminalValue": 1091500000
+}

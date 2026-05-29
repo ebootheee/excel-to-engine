@@ -350,8 +350,8 @@ bug you get from guessing the wrong cell):
 
 | File | Shape | Use |
 |------|-------|-----|
-| **`named-outputs.json`** | `name → { cell, label, type, format, baseCaseValue, source, dependsOnNamedInputs }` | The contract for downstream apps. Look up `grossMOIC`, get its cell + base-case value, spot-check on import. If your observed value ≠ `baseCaseValue`, your cell map is stale — fail the build. |
-| **`named-inputs.json`** | `name → { cell, type, default, referencedBy, affectsOutputs }` | Drive `engine.run({ [cell]: value })` for what-ifs. `affectsOutputs` says which outputs to invalidate (don't regenerate the whole grid). Only Excel **defined-name** cells **read by ≥1 formula** are listed. |
+| **`named-outputs.json`** | `name → { cell, label, type, format, baseCaseValue, source, dependsOnNamedInputs }` | The contract for downstream apps. Look up `grossMOIC`, get its cell + base-case value, spot-check on import. If your observed value ≠ `baseCaseValue`, your cell map is stale — fail the build. Time-series outputs are `type:"schedule"` with `cellRange` + `perYear:[{year,value}]`; their scalar `baseCaseValue` is a life-to-date `sum` for flows and the `terminal` level for balances (`aggregation` says which) — `perYear` is authoritative. |
+| **`named-inputs.json`** | `name → { cell, type, default, referencedBy, affectsOutputs }` | Drive `engine.run({ [cell]: value })` for what-ifs. `affectsOutputs` says which outputs to invalidate (don't regenerate the whole grid). Lists Excel **defined-name** cells **read by ≥1 formula** plus the model drivers `exitMultiple` / `exitYearSelector` / `hurdleRate` (`source:"manifest-driver"`, derived from the manifest + ground truth, so they emit even without the `.xlsx`). |
 | **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label string from a numeric output, and a real `0` (present, `"number"`) from a never-computed cell (absent from this map). |
 | **`build-manifest.json`** | `{ layoutVersion, engine:{ entry, export }, contentHash, complete, artifacts[] }` | The locked artifact layout + a stable `contentHash` over the identity artifacts (engine.js, sheets/, _ground-truth.json, manifest.json). Pin a build by its `contentHash`; it's stable across rebuilds of the same workbook and changes on drift, so you reconcile deliberately, not per version. `complete:false` / `missingRequired` flag an unrunnable build. |
 | **`dependency-graph.json`** *(debug)* | `{ edges: cell → [cells it reads] }` | Cell-level forward edges (ranges expanded) — the raw material for the `dependsOnNamedInputs` / `affectsOutputs` closures above. **Removed from the default output** once those closures are baked into the named maps; it's the largest artifact on big models (ranges expand). Re-run `ete init --emit-debug` to keep it (plus `_graph.json` and the root `model-map.json`) for offline analysis or closure recomputation. |
@@ -361,10 +361,11 @@ curated named cells) when present — these are authoritative and override
 heuristic detection. Regenerate without a re-parse:
 `ete manifest maps ./my-model/chunked/ --excel model.xlsx`.
 
-> Note: `named-inputs.json` and defined-name enrichment of outputs require the
-> source `.xlsx`. Without it (e.g. `--reuse-parse`), outputs + cell-types still
-> emit from the manifest and ground truth; inputs are skipped with a recorded
-> reason.
+> Note: the **defined-name** inputs and defined-name enrichment of outputs
+> require the source `.xlsx`. Without it (e.g. `--reuse-parse` against an
+> already-parsed dir), outputs + cell-types + the **manifest-driver** inputs
+> (`exitMultiple` / `exitYearSelector` / `hurdleRate`) still emit from the
+> manifest and ground truth; only the defined-name inputs are skipped.
 
 **Default output stays small.** `ete init` keeps only what consumers and the
 CLI actually read: the engine modules, `_ground-truth.json` (compact),
@@ -374,6 +375,15 @@ sheet-level `_graph.json`, and the root `model-map.json` (600+ MB on the
 biggest models) — are dropped after the closures are computed. The high-value
 data survives as the closures inside the named maps. Pass `--emit-debug` to
 retain everything.
+
+**Golden-master gate.** `eval/golden-master.mjs` (run via `npm run golden <chunkedDir>`)
+is the post-build assert for these artifacts: with `--assert-no-fallbacks` it
+fails if any return/value output resolves through an unsupported-function (`_fn`)
+stub, and with `--canonical <file>` it diffs `named-outputs.baseCaseValue`s
+against a canonical returns map to **full float precision**. CI runs it on a
+synthetic fixture (`npm run test:golden`); point it at a real build with
+`ETE_GOLDEN_DIR` + a gitignored `canonical-returns.json` to verify a regenerated
+model still reproduces the hand-port's gross/net MOIC & IRR exactly.
 
 ### The Delta Cascade
 
@@ -399,7 +409,7 @@ excel-to-engine/
 ├── pipelines/
 │   ├── rust/                    # Excel → JS transpiler (8 Rust modules, ~60 Excel functions)
 │   └── js-reasoning/            # Claude-driven pipeline for smaller models
-├── eval/                        # Blind eval, per-sheet eval, auto-iteration
+├── eval/                        # Blind eval, per-sheet eval, golden-master gate, auto-iteration
 ├── lib/                         # Financial libraries (IRR, waterfall, calibration, sensitivity, manifest)
 └── tests/cli/                   # 166 tests (34 integration + 132 use-case scenarios)
 ```

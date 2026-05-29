@@ -89,6 +89,49 @@ console.log('Testing: defined-name enrichment and override');
 }
 
 // ---------------------------------------------------------------------------
+// schedules: balance vs flow baseCaseValue aggregation
+// ---------------------------------------------------------------------------
+console.log('Testing: schedule baseCaseValue — balances use terminal, flows sum');
+{
+  // A debt-balance schedule (stock) and a distribution schedule (flow), each
+  // with three years of data. The scalar must NOT sum a balance across years.
+  const m = {
+    timeline: { columnMap: { E: 2024, F: 2025, G: 2026 } },
+    schedules: [
+      { type: 'debt_balance', sheet: 'S', row: 10, label: 'Outstanding Debt Balance' },
+      { type: 'distribution', sheet: 'S', row: 20, label: 'Distributions to Equity' },
+    ],
+  };
+  const g = {
+    'S!A10': 'Outstanding Debt Balance', 'S!E10': 300, 'S!F10': 250, 'S!G10': 200,
+    'S!A20': 'Distributions to Equity', 'S!E20': 10, 'S!F20': 20, 'S!G20': 30,
+  };
+  const no = collectNamedOutputs(m, g);
+
+  const debt = no.outstandingDebt;
+  assert(debt?.type === 'schedule', 'outstandingDebt is a schedule');
+  assert(debt?.perYear?.length === 3, 'outstandingDebt has 3 perYear points');
+  assert(debt?.aggregation === 'terminal', 'balance schedule aggregation is terminal');
+  assert(debt?.baseCaseValue === 200, `balance baseCaseValue is the terminal level (got ${debt?.baseCaseValue})`);
+  assert(debt?.baseCaseValue !== 750, 'balance baseCaseValue is NOT the cross-year sum (was the bug)');
+  assert(debt?.terminalYear === 2026, 'balance schedule records terminalYear');
+
+  const dist = no.distributionsToEquity;
+  assert(dist?.aggregation === 'sum', 'flow schedule aggregation is sum');
+  assert(dist?.baseCaseValue === 60, `flow baseCaseValue is the life-to-date sum (got ${dist?.baseCaseValue})`);
+  assert(dist?.terminalYear === undefined, 'flow schedule has no terminalYear');
+
+  // An empty series yields a null scalar (honest), not a spurious 0.
+  const m2 = {
+    timeline: { columnMap: { E: 2024, F: 2025, G: 2026 } },
+    schedules: [{ type: 'debt_balance', sheet: 'S', row: 99, label: 'Outstanding Debt Balance' }],
+  };
+  const no2 = collectNamedOutputs(m2, { 'S!A99': 'Outstanding Debt Balance' });
+  assert(no2.outstandingDebt?.perYear?.length === 0, 'empty-series schedule has no perYear points');
+  assert(no2.outstandingDebt?.baseCaseValue === null, 'empty-series schedule baseCaseValue is null');
+}
+
+// ---------------------------------------------------------------------------
 // cell-types
 // ---------------------------------------------------------------------------
 console.log('Testing: collectCellTypes');
@@ -188,20 +231,33 @@ console.log('Testing: attachDependencyClosures');
 // ---------------------------------------------------------------------------
 // emitManifestMaps end-to-end (with and without .xlsx)
 // ---------------------------------------------------------------------------
-console.log('Testing: emitManifestMaps without .xlsx (graceful skip)');
+console.log('Testing: emitManifestMaps without .xlsx — drivers still emit, defined-names skip');
 {
   const tmp = mkdtempSync(join(tmpdir(), 'ete-maps-'));
   cpSync(FIXTURES, tmp, { recursive: true });
   const res = emitManifestMaps(tmp, {});
   assert(res.written.includes('named-outputs.json'), 'outputs written w/o xlsx');
   assert(res.written.includes('cell-types.json'), 'cell-types written w/o xlsx');
-  assert(!res.written.includes('named-inputs.json'), 'inputs skipped w/o xlsx');
-  assert(res.skipped.some(s => s.file === 'named-inputs.json'), 'skip reason recorded');
+
+  // The manifest-driver inputs derive from manifest + ground truth alone, so
+  // they emit even without the workbook (closes the --reuse-parse follow-up).
+  // Defined-name inputs (which need the .xlsx) are absent.
+  assert(res.written.includes('named-inputs.json'), 'named-inputs written w/o xlsx (drivers only)');
+  const ni = JSON.parse(readFileSync(join(tmp, 'named-inputs.json'), 'utf-8')).namedInputs;
+  assert(ni.exitMultiple?.source === 'manifest-driver', 'driver exitMultiple emitted w/o xlsx');
+  assert(ni.exitMultiple?.cell === 'Valuation!K54', 'driver exitMultiple cell resolved from manifest');
+  assert(!('Exit_Year' in ni), 'defined-name inputs absent without the .xlsx');
+  assert(Object.values(ni).every(i => i.source === 'manifest-driver'), 'only manifest-driver inputs without the workbook');
 
   const out = JSON.parse(readFileSync(join(tmp, 'named-outputs.json'), 'utf-8'));
   assert(typeof out.modelHash === 'string' && out.modelHash.startsWith('sha256:'), 'modelHash present');
   assert(out.namedOutputs && Object.keys(out.namedOutputs).length >= 10, 'namedOutputs populated');
   rmSync(tmp, { recursive: true, force: true });
+
+  // No workbook AND no resolvable drivers → empty map (named-inputs.json is
+  // then skipped by emitManifestMaps; the graceful-skip path stays intact).
+  const empty = collectNamedInputs(null, { timeline: {} }, {});
+  assert(Object.keys(empty).length === 0, 'no workbook + no drivers → empty named-inputs');
 }
 
 console.log('Testing: Correctness audit flags fallbacks WITHOUT aborting (Request D / #26)');

@@ -1,5 +1,51 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Golden-master CI gate + P2 follow-ups (schedules, drivers, refiner)
+
+Trustworthiness pass on the P2 contract: a golden-master CI assert plus the three
+follow-ups the P2 work left open.
+
+- **Golden-master gate (`eval/golden-master.mjs` + `npm run test:golden`, CI step).**
+  A post-build assert for the named-outputs contract. `--assert-no-fallbacks`
+  fails if any **return / value-bearing** output (`moic|irr|carry|mip|proceeds|
+  hurdle|…`) carries `resolvesThroughFallback` (i.e. its closure passes through an
+  `_fn` stub); `--canonical <file>` diffs every named output's `baseCaseValue`
+  against a canonical returns map to **full float precision** (`Object.is`, with an
+  optional `--epsilon` relative tolerance). CI exercises the mechanism on a
+  **synthetic committed fixture** (`tests/cli/fixtures/golden-master/`); the real
+  per-model figures stay **gitignored** (never committed to this public repo) and
+  are diffed only when `ETE_GOLDEN_DIR` (+ a gitignored `canonical-returns.json`)
+  points at a real build. New `tests/cli/test-golden-master.mjs` (20). Graceful
+  skip (exit 0) when the model/artifacts/canonical file are absent, so public CI
+  passes without the proprietary data.
+- **Refiner: canonical returns outrank "UW Comparison" (`cli/commands/manifest-refine.mjs`).**
+  `SUMMARY_SHEET_PATTERN` lumped an underwriting "UW Comparison" tab into the top
+  tier, so returns (Gross/Net MOIC & IRR) mis-mapped to *projected* figures instead
+  of the model owner's actuals. New `refineSheetTier` ranks **canonical actuals
+  (Version Tracker / Track Record) → summary → rollup → underwriting → operational**,
+  so #25's value cells pin to the canonical tab without per-model pinning. Documented
+  the durable invariant trip-wire in `skill/SKILL.md`. Regression tests added (the
+  ranking + the invariant); existing single-sheet "UW" bindings are unaffected
+  (tier only breaks cross-sheet ties).
+- **Schedule `baseCaseValue` no longer sums balances across years (`lib/manifest-maps.mjs`).**
+  A schedule's scalar was a blind cross-year sum — correct for flows
+  (distributions, cash flow) but meaningless for **balances** (debt outstanding,
+  equity base/NAV), which double-counted a point-in-time level. Schedules are now
+  classified: balances use the **terminal** (last-year) level with `terminalYear`,
+  flows keep the life-to-date **sum**, and each entry records which via a new
+  `aggregation: "sum"|"terminal"` field. An empty series yields `null` (honest),
+  not a spurious `0`. `perYear[]` remains authoritative.
+- **Driver named-inputs emit under `--reuse-parse` without the workbook.** The
+  manifest-driver inputs (`exitMultiple` / `exitYearSelector` / `hurdleRate`)
+  derive from the manifest + ground truth alone, but `emitManifestMaps` only built
+  `named-inputs.json` when a workbook was present, dropping the drivers when the
+  `.xlsx` wasn't reachable. It now always resolves them (the defined-name scan is
+  still skipped without the workbook). `named-outputs`/`cell-types`/drivers all
+  emit; only the defined-name inputs need the `.xlsx`.
+- **Tests.** `npm test` green (full JS suite); new golden-master suite + refiner
+  and schedule regressions. CI gains a dedicated **Golden-master gate** step
+  (ubuntu + windows).
+
 ## 2026-05-29 — P2 (#25 + #26): time-series schedules, drivable inputs, fallback audit
 
 - **Schedules and distributions (Request A & B)**: pin per-year time-series outputs as schedules inside `named-outputs.json` — `distributionsToEquity`, `outstandingDebt`, `equityBase`, `freeCashFlow`, and per-class distribution arrays (`classes[].distributions`), gated on `manifest.timeline.columnMap`. Each schedule entry carries a `cellRange` + `perYear: [{year,value}]`. `expandRange()` expands `Sheet!C15:K15` to its constituent cells so schedules participate in the dependency closures (`dependsOnNamedInputs` / `affectsOutputs`). (Note: a schedule's scalar `baseCaseValue` is a sum across years — meaningful for flows, less so for balances; `perYear` is authoritative.)

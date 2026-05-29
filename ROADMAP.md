@@ -63,11 +63,25 @@ Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract
 - **P3 (nice-to-have) · [#22] — output-cone scoping.** Cheaper oracle; not
   required (we don't ship the blob).
 
-Supporting (makes the oracle trustworthy, not on the critical path): golden-master
-CI assert (A-1 canonical returns), the refiner UW-Comparison fix (so #25's cells
-pin to canonical tabs), deeper transpiler coverage (the 11,813 `_fn` offenders
-behind #26), cluster-once eval (our accuracy harness), large-sheet eval, pipeline
-perf. See `HANDOFF.md` for the full ordering + Done criteria.
+Supporting (makes the oracle trustworthy, not on the critical path):
+- **Golden-master CI assert ✅ DONE (2026-05-29).** `eval/golden-master.mjs` +
+  `npm run test:golden` + a dedicated CI step. Asserts no return/value output
+  resolves through an `_fn` stub (`--assert-no-fallbacks`) and diffs
+  `named-outputs.baseCaseValue`s against canonical returns to full float
+  precision. CI exercises the mechanism on a synthetic committed fixture; the
+  proprietary figures stay gitignored and are diffed only when `ETE_GOLDEN_DIR`
+  points at the real model.
+- **Refiner UW-Comparison fix ✅ DONE (2026-05-29).** `refineSheetTier` ranks a
+  canonical Version-Tracker / Track-Record tab above an underwriting "UW
+  Comparison" tab, so #25's returns pin to canonical tabs without per-model
+  pinning. Invariant trip-wire pattern documented in `skill/SKILL.md`.
+- **Two P2 follow-ups closed (2026-05-29):** driver named-inputs now emit under
+  `--reuse-parse` without the workbook; schedule `baseCaseValue` no longer sums
+  balances across years (terminal level for stocks, sum for flows).
+
+Still open: deeper transpiler coverage (the 11,813 `_fn` offenders behind #26),
+cluster-once eval (our accuracy harness), large-sheet eval, pipeline perf. See
+`HANDOFF.md` for the full ordering + Done criteria.
 
 [#24]: https://github.com/ebootheee/excel-to-engine/issues/24
 [#25]: https://github.com/ebootheee/excel-to-engine/issues/25
@@ -89,10 +103,12 @@ Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
   per-cluster fixed-point loops.
 - **Golden master PASS.** Regenerated `_ground-truth.json` reproduces the
   hand-port's canonical A-1 gross/net MOIC & IRR (Version Tracker row 22) to full
-  float precision. Pinning A-1's manifest to those cells makes
-  `named-outputs.baseCaseValue` a ready CI golden-master assert. **Do this:** add
-  a golden-master test diffing those baseCaseValues. (Canonical figures stay in
-  the gitignored artifacts + project memory — not committed to this public repo.)
+  float precision. ✅ **Done (2026-05-29):** `eval/golden-master.mjs` +
+  `npm run test:golden` diff `named-outputs.baseCaseValue`s against canonical
+  returns and assert no return resolves through an `_fn` stub. Run it against the
+  real A-1 build with `ETE_GOLDEN_DIR=<chunkedDir>` and a gitignored
+  `<chunkedDir>/canonical-returns.json` (the figures stay out of this public repo;
+  CI runs the synthetic fixture).
 
 **Open follow-ups:**
 - **Generation robustness on big models ([#23]) — blocks a clean full build.**
@@ -110,11 +126,11 @@ Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
   prime accuracy suspect once cluster eval makes per-sheet accuracy measurable.
   Inventory the missing Excel functions and prioritize by frequency. (See
   Transpiler Coverage below.)
-- **Refiner mis-maps returns to the "UW Comparison" tab.** Auto-manifest picked an
-  underwriting-comparison cell over the canonical Version Tracker returns —
-  `SUMMARY_SHEET_PATTERN` over-ranks "UW Comparison". The refiner should recognize
-  canonical returns / Version-Tracker tabs (or de-prioritize
-  underwriting-comparison tabs) so returns don't need manual per-model pinning.
+- **Refiner mis-maps returns to the "UW Comparison" tab. ✅ DONE (2026-05-29).**
+  `refineSheetTier` (cli/commands/manifest-refine.mjs) now ranks canonical
+  actuals (Version Tracker / Track Record) above summary → rollup → underwriting
+  ("UW Comparison") → operational tabs, so returns pin to the canonical tab
+  automatically. A `skill/SKILL.md` invariant pattern lets a model owner lock it.
 - **`named-inputs.json` empty** when a workbook exposes no formula-referenced
   defined-names (this case) — ADR-019 ranged inputs can't be auto-derived;
   needs a heuristic fallback or a documented manual-input path.

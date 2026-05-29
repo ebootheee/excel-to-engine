@@ -79,3 +79,10 @@ jobs:
 
       - name: Artifact slimming
         run: npm run test:slimming
+
+      # Golden-master gate: the #26 correctness gate (--assert-no-fallbacks) plus
+      # an exact-float baseCaseValue diff against canonical returns. Exercises the
+      # mechanism on a synthetic committed fixture; the real (proprietary) figures
+      # are gitignored and only diffed on a runner that sets ETE_GOLDEN_DIR.
+      - name: Golden-master gate
+        run: npm run test:golden
