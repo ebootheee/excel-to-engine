@@ -17,6 +17,14 @@ tests/eval-results.json
 # covered by *.xlsx above; this also excludes the parsed engine output dirs.
 engines/
 
+# Benchmark run detail (per-sheet/per-cell results derived from the real models
+# — may contain real values/labels). Only the aggregate-only benchmarks/BASELINE.md
+# is committed; raw per-run detail stays local.
+benchmarks/results/
+
+# per-sheet-eval scratch dir (transient child-process scripts + per-sheet GT)
+_eval_tmp/
+
 # Transient test artifacts (scenario save/load test writes here on every run)
 tests/cli/fixtures/scenarios/
 

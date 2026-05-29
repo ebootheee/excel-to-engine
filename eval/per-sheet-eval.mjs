@@ -16,7 +16,7 @@
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, resolve, basename, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -36,6 +36,12 @@ function getFlag(name, fallback) {
 const OUTPUT_FILE = getFlag('output', join(chunkedDir, '..', 'per-sheet-report.json'));
 const CONCURRENCY = parseInt(getFlag('concurrency', process.env.EVAL_CONCURRENCY || '6'));
 const SAMPLE_SIZE = parseInt(getFlag('sample', process.env.SAMPLE_SIZE || '2000'));
+// --skip-clusters: record circular-cluster sheets as skipped instead of
+// evaluating them. The current convergence path re-runs the whole cluster once
+// per member sheet (O(cluster²) work), which is infeasible on big models; this
+// flag yields a fast, real accuracy number for the standalone sheets while the
+// single-pass orchestrator eval is built. See ROADMAP (circular-cluster eval).
+const SKIP_CLUSTERS = args.includes('--skip-clusters');
 const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '8192');
 const MAX_SHEET_SIZE_MB = parseInt(process.env.MAX_SHEET_SIZE_MB || '150');
 
@@ -139,6 +145,11 @@ async function main() {
       continue;
     }
 
+    if (SKIP_CLUSTERS && clusterSheetSet.has(entry.name)) {
+      skipped.push({ name: entry.name, reason: 'circular cluster (--skip-clusters; needs single-pass orchestrator eval)' });
+      continue;
+    }
+
     // Sample ground truth if sheet has too many entries
     let sampleGt = entry.gt;
     if (entry.totalCount > SAMPLE_SIZE) {
@@ -185,15 +196,15 @@ async function main() {
     const cluster = sheetClusters.find(c => c.includes(sheetName));
     const clusterModules = cluster ? cluster.map(s => {
       const san = s.replace(/[^a-zA-Z0-9]/g, '_');
-      const modPath = join(sheetsDir, `${san}.mjs`).replace(/\\/g, '/');
+      const modPath = join(sheetsDir, `${san}.mjs`);
       return { name: s, sanitized: san, path: modPath };
-    }).filter(m => existsSync(join(sheetsDir, `${m.sanitized}.mjs`))) : [];
+    }).filter(m => existsSync(m.path)) : [];
 
     // Build a child process script that loads the sheet module(s) and compares.
     // Paths flow into JS source — interpolate them as JSON-quoted strings so a
     // path containing `'` or `\` can't break out and inject code.
     const clusterImports = clusterModules.length > 0
-      ? clusterModules.map(m => `import { compute as compute_${m.sanitized} } from ${JSON.stringify(m.path)};`).join('\n')
+      ? clusterModules.map(m => `import { compute as compute_${m.sanitized} } from ${JSON.stringify(pathToFileURL(m.path).href)};`).join('\n')
       : '';
     const clusterComputeBlock = clusterModules.length > 0
       ? `
@@ -201,21 +212,22 @@ async function main() {
   const clusterFns = [${clusterModules.map(m => `compute_${m.sanitized}`).join(', ')}];
   const MAX_ITER = 200;
   const TOL = 1e-6;
-  let prevSnapshot = {};
+  const prevSnapshot = {};
   for (let _ci = 0; _ci < MAX_ITER; _ci++) {
     for (const fn of clusterFns) fn(ctx);
-    // Check convergence on numeric values
+    // Convergence is about the cluster's *computed* cells stabilizing, so diff
+    // only the cells the cluster wrote (ctx._written) — not every seeded
+    // ground-truth cell. On a model with millions of seeded cells the old
+    // O(all-cells)-per-iteration diff was a dominant cost (and × 200 iters).
     let maxDelta = 0;
-    const snapshot = {};
-    for (const [k, v] of Object.entries(ctx.values)) {
-      if (typeof v === 'number') {
-        snapshot[k] = v;
-        const prev = prevSnapshot[k] || 0;
-        const d = Math.abs(v - prev);
-        if (d > maxDelta) maxDelta = d;
-      }
+    for (const k of ctx._written) {
+      const v = ctx.values[k];
+      if (typeof v !== 'number') continue;
+      const prev = prevSnapshot[k] || 0;
+      const d = Math.abs(v - prev);
+      if (d > maxDelta) maxDelta = d;
+      prevSnapshot[k] = v;
     }
-    prevSnapshot = snapshot;
     if (_ci > 0 && maxDelta < TOL) break;
   }
 `
@@ -226,7 +238,7 @@ async function main() {
 
     const evalScript = `
 import { readFile } from 'fs/promises';
-import { compute } from ${JSON.stringify(modulePath.replace(/\\/g, '/'))};
+import { compute } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 ${clusterImports}
 
 const allGt = JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8'));
@@ -236,8 +248,9 @@ const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
 const ctx = {
   values: {},
+  _written: new Set(),  // cells written by compute() — the cluster convergence diffs only these
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
-  set(addr, value) { this.values[addr] = value; },
+  set(addr, value) { this.values[addr] = value; this._written.add(addr); },
   _parseRange(rangeStr) {
     const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
     if (!m) return null;

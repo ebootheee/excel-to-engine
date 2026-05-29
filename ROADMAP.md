@@ -42,6 +42,91 @@ RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
   (engine faithfully reproduces an Excel base case of 0). Surface via a
   `requiredFor` field if/when named-inputs gains one.
 
+## Now — Mippy calibration oracle (e2e agent's job, priority feature set)
+
+The refined "fully ready for Mippy" target: make the full model a **reliable
+calibration oracle** — runnable, with the MIP coefficients exposed as
+named-outputs, and no stubbed value cells. Everything Mippy-specific stays in
+Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract):
+
+- **P1 · [#23] + [#24] — reliably emit a runnable `engine.js`.** Fix the
+  dep-graph OOM; **fail the build loud, never emit a partial artifact.**
+  **Done =** `chunked/engine.js` with `export function run()` exists on every
+  build; build errors hard if it can't. #24 also locks the artifact layout +
+  emits a content hash (consume downstream without per-version reconciliation).
+  Gates everything: without a runnable engine we can't sample MIP to calibrate.
+- **P2 · [#25] — pin the value-bearing cells as named-outputs.** Per-class MIP
+  Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares —
+  not just MOIC/IRR. **Done =** they appear in `named-outputs.json` with
+  base-case values. These ARE the parametric coefficients.
+- **P2 · [#26] — `_fn` fallback audit (`_fn-fallbacks.json`).** **Done =** assert
+  no MIP/value/return cell resolves through an unsupported-function stub.
+- **P3 (nice-to-have) · [#22] — output-cone scoping.** Cheaper oracle; not
+  required (we don't ship the blob).
+
+Supporting (makes the oracle trustworthy, not on the critical path): golden-master
+CI assert (A-1 canonical returns), the refiner UW-Comparison fix (so #25's cells
+pin to canonical tabs), deeper transpiler coverage (the 11,813 `_fn` offenders
+behind #26), cluster-once eval (our accuracy harness), large-sheet eval, pipeline
+perf. See `HANDOFF.md` for the full ordering + Done criteria.
+
+[#24]: https://github.com/ebootheee/excel-to-engine/issues/24
+[#25]: https://github.com/ebootheee/excel-to-engine/issues/25
+[#26]: https://github.com/ebootheee/excel-to-engine/issues/26
+
+## Now — PE-model regeneration findings (Mippy consumer, 2026-05-28)
+
+The downstream Mippy agent regenerated both PE engines from `main` (current
+excel-to-engine) → `the regenerated `-v2` engine dirs`, old build left alongside.
+Confirmed the new build is clearly better and surfaced concrete follow-ups.
+Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
+
+**Confirmed better than the old (pre-our-work) build:**
+- **Dates fixed.** Old leaked Rust debug strings (`ExcelDateTime { value: 45960.0,
+  … }` — 2,686 in A-1, breaking date math); new emits serial numbers, 0 leaks.
+- **~42–45% smaller** (~1.9–2.0 GB → ~1.1 GB): `model-map.json` (606 MB) +
+  `_computed-values.json` (192 MB) gone — the #8 slimming + dropping the GT-copy.
+- Semantic manifest + ADR-017 contract maps emitted; circular refs now run
+  per-cluster fixed-point loops.
+- **Golden master PASS.** Regenerated `_ground-truth.json` reproduces the
+  hand-port's canonical A-1 gross/net MOIC & IRR (Version Tracker row 22) to full
+  float precision. Pinning A-1's manifest to those cells makes
+  `named-outputs.baseCaseValue` a ready CI golden-master assert. **Do this:** add
+  a golden-master test diffing those baseCaseValues. (Canonical figures stay in
+  the gitignored artifacts + project memory — not committed to this public repo.)
+
+**Open follow-ups:**
+- **Generation robustness on big models ([#23]) — blocks a clean full build.**
+  Plain `ete init` hit its 10-min `spawnSync` cap, and the Rust parser was
+  OOM-killed at the cell-level dependency-graph step → `engine.js` (the `run()`
+  orchestrator) and `dependency-graph.json` closures **didn't land** (written
+  after the OOM step); regen needed direct-parse then `--reuse-parse`. Needs:
+  stream/incrementalize the dep-graph build (or raise its memory headroom),
+  within-sheet parallelism, streaming writes, and a higher/configurable init
+  timeout.
+- **`--output-profile` / guided `ete create` ([#22]).** Skip the ~752 MB
+  per-sheet engine emit when a consumer only needs ground truth + contract maps.
+- **Transpiler coverage — 11,813 `_fn()` fallbacks (unchanged old→new).** That
+  many formula cells still transpile to a generic unsupported-function stub — a
+  prime accuracy suspect once cluster eval makes per-sheet accuracy measurable.
+  Inventory the missing Excel functions and prioritize by frequency. (See
+  Transpiler Coverage below.)
+- **Refiner mis-maps returns to the "UW Comparison" tab.** Auto-manifest picked an
+  underwriting-comparison cell over the canonical Version Tracker returns —
+  `SUMMARY_SHEET_PATTERN` over-ranks "UW Comparison". The refiner should recognize
+  canonical returns / Version-Tracker tabs (or de-prioritize
+  underwriting-comparison tabs) so returns don't need manual per-model pinning.
+- **`named-inputs.json` empty** when a workbook exposes no formula-referenced
+  defined-names (this case) — ADR-019 ranged inputs can't be auto-derived;
+  needs a heuristic fallback or a documented manual-input path.
+- **MIP isn't a generated output (request #7).** The MIP figure is a hand-port
+  calibration, not a single GT cell — MIP is modeled across per-block "MIP
+  Proceeds" cells. Surface via a `requiredFor`/aggregate mapping, not a
+  single-cell expectation. (See the Round 2 MIP-gating note above.)
+
+[#22]: https://github.com/ebootheee/excel-to-engine/issues/22
+[#23]: https://github.com/ebootheee/excel-to-engine/issues/23
+
 ## Now — Security Hardening Follow-ups (post-PR #13)
 
 Non-blocking items surfaced during the v0.2.0 security audit pass. Open
@@ -88,7 +173,7 @@ when we next touch the monitor server or auth surface.
     generate → refine → doctor → maps (each previously re-parsed the full
     200 MB+ GT). The GT is read-only in all of them. `test-init-shared-gt`.
   - **Tier B (row-values artifact) — measured and deprioritized.** Gauged on
-    the two real ~200 MB Outpost models: both are **dense-label** (≈90% of rows
+    the two real ~200 MB PE models: both are **dense-label** (≈90% of rows
     labeled, ≈93% of numerics on labeled rows), *not* the giant-grid case the
     100× idea assumed. A general row-values artifact is ≈30% of GT (≈60% of the
     post-#17 compact GT) → only ~1.6× on refine while inflating output ~60%,
@@ -96,8 +181,10 @@ when we next touch the monitor server or auth surface.
     ~70 KB) but extracting it cheaply would couple the parser to refine's metric
     vocabulary. Not worth it on these models; revisit only if a genuinely
     giant-grid model (mostly unlabeled numeric grids) shows up.
-  - **Still open:** apply the same lazy-numerics path to `searchByLabel`
-    (`query` / `carry`) so they stop scanning the GT for adjacent values.
+  - **Done (2026-05-28):** applied the same lazy-numerics path to `searchByLabel`
+    (`query` / `carry`) — probes the matched row's columns instead of scanning
+    the whole GT, with a directed `caseColumn` probe so a far scenario column is
+    never missed.
 - Manifest migration tooling for model updates (vN → vN+1 shape diff).
 
 ---
@@ -135,6 +222,11 @@ when we next touch the monitor server or auth surface.
 ## Ongoing — Accuracy Improvement + Production Learnings
 
 ### Transpiler Coverage
+- **Measured (Mippy regen, 2026-05-28): 11,813 `_fn()` unsupported-function
+  fallbacks per the PE model engine** — that many formula cells transpile to a generic
+  stub instead of real logic, a prime accuracy suspect. First step: inventory
+  which Excel functions hit the fallback and rank by frequency, then implement
+  the top offenders. (Was unchanged old→new, so it predates our work.)
 - Implement INDIRECT function (dynamic cell references)
 - Fix 2D range handling edge cases for very large sheets
 - Handle array formulas / CSE (Ctrl+Shift+Enter) patterns
@@ -147,22 +239,45 @@ when we next touch the monitor server or auth surface.
 - **Pref compounding for long holds** — 12-year 8% compound pref = 2.52x hurdle, which exceeds many MOIC targets. Need to detect when models use quarterly cash flow waterfalls vs bullet maturity and adjust accordingly.
 
 ### Eval System
-- Increase blind eval question diversity (computed questions, cross-sheet aggregations)
-- Add time-period-aware questions ("What was X in Q3 2025?")
-- Profile and optimize per-sheet eval for sheets >150MB
+- **Done (2026-05-28):** repeatable accuracy + efficacy benchmark over the real
+  PE models — `benchmarks/bench.mjs` → `benchmarks/BASELINE.md`
+  (aggregate-only). Baseline: a1 84.3%, a2 85.5% on standalone sheets. Also
+  **fixed a Windows crash** in `per-sheet-eval` (bare absolute ESM import →
+  `pathToFileURL`; it had zeroed accuracy on Windows/real engines and wasn't in
+  CI — now guarded by `test-per-sheet-eval`, run on windows-latest).
+- **Large-sheet eval (190 MB PP&E):** confirmed it exceeds the 150 MB per-sheet
+  limit and is skipped. Needs streaming/sharded per-sheet eval or a higher limit
+  with chunked compute. The standalone sheets at ~85% also need attention (array
+  formulas / wide-sheet disambiguation) — visible now that the eval runs.
+- Increase blind eval question diversity; add time-period-aware questions.
 
 ### Convergence Loop Accuracy
-- The 62-sheet circular cluster in the large model is the biggest accuracy blocker
-- Investigate running eval through the orchestrator (not per-sheet isolation) for circular sheets
-- Consider lazy subgraph evaluation (only compute transitive closure of target cells)
+- **Diagnosed (2026-05-28):** on the real models the circular cluster is **17 of
+  21 sheets**, and `per-sheet-eval` re-runs the *entire* cluster convergence once
+  per member sheet (O(cluster²)) — that's why clustered big models "won't
+  evaluate." The array-formula Headcount sheet lives inside this cluster, so it's
+  unmeasurable until this is fixed. `--skip-clusters` skips them for now.
+- **Done (2026-05-28):** scoped the convergence diff to written cells
+  (`ctx._written`) instead of all ~6M seeded cells per iteration. Added a
+  synthetic 2-sheet circular fixture (`tests/cli/fixtures/cluster-model/`) + the
+  first cluster test. Measured: scoped-diff alone is **not** enough — the 17×
+  per-member redundancy dominates.
+- **Remaining key fix (cluster-once):** single-pass orchestrator eval — converge
+  the cluster once, then score every member from that converged state (one task
+  per cluster, not per sheet); then drop `--skip-clusters` from the benchmark.
+  The cluster fixture is the ready test oracle.
+- Consider lazy subgraph evaluation (only compute transitive closure of targets).
 
 ## Near-Term
 
 ### Unit Test Suite
-- Tests for `lib/irr.mjs` with known IRR cases
-- Tests for `lib/waterfall.mjs` with standard structures
-- Tests for `lib/calibration.mjs` convergence and edge cases
-- Tests for `lib/excel-parser.mjs` fingerprinting with synthetic workbooks
+- **Done (2026-05-28):** `tests/lib/test-lib.mjs` (43) — `lib/irr.mjs` (known
+  IRR/NPV/XIRR cases), `lib/waterfall.mjs` (American/European/MOIC-hurdle +
+  conservation invariant), `lib/calibration.mjs` (nested get/set, validate),
+  `lib/sensitivity.mjs` (flattenOutputs). In `npm test` / CI.
+- Still open: `lib/calibration.mjs` convergence/edge cases (calibrate loop),
+  `lib/sensitivity.mjs` surface extraction + elasticity/breakpoints, and
+  `lib/excel-parser.mjs` fingerprinting with synthetic workbooks.
 
 ### CI Pipeline
 - **Done (2026-05-28):** `.github/workflows/ci.yml` — on push/PR to `main`,

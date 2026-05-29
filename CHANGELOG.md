@@ -1,11 +1,168 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Privacy scrub: genericize the real model name + figures
+
+This repo is public; CLAUDE.md forbids committing real financials or participant
+names. Two cleanups before merging the next-wave PR:
+
+- **Removed the real return figures** (gross/net MOIC & IRR, the UW-comparison
+  multiple, the MIP dollar amount) from the committed docs. The findings stay
+  (golden-master match on Version Tracker row 22; refiner UW-Comparison mis-map;
+  MIP is a hand-port calibration) — only the numbers are gone. Canonical values
+  live in the gitignored artifacts + local notes and feed the golden-master test
+  from there.
+- **Genericized the real model name** out of all committed files: renamed
+  `benchmarks/outpost-bench.mjs` → `benchmarks/bench.mjs` (npm script `bench`),
+  and the benchmark now **anonymizes model identity** in printed + committed
+  output (Model A, Model B, …) — real dir names stay only in the gitignored
+  detail JSON. Prose in HANDOFF/ROADMAP/PLAN/CHANGELOG now says "the real PE
+  models" / "Model A/B". (The `test-e2e4-fixes` scrub-guard that asserts template
+  names are generic is intentionally kept.)
+
+## 2026-05-28 — Mippy calibration-oracle feature set (priority amendment)
+
+Refined the "fully ready for Mippy" target: the e2e agent's job is to make the
+full model a **reliable calibration oracle** — runnable, MIP coefficients exposed
+as named-outputs, no stubbed value cells. Documented the priority order in
+ROADMAP ("Now — Mippy calibration oracle") and HANDOFF.md, and in the
+`project_mippy_contract` memory:
+
+- **P1 · #23 + #24** — reliably emit a runnable `engine.js` (fix dep-graph OOM;
+  fail loud, never a partial artifact; lock layout + content hash).
+- **P2 · #25** — pin value-bearing cells (per-class MIP Proceeds, hurdle,
+  participation %, equity basis, valuation/shares) as named-outputs.
+- **P2 · #26** — emit `_fn-fallbacks.json`; assert no value cell uses an
+  unsupported-function stub.
+- **P3 · #22** — output-cone scoping (nice-to-have).
+
+Supporting/trustworthiness (off critical path): golden-master CI, refiner
+UW-Comparison fix, deeper `_fn` coverage, cluster-once eval.
+
+## 2026-05-28 — HANDOFF.md (fresh-agent entry point)
+
+Added `HANDOFF.md` — the prioritized next-session plan (P0 cluster-once eval →
+generation robustness #23 → `_fn()` transpiler coverage → refiner UW-Comparison
+fix → golden-master CI → output-profile/large-sheet/perf → Polish), with current
+state, run commands, and the gotchas (gitignored real models, the GT-copy
+`_computed-values.json`, the per-sheet-eval Windows fix, the bench
+`discoverModels` gate vs the `-v2` regen). PLAN points to it.
+
+## 2026-05-28 — Roadmap: PE-model regeneration findings (Mippy consumer)
+
+The downstream Mippy agent regenerated both PE engines from `main` and
+reported back. Captured the findings in ROADMAP.md ("Now — PE-model regeneration
+findings"). Confirmed wins vs the old build: **dates fixed** (old leaked
+`ExcelDateTime { … }` debug strings — 2,686 in A-1; new emits serial numbers, 0
+leaks), **~42–45% smaller** (model-map.json + the GT-copy `_computed-values.json`
+gone), contract maps emitted, circular refs converge, and a **golden-master PASS**
+— the regenerated ground truth reproduces the hand-port's canonical A-1 returns
+to full float precision (Version Tracker row 22). New follow-ups: generation
+robustness on big models (dep-graph OOM + `init` 10-min timeout — issue #23),
+`--output-profile` to scope artifacts (#22), the **11,813 `_fn()` unsupported-
+function fallbacks** per engine (transpiler-coverage accuracy suspect), the
+refiner mis-mapping returns to a "UW Comparison" tab, empty `named-inputs.json`
+when no formula-referenced defined-names exist, and MIP-as-output (#7). A
+ready-made golden-master CI assert (diff committed `named-outputs.baseCaseValue`)
+is noted.
+
+## 2026-05-28 — Circular-cluster eval: scoped convergence diff + first cluster test
+
+Progress on the circular-cluster accuracy blocker (the 17-of-21-sheet cluster on
+the real models that wouldn't evaluate).
+
+- **Scoped convergence diff.** The cluster convergence loop in
+  `per-sheet-eval.mjs` checked for a fixed point by diffing **every** cell in the
+  context each iteration — and the context is seeded with the full (multi-million-
+  cell) ground truth, so that was O(all cells) × up to 200 iterations. It now
+  tracks the cells `compute()` actually writes (`ctx._written`) and diffs only
+  those (the cluster's own outputs). Behavior-preserving; large constant-factor
+  win on big clusters.
+- **First circular-cluster test + fixture.** `tests/cli/fixtures/cluster-model/`
+  is a synthetic 2-sheet circular model (SheetA ↔ SheetB, converges to
+  a=50,b=50,c=100,d=100). `tests/cli/test-per-sheet-eval.mjs` now evaluates it
+  through the convergence loop and asserts 100% — the cluster path had no
+  coverage before, and this guards the scoped-diff change.
+
+**Still the key fix (cluster-once):** measured on the real model, scoped-diff
+alone is *not* enough — `per-sheet-eval` re-runs the entire cluster convergence
+**once per member sheet** (17×), and engine inaccuracies keep some clusters from
+converging (200 iters). The remaining work is single-pass orchestrator eval:
+converge the cluster once, then score every member from that converged state
+(one task per cluster, not per sheet). The fixture above is the ready-made test
+oracle. Until then the benchmark runs with `--skip-clusters`.
+
+## 2026-05-28 — Unit tests for lib/ (Polish→Publish)
+
+The shared financial libraries had no direct coverage. Added
+`tests/lib/test-lib.mjs` (43 known-answer assertions), wired into `npm test`
+(runs first) so CI guards them on every push:
+
+- **`lib/irr.mjs`** — NPV/NPV-derivative identities; IRR of classic cash-flow
+  series (−100→+150 = 50%, −1000 then 200×8 ≈ 11.89%, 3-year bullet); Newton ≡
+  bisection agreement; NPV(IRR) ≈ 0; null on no-sign-change; XIRR on dated flows.
+- **`lib/waterfall.mjs`** — American 80/20 + 8% pref + catch-up (LP/GP splits,
+  carry %), no-catch-up variant, loss case (no carry), the flat-MOIC-hurdle
+  promote (incl. the hold-period-independence invariant), European builder; the
+  LP+GP = distributed conservation invariant across structures.
+- **`lib/calibration.mjs`** — nested get/set; `validateOutputs` pass/fail +
+  suggested corrective factor.
+- **`lib/sensitivity.mjs`** — `flattenOutputs` group/type filtering.
+
+## 2026-05-28 — PE-model accuracy benchmark + eval-tooling fixes
+
+Stood up a repeatable accuracy + efficacy benchmark over the real ~200 MB
+PE models so improvements can be tracked over time, and fixed the eval
+tooling that was silently broken on them.
+
+### Benchmark (`benchmarks/bench.mjs`, `npm run bench`)
+
+- Wraps `eval/per-sheet-eval.mjs` (live engine-vs-ground-truth) for every model
+  under a root dir; reports overall accuracy, per-sheet pass/skip counts, and
+  timings. **Aggregate-only** results go to the committed `benchmarks/BASELINE.md`;
+  full per-sheet detail stays in the gitignored `benchmarks/results/`. No cell
+  value or label is ever committed.
+- **Baseline (2026-05-28):** Model A **84.3%**, Model B **85.5%** on the
+  standalone sheets. (The 17-sheet circular cluster and the 190 MB PP&E sheet are
+  skipped for now — see below.)
+
+### per-sheet-eval fixes (it wasn't in CI, so these went unnoticed)
+
+- **Windows crash fixed.** The generated per-sheet wrapper imported each sheet's
+  `compute()` by a bare absolute path (`"C:\\..."`), which Node ESM rejects on
+  Windows — so *every* sheet "crashed" at load (0% accuracy) on Windows and on
+  the real engines. Now uses `pathToFileURL()`. New `tests/cli/test-per-sheet-eval.mjs`
+  (6) guards it; CI runs it on **windows-latest** too.
+- **`--skip-clusters`** flag: record circular-cluster sheets as skipped instead
+  of evaluating them. The current convergence path re-runs the *whole* cluster
+  once per member sheet (O(cluster²)), which is infeasible on big models; this
+  yields a fast, real number for the standalone sheets while the single-pass
+  orchestrator eval is built (ROADMAP).
+
+### searchByLabel: lazy numerics (query / carry)
+
+`searchByLabel` previously scanned the entire ground truth once per matched row
+to collect adjacent numerics. It now probes the row's columns on demand (same
+approach as the refiner), with a directed `caseColumn` lookup probing its exact
+cell so a far scenario column is never missed. Behavior-preserving (query/carry/
+ai-interface suites green).
+
+### Findings that scope the accuracy-blocker work
+
+- The 190 MB PP&E sheet exceeds the 150 MB per-sheet limit → **large-sheet eval**
+  blocker confirmed.
+- The circular cluster is **17 of 21 sheets** and is evaluated redundantly
+  (once per member) → the concrete reason behind "circular-cluster won't
+  evaluate." Single-pass orchestrator eval is the fix.
+- `_computed-values.json` in these engines is **byte-identical to ground truth**
+  (a seeded copy), so it is not a valid accuracy source — accuracy must come from
+  live recompute.
+
 ## 2026-05-28 — `init` parses the ground truth once (shared across the pipeline)
 
 The real driver behind the "~2.5 min" refine loop wasn't one command — it was
 that `ete init` runs **generate → refine → doctor → maps** in sequence and
 **each independently re-read and re-parsed the full ground truth** from disk. On
-the real ~200 MB Outpost models that's four parses of a 200 MB+ file at ~3.6 s
+the real ~200 MB PE models that's four parses of a 200 MB+ file at ~3.6 s
 each, plus each command's own O(N) scan.
 
 ### What changed
@@ -23,7 +180,7 @@ each, plus each command's own O(N) scan.
 
 ### Why not the row-values artifact (Tier B)
 
-Measured on both real ~200 MB Outpost models: they're **dense-label** (≈90% of
+Measured on both real ~200 MB PE models: they're **dense-label** (≈90% of
 rows labeled, ≈93% of numerics on labeled rows), not the giant-grid case Tier B's
 big win assumed. A general row-values artifact would be ≈30% of GT (≈60% of the
 post-#17 compact GT) — only ~1.6× on refine while inflating output ~60%, fighting

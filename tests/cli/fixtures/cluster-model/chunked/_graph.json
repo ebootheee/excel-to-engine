@@ -1,0 +1,9 @@
+{
+  "topoOrder": ["SheetA", "SheetB"],
+  "sheetClusters": [["SheetA", "SheetB"]],
+  "edges": {
+    "SheetA!b": ["SheetB!d"],
+    "SheetB!c": ["SheetA!a", "SheetA!b"],
+    "SheetB!d": ["SheetB!c"]
+  }
+}
