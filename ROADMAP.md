@@ -42,6 +42,59 @@ RPC service. Round 1 split into a low-risk JS half (done) and a Rust half
   (engine faithfully reproduces an Excel base case of 0). Surface via a
   `requiredFor` field if/when named-inputs gains one.
 
+## Now — Outpost regeneration findings (Mippy consumer, 2026-05-28)
+
+The downstream Mippy agent regenerated both Outpost engines from `main` (current
+excel-to-engine) → `engines/outpost-a{1,2}-v2/`, old build left alongside.
+Confirmed the new build is clearly better and surfaced concrete follow-ups.
+Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
+
+**Confirmed better than the old (pre-our-work) build:**
+- **Dates fixed.** Old leaked Rust debug strings (`ExcelDateTime { value: 45960.0,
+  … }` — 2,686 in A-1, breaking date math); new emits serial numbers, 0 leaks.
+- **~42–45% smaller** (~1.9–2.0 GB → ~1.1 GB): `model-map.json` (606 MB) +
+  `_computed-values.json` (192 MB) gone — the #8 slimming + dropping the GT-copy.
+- Semantic manifest + ADR-017 contract maps emitted; circular refs now run
+  per-cluster fixed-point loops.
+- **Golden master PASS.** Regenerated `_ground-truth.json` reproduces the
+  hand-port's canonical A-1 returns to full float precision (Version Tracker
+  row 22: grossMOIC L22 ≈2.34916, grossIRR M22 ≈0.19233, netMOIC T22 ≈2.23137,
+  netIRR U22 ≈0.18240). Pinning A-1's manifest to those cells makes
+  `named-outputs.baseCaseValue` a ready CI golden-master assert. **Do this:** add
+  a golden-master test that diffs the committed contract JSON's baseCaseValues.
+
+**Open follow-ups:**
+- **Generation robustness on big models ([#23]) — blocks a clean full build.**
+  Plain `ete init` hit its 10-min `spawnSync` cap, and the Rust parser was
+  OOM-killed at the cell-level dependency-graph step → `engine.js` (the `run()`
+  orchestrator) and `dependency-graph.json` closures **didn't land** (written
+  after the OOM step); regen needed direct-parse then `--reuse-parse`. Needs:
+  stream/incrementalize the dep-graph build (or raise its memory headroom),
+  within-sheet parallelism, streaming writes, and a higher/configurable init
+  timeout.
+- **`--output-profile` / guided `ete create` ([#22]).** Skip the ~752 MB
+  per-sheet engine emit when a consumer only needs ground truth + contract maps.
+- **Transpiler coverage — 11,813 `_fn()` fallbacks (unchanged old→new).** That
+  many formula cells still transpile to a generic unsupported-function stub — a
+  prime accuracy suspect once cluster eval makes per-sheet accuracy measurable.
+  Inventory the missing Excel functions and prioritize by frequency. (See
+  Transpiler Coverage below.)
+- **Refiner mis-maps returns to the "UW Comparison" tab.** Auto-manifest picked an
+  underwriting-comparison cell (2.305x) over the canonical Version Tracker returns
+  (2.349x) — `SUMMARY_SHEET_PATTERN` over-ranks "UW Comparison". The refiner
+  should recognize canonical returns / Version-Tracker tabs (or de-prioritize
+  underwriting-comparison tabs) so returns don't need manual per-model pinning.
+- **`named-inputs.json` empty** when a workbook exposes no formula-referenced
+  defined-names (the Outpost case) — ADR-019 ranged inputs can't be auto-derived;
+  needs a heuristic fallback or a documented manual-input path.
+- **MIP isn't a generated output (request #7).** The $51.8M is a hand-port
+  calibration, not a single GT cell — MIP is modeled across per-block "MIP
+  Proceeds" cells. Surface via a `requiredFor`/aggregate mapping, not a
+  single-cell expectation. (See the Round 2 MIP-gating note above.)
+
+[#22]: https://github.com/ebootheee/excel-to-engine/issues/22
+[#23]: https://github.com/ebootheee/excel-to-engine/issues/23
+
 ## Now — Security Hardening Follow-ups (post-PR #13)
 
 Non-blocking items surfaced during the v0.2.0 security audit pass. Open
@@ -137,6 +190,11 @@ when we next touch the monitor server or auth surface.
 ## Ongoing — Accuracy Improvement + Production Learnings
 
 ### Transpiler Coverage
+- **Measured (Mippy regen, 2026-05-28): 11,813 `_fn()` unsupported-function
+  fallbacks per Outpost engine** — that many formula cells transpile to a generic
+  stub instead of real logic, a prime accuracy suspect. First step: inventory
+  which Excel functions hit the fallback and rank by frequency, then implement
+  the top offenders. (Was unchanged old→new, so it predates our work.)
 - Implement INDIRECT function (dynamic cell references)
 - Fix 2D range handling edge cases for very large sheets
 - Handle array formulas / CSE (Ctrl+Shift+Enter) patterns

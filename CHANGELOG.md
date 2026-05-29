@@ -1,5 +1,23 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — Roadmap: Outpost regeneration findings (Mippy consumer)
+
+The downstream Mippy agent regenerated both Outpost engines from `main` and
+reported back. Captured the findings in ROADMAP.md ("Now — Outpost regeneration
+findings"). Confirmed wins vs the old build: **dates fixed** (old leaked
+`ExcelDateTime { … }` debug strings — 2,686 in A-1; new emits serial numbers, 0
+leaks), **~42–45% smaller** (model-map.json + the GT-copy `_computed-values.json`
+gone), contract maps emitted, circular refs converge, and a **golden-master PASS**
+— the regenerated ground truth reproduces the hand-port's canonical A-1 returns
+to full float precision (Version Tracker row 22). New follow-ups: generation
+robustness on big models (dep-graph OOM + `init` 10-min timeout — issue #23),
+`--output-profile` to scope artifacts (#22), the **11,813 `_fn()` unsupported-
+function fallbacks** per engine (transpiler-coverage accuracy suspect), the
+refiner mis-mapping returns to a "UW Comparison" tab, empty `named-inputs.json`
+when no formula-referenced defined-names exist, and MIP-as-output (#7). A
+ready-made golden-master CI assert (diff committed `named-outputs.baseCaseValue`)
+is noted.
+
 ## 2026-05-28 — Circular-cluster eval: scoped convergence diff + first cluster test
 
 Progress on the circular-cluster accuracy blocker (the 17-of-21-sheet cluster on
