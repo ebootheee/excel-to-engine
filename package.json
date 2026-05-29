@@ -41,6 +41,7 @@
     "test:engine": "node pipelines/rust/tests/test-engine-runtime.mjs",
     "test:depgraph": "node pipelines/rust/tests/test-dependency-graph.mjs",
     "test:runnable": "node pipelines/rust/tests/test-runnable-engine.mjs",
+    "test:lazy-engine": "node pipelines/rust/tests/test-lazy-engine.mjs",
     "test:slimming": "node tests/cli/test-artifact-slimming.mjs",
     "test:golden": "node tests/cli/test-golden-master.mjs",
     "golden": "node eval/golden-master.mjs",

@@ -24,7 +24,11 @@ use std::time::Instant;
 
 /// Generate all chunked output artifacts into `output_dir`.
 /// Returns a summary string of what was emitted.
-pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String, String> {
+pub fn emit_chunked(
+    workbook: &WorkbookData,
+    output_dir: &Path,
+    lazy_engine: bool,
+) -> Result<String, String> {
     let t_start = Instant::now();
 
     eprintln!("[chunked] Partitioning {} sheets...", workbook.sheets.len());
@@ -61,51 +65,63 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
         .map_err(|e| format!("Failed to write _helpers.mjs: {}", e))?;
     eprintln!("[chunked] _helpers.mjs written ({})", human_size(helpers_code.len()));
 
-    // 1. Emit per-sheet modules (parallel via rayon)
+    // 1. Emit per-sheet modules — STREAMED: generate each module, write it to
+    //    disk immediately, then DROP the string. The previous version did
+    //    par_iter().map(generate_sheet_module).collect() and wrote in a SECOND
+    //    pass — so it held ALL ~800 MB of generated JS (dominated by a few
+    //    monster sheets) in memory at once, on top of the multi-million-cell
+    //    workbook, and wrote nothing to sheets/ until every module finished. On
+    //    the real models that drove the parser past 18 GB with sheets/ empty for
+    //    the whole run. Streaming caps live module strings at what's being
+    //    generated right now; files land incrementally (progress + partial
+    //    durability). A write failure is still fatal (Err -> exit 1).
     let total_sheets = partitions.len();
-    eprintln!("[chunked] Emitting {} sheet modules (parallel)...", total_sheets);
+    eprintln!("[chunked] Emitting {} sheet modules (streamed)...", total_sheets);
     let t_emit = Instant::now();
-
     let completed = AtomicUsize::new(0);
 
-    // Generate all modules in parallel
-    let sheet_results: Vec<(String, String, String, usize, usize, usize)> = partitions
-        .par_iter()
-        .map(|partition| {
-            let code = generate_sheet_module(partition, &workbook);
-            let safe_name = sanitize_sheet_name(&partition.name);
-            let file_name = format!("{}.mjs", safe_name);
-            let code_len = code.len();
-            let n_formulas = partition.formula_cells.len();
-            let n_inputs = partition.input_cells.len();
+    // Generate one module, write it, drop the string; return only small metadata
+    // (file name + counts), never the code. Shared by the parallel (light) and
+    // sequential (heavy) passes below. All captures are Sync, so this is usable
+    // as a rayon map operator.
+    let emit_one = |partition: &SheetPartition| -> Result<(String, usize, usize), String> {
+        let code = generate_sheet_module(partition, workbook);
+        let file_name = format!("{}.mjs", sanitize_sheet_name(&partition.name));
+        let code_len = code.len();
+        let n_formulas = partition.formula_cells.len();
+        fs::write(sheets_dir.join(&file_name), &code)
+            .map_err(|e| format!("Failed to write {}: {}", file_name, e))?;
+        drop(code); // free the (possibly hundreds-of-MB) module string now
+        let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+        if done % 5 == 0 || done == total_sheets {
+            eprint!("\r[chunked]   [{}/{}] modules written...", done, total_sheets);
+            std::io::stderr().flush().ok();
+        }
+        Ok((file_name, n_formulas, code_len))
+    };
 
-            let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
-            if done % 5 == 0 || done == total_sheets {
-                eprint!(
-                    "\r[chunked]   [{}/{}] generating modules...",
-                    done, total_sheets
-                );
-                std::io::stderr().flush().ok();
-            }
+    // A single transpiled monster sheet can be hundreds of MB. Emit "heavy"
+    // sheets one-at-a-time so two are never materialized concurrently; emit the
+    // many "light" sheets in parallel. On small models every sheet is light, so
+    // this stays fully parallel — same behaviour as before, minus the retention.
+    const HEAVY_FORMULA_THRESHOLD: usize = 200_000;
+    let (heavy, light): (Vec<&SheetPartition>, Vec<&SheetPartition>) = partitions
+        .iter()
+        .partition(|p| p.formula_cells.len() >= HEAVY_FORMULA_THRESHOLD);
 
-            (partition.name.clone(), file_name, code, n_formulas, n_inputs, code_len)
-        })
-        .collect();
+    let mut metas: Vec<(String, usize, usize)> = light
+        .into_par_iter()
+        .map(|p| emit_one(p))
+        .collect::<Result<Vec<_>, String>>()?;
+    for p in heavy {
+        metas.push(emit_one(p)?);
+    }
 
     eprintln!(); // newline after progress
 
-    // Write files sequentially (fast — just I/O)
-    let mut sheet_files: Vec<String> = Vec::new();
-    let mut total_formulas_emitted: usize = 0;
-    let mut total_bytes_emitted: usize = 0;
-    for (_sheet_name, file_name, code, n_formulas, _n_inputs, code_len) in &sheet_results {
-        let file_path = sheets_dir.join(file_name);
-        fs::write(&file_path, code)
-            .map_err(|e| format!("Failed to write {}: {}", file_name, e))?;
-        sheet_files.push(file_name.clone());
-        total_formulas_emitted += n_formulas;
-        total_bytes_emitted += code_len;
-    }
+    let sheet_files: Vec<String> = metas.iter().map(|(f, _, _)| f.clone()).collect();
+    let total_formulas_emitted: usize = metas.iter().map(|(_, n, _)| *n).sum();
+    let total_bytes_emitted: usize = metas.iter().map(|(_, _, b)| *b).sum();
 
     eprintln!(
         "[chunked] All {} sheet modules emitted in {:.1}s ({} formulas, {})",
@@ -170,9 +186,16 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
     //    first guarantees a runnable `run()` lands even if that later step is
     //    killed. A write failure here is fatal (Err → exit 1) — we never leave a
     //    chunked/ dir without an engine.
-    eprint!("[chunked] Writing engine.js orchestrator...");
+    eprint!(
+        "[chunked] Writing engine.js orchestrator{}...",
+        if lazy_engine { " (lazy)" } else { "" }
+    );
     std::io::stderr().flush().ok();
-    let engine_js = generate_orchestrator(&sheet_graph, &partitions);
+    let engine_js = if lazy_engine {
+        generate_orchestrator_lazy(&sheet_graph)
+    } else {
+        generate_orchestrator(&sheet_graph, &partitions)
+    };
     fs::write(output_dir.join("engine.js"), &engine_js)
         .map_err(|e| format!("Failed to write engine.js: {}", e))?;
     eprintln!(" done ({})", human_size(engine_js.len()));
@@ -233,7 +256,7 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
 // ---------------------------------------------------------------------------
 
 /// Generate the JavaScript module code for a single sheet.
-fn generate_sheet_module(partition: &SheetPartition, _workbook: &WorkbookData) -> String {
+fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookData) -> String {
     let mut lines: Vec<String> = Vec::new();
     let sheet_name = &partition.name;
 
@@ -520,7 +543,7 @@ fn extract_cell_addr_from_var(var_body: &str) -> Option<String> {
 // Orchestrator (engine.js) generation
 // ---------------------------------------------------------------------------
 
-fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> String {
+fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition<'_>]) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     lines.push("// engine.js — AUTO-GENERATED orchestrator (chunked mode)".to_string());
@@ -567,27 +590,59 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
     lines.push("};".to_string());
     lines.push(String::new());
 
-    // Sheet clusters (circular dependency groups that need convergence loops)
-    if !graph.sheet_clusters.is_empty() {
-        lines.push("// Sheet clusters — groups of sheets with circular dependencies".to_string());
-        lines.push("// These are executed in convergence loops until values stabilize.".to_string());
-        lines.push("const SHEET_CLUSTERS = [".to_string());
-        for cluster in &graph.sheet_clusters {
-            let names: Vec<String> = cluster
-                .iter()
-                .map(|s| format!("\"{}\"", escape_js_string(s)))
-                .collect();
-            lines.push(format!("  [{}],", names.join(", ")));
-        }
-        lines.push("];".to_string());
-        lines.push(String::new());
+    // Sheet clusters (circular dependency groups that need convergence loops).
+    // Eager engine emits these only when the model actually has them.
+    lines.extend(emit_clusters_block(graph, false));
 
-        // Build a set of all sheets that belong to a cluster
-        lines.push("const CLUSTER_SHEETS = new Set(SHEET_CLUSTERS.flat());".to_string());
-        lines.push(String::new());
+    // run() — shared with the lazy orchestrator (eager passes lazy=false, so no
+    // load() guard and the output is identical to the original hand-written run).
+    lines.extend(emit_run_function(graph, false));
+    lines.push(String::new());
+
+    // Default export
+    lines.push("export default { run };".to_string());
+    lines.push(String::new());
+
+    lines.join("\n")
+}
+
+/// Emit the `SHEET_CLUSTERS` + `CLUSTER_SHEETS` constants. The eager engine emits
+/// them only when the model has circular clusters (`force=false`, matching the
+/// original output). The lazy engine passes `force=true` so its cone loader can
+/// always reference `SHEET_CLUSTERS` (an empty array when the model is acyclic).
+fn emit_clusters_block(graph: &SheetGraph, force: bool) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    if graph.sheet_clusters.is_empty() && !force {
+        return lines;
     }
+    lines.push("// Sheet clusters — groups of sheets with circular dependencies".to_string());
+    lines.push("// These are executed in convergence loops until values stabilize.".to_string());
+    lines.push("const SHEET_CLUSTERS = [".to_string());
+    for cluster in &graph.sheet_clusters {
+        let names: Vec<String> = cluster
+            .iter()
+            .map(|s| format!("\"{}\"", escape_js_string(s)))
+            .collect();
+        lines.push(format!("  [{}],", names.join(", ")));
+    }
+    lines.push("];".to_string());
+    lines.push(String::new());
 
-    // run() function — shared preamble (overrides + read-tracking + meta scaffold)
+    // Build a set of all sheets that belong to a cluster
+    lines.push("const CLUSTER_SHEETS = new Set(SHEET_CLUSTERS.flat());".to_string());
+    lines.push(String::new());
+    lines
+}
+
+/// Emit the `run()` function — shared by the eager and lazy orchestrators. Both
+/// reference the same `SHEET_COMPUTE` / `TOPO_ORDER` / `SHEET_CLUSTERS` /
+/// `CLUSTER_SHEETS`, so the body is identical. With `lazy=true` a guard is
+/// inserted that throws if no sheets have been loaded (the lazy engine's footgun);
+/// with `lazy=false` the output is byte-identical to the original eager run().
+fn emit_run_function(graph: &SheetGraph, lazy: bool) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+
+    // JSDoc + signature
     lines.push(r#"/**
  * Execute the full model.
  * @param {Object} [inputs] - Optional cell overrides: { "Sheet!A1": value, ... }
@@ -595,8 +650,22 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
  * @param {boolean} [options.strict] - Throw if any override cell is not read by a formula.
  * @returns {{ values: Object, kpis: Object, meta: Object, unknownOverrides: string[] }}
  */
-export function run(inputs = {}, options = {}) {
-  const ctx = new ComputeContext();
+export function run(inputs = {}, options = {}) {"#.to_string());
+
+    if lazy {
+        lines.push(r#"  // Lazy engine: sheet modules load on demand via load()/runScoped(). Guard the
+  // footgun of calling run() before anything is loaded (it would otherwise no-op
+  // every sheet and silently return an all-zero model). A cone-scoped load()
+  // intentionally leaves out-of-cone sheets unloaded; those are skipped by the
+  // `if (computeFn)` checks below, which is the correct behaviour for a scoped run.
+  if (Object.keys(SHEET_COMPUTE).length === 0) {
+    throw new Error('engine.run(): no sheets loaded — call `await load()` (or `await load({ sheets: [...] })` / `load({ cells: [...] })`) first, or use `await runScoped(inputs, options)`.');
+  }"#.to_string());
+    }
+
+    // Body preamble (ctx + override tracking + apply/pin). Joining after the
+    // signature line above reproduces the original single-string preamble.
+    lines.push(r#"  const ctx = new ComputeContext();
   const _t0 = Date.now();
   const TOL = 1e-6;
   const _clusterMeta = [];
@@ -711,10 +780,154 @@ export function run(inputs = {}, options = {}) {
     unknownOverrides,
   };
 }"#.to_string());
+
+    lines
+}
+
+/// Lazy orchestrator — emitted for `--lazy-engine`. Identical `run()` semantics to
+/// the eager engine, but sheet modules are NOT statically imported: they load on
+/// demand via an async `load()` (optionally scoped to an output cone), so
+/// `import('engine.js')` no longer pulls ~800 MB of modules into the heap before
+/// `run()` can be called. `run()` stays synchronous; the consumer awaits `load()`
+/// (or `runScoped()`) first. This is the opt-in fix for Wall A (#22); the default
+/// engine.js stays eager + synchronous so existing consumers are untouched.
+fn generate_orchestrator_lazy(graph: &SheetGraph) -> String {
+    let mut lines: Vec<String> = Vec::new();
+
+    lines.push("// engine.js — AUTO-GENERATED orchestrator (chunked mode, LAZY)".to_string());
+    lines.push("// Sheet modules are imported ON DEMAND by load()/runScoped(), not at".to_string());
+    lines.push("// module-load time — so importing this file is cheap regardless of model size.".to_string());
+    lines.push("// run() is synchronous: await load() (or use runScoped()) before calling it.".to_string());
+    lines.push("// Do not edit manually — re-run the pipeline to regenerate.".to_string());
+    lines.push(String::new());
+
+    // Runtime context class (no static sheet imports)
+    lines.push(generate_ctx_runtime());
+    lines.push(String::new());
+
+    // Topo order constant
+    let topo_strs: Vec<String> = graph
+        .topo_order
+        .iter()
+        .map(|s| format!("\"{}\"", escape_js_string(s)))
+        .collect();
+    lines.push(format!("const TOPO_ORDER = [{}];", topo_strs.join(", ")));
+    lines.push(String::new());
+
+    // Lazy module loaders — thunks that dynamically import each sheet module.
+    lines.push("// Lazy loaders — each returns a Promise of its sheet module. load() awaits".to_string());
+    lines.push("// only the ones it needs (requested sheets/cells + their transitive deps),".to_string());
+    lines.push("// so a cone-scoped run never imports modules outside the cone.".to_string());
+    lines.push("const SHEET_LOADERS = {".to_string());
+    for name in &graph.topo_order {
+        let safe = sanitize_sheet_name(name);
+        lines.push(format!(
+            "  \"{}\": () => import('./sheets/{}.mjs'),",
+            escape_js_string(name),
+            safe
+        ));
+    }
+    lines.push("};".to_string());
+    lines.push(String::new());
+
+    // Per-sheet forward-dependency map (for the output-cone closure).
+    lines.push("// Sheet-level forward deps (sheet -> sheets it reads) for cone expansion.".to_string());
+    lines.push("const SHEET_DEPS = {".to_string());
+    for entry in &graph.sheets {
+        let deps: Vec<String> = entry
+            .deps
+            .iter()
+            .map(|d| format!("\"{}\"", escape_js_string(d)))
+            .collect();
+        lines.push(format!(
+            "  \"{}\": [{}],",
+            escape_js_string(&entry.name),
+            deps.join(", ")
+        ));
+    }
+    lines.push("};".to_string());
+    lines.push(String::new());
+
+    // Clusters — always emitted (force=true) so the cone closure can pull in
+    // whole clusters even when the consumer seeds only one member.
+    lines.extend(emit_clusters_block(graph, true));
+
+    // Compute map filled lazily by load(), plus load-state tracking.
+    lines.push("const SHEET_COMPUTE = {};".to_string());
+    lines.push("const _loaded = new Set();".to_string());
+    lines.push(String::new());
+
+    // load() + the output-cone closure.
+    lines.push(r#"/**
+ * Load sheet modules into SHEET_COMPUTE. Call (and await) before run().
+ * @param {Object} [options]
+ * @param {string[]} [options.sheets] - Sheet names to load (with their transitive deps).
+ * @param {string[]} [options.cells]  - Qualified cell addrs ("Sheet!A1"); each cell's
+ *                                       sheet prefix seeds the cone.
+ *   With neither, ALL sheets load (still lazy, but complete). To scope to named
+ *   outputs, map their names -> cells via named-outputs.json, then pass `cells`.
+ * @returns {Promise<{ loaded: string[], count: number }>}
+ */
+export async function load(options = {}) {
+  // Seed set: explicit sheets + the sheet owning each requested cell.
+  let seeds = null;
+  if (Array.isArray(options.sheets) || Array.isArray(options.cells)) {
+    seeds = new Set(options.sheets || []);
+    for (const cell of (options.cells || [])) {
+      const i = String(cell).indexOf('!');
+      if (i > 0) seeds.add(String(cell).slice(0, i));
+    }
+  }
+
+  // Target set: everything, or the transitive forward-dependency closure of the
+  // seeds. Any sheet in a circular cluster pulls in ALL of its cluster members —
+  // a cluster converges as a unit, so a partial load would be wrong.
+  let targets;
+  if (seeds === null) {
+    targets = Object.keys(SHEET_LOADERS);
+  } else {
+    const want = new Set();
+    const stack = [...seeds];
+    while (stack.length) {
+      const s = stack.pop();
+      if (want.has(s)) continue;
+      want.add(s);
+      for (const d of (SHEET_DEPS[s] || [])) if (!want.has(d)) stack.push(d);
+      const cluster = CLUSTER_SHEETS.has(s) ? SHEET_CLUSTERS.find(c => c.includes(s)) : null;
+      if (cluster) for (const m of cluster) if (!want.has(m)) stack.push(m);
+    }
+    targets = [...want].filter(s => SHEET_LOADERS[s]);
+  }
+
+  const toLoad = targets.filter(s => !_loaded.has(s));
+  await Promise.all(toLoad.map(async (s) => {
+    const mod = await SHEET_LOADERS[s]();
+    SHEET_COMPUTE[s] = mod.compute;
+    _loaded.add(s);
+  }));
+  return { loaded: [..._loaded], count: _loaded.size };
+}
+"#.to_string());
+
+    // run() — shared body, with the no-sheets-loaded guard.
+    lines.extend(emit_run_function(graph, true));
+    lines.push(String::new());
+
+    // runScoped() convenience.
+    lines.push(r#"/**
+ * Convenience: load (optionally cone-scoped), then run, in one await.
+ * @param {Object} [inputs] - Cell overrides, as for run().
+ * @param {Object} [options] - { sheets?, cells?, strict? } — passed to load() and run().
+ * @returns {Promise<{ values: Object, kpis: Object, meta: Object, unknownOverrides: string[] }>}
+ */
+export async function runScoped(inputs = {}, options = {}) {
+  await load(options);
+  return run(inputs, options);
+}"#.to_string());
     lines.push(String::new());
 
     // Default export
-    lines.push("export default { run };".to_string());
+    lines.push("export default { run, load, runScoped };".to_string());
     lines.push(String::new());
 
     lines.join("\n")
@@ -831,7 +1044,7 @@ function numToCol(n) {
 /// omitted, matching the previous behaviour. Iteration follows partition order
 /// then cell order — stable for a given workbook, so the output is
 /// deterministic across builds of the same model. Returns the entry count.
-fn write_dependency_graph(partitions: &[SheetPartition], path: &Path) -> Result<usize, String> {
+fn write_dependency_graph(partitions: &[SheetPartition<'_>], path: &Path) -> Result<usize, String> {
     let file = fs::File::create(path)
         .map_err(|e| format!("Failed to create {}: {}", path.display(), e))?;
     let mut w = std::io::BufWriter::new(file);
@@ -891,7 +1104,7 @@ fn write_dependency_graph(partitions: &[SheetPartition], path: &Path) -> Result<
 
 /// Detect cells within a single sheet that form circular references.
 /// Returns the set of qualified addresses involved in cycles.
-fn detect_intra_sheet_cycles(partition: &SheetPartition, sheet_name: &str) -> Vec<String> {
+fn detect_intra_sheet_cycles(partition: &SheetPartition<'_>, sheet_name: &str) -> Vec<String> {
     // Build intra-sheet dependency graph
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();
     let mut all_addrs: HashSet<String> = HashSet::new();

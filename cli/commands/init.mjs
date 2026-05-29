@@ -109,6 +109,11 @@ export function runInit(excelPath, args) {
       // in chunked mode by default; see request #8 slimming).
       const parserArgs = [resolve(excelPath), absOutput, '--chunked'];
       if (args.emitDebug) parserArgs.push('--emit-debug');
+      // --lazy-engine emits a chunked engine.js that imports sheet modules on
+      // demand (async load()/runScoped() + output-cone scoping) instead of
+      // eagerly at module-load time — so a consumer can run the engine without
+      // pulling every sheet module into memory just to import it (#22, Wall A).
+      if (args.lazyEngine) parserArgs.push('--lazy-engine');
       const result = spawnSync(
         parserBin,
         parserArgs,

@@ -60,12 +60,18 @@ Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract
   artifacts. New `npm run test:runnable` + CI. See CHANGELOG/PLAN.
 - **P2 · [#25] — pin the value-bearing cells as named-outputs. ✅ DONE (2026-05-29).** Per-class MIP Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares — not just MOIC/IRR. Schedules and timeline timelines (such as debt, equity base, cash flow) are now surfaced and participate fully in closure analysis via range expansion. Drivable driver-inputs (`exitMultiple`, `exitYearSelector`, and `hurdleRate`) are also mapped under `named-inputs.json`.
 - **P2 · [#26] — `_fn` fallback audit (`_fn-fallbacks.json`). ✅ DONE (2026-05-29).** Scans the generated sheet modules → `_fn-fallbacks.json`, and checks each named output/schedule's dependency closure against it. **Reports** by default (annotates affected outputs with `resolvesThroughFallback`, records `stats.fallbackViolations`, `ete init` warns); **hard-fails only under `--assert-no-fallbacks`** so the gate doesn't block the real models (~11,813 fallbacks today). The "assert no value cell uses a stub" target is the golden-master CI check below, run with `--assert-no-fallbacks`.
-- **P3 (nice-to-have) · [#22] — output-cone scoping / lazy sheet loading.**
-  Cheaper oracle; not required (we don't ship the blob). Now also the home for
-  the two scaling walls that remain after the partition-hang fix below: the
-  partition step `clone()`s every cell (peak-memory doubling), and `engine.js`
-  eagerly imports ~800 MB of sheet modules (Node load-time wall — even a complete
-  build is slow to *run*). Scoping/lazy-loading addresses both.
+- **P3 · [#22] — scaling walls + lazy sheet loading. ✅ DONE (2026-05-29).**
+  Three walls closed so the real models both *build* and *run* at scale:
+  **(C) streamed emit** — write each sheet module to disk as generated and drop
+  the string (was: hold all ~800 MB before writing → 18 GB peak); heavy sheets
+  emit one-at-a-time. **(B) borrowed partitions** — `SheetPartition<'a>` holds
+  `Vec<&CellData>` (was: clone ~6M cells → peak-memory doubling). **(A) opt-in
+  `ete init --lazy-engine`** — emits an engine whose sheet modules load on demand
+  via async `load()`/`runScoped()` with output-cone scoping; sync `run()`
+  preserved; **default engine unchanged** (eager + sync, Mippy untouched).
+  `npm run test:lazy-engine` (19) + CI. Still open under #22's original umbrella:
+  the `--output-profile contract` knob (skip the per-sheet emit entirely for
+  contract-only consumers) and a guided `ete create` skill.
 
 Supporting (makes the oracle trustworthy, not on the critical path):
 - **Golden-master CI assert ✅ DONE (2026-05-29).** `eval/golden-master.mjs` +
@@ -123,10 +129,18 @@ Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
   range-expanding `extract_refs` (post-Round-2 it explodes every range to ≤1000
   cells per formula, then discards the same-sheet ones) on the 1.62M-formula PP&E
   sheet → swap thrash. Now uses a sheet-names-only scanner (`collect_sheet_deps`);
-  cycle detection uses `extract_refs_shallow`. **Residual scaling walls (→ [#22]):**
-  partition still `clone()`s every cell (peak-memory doubling), and the generated
-  `engine.js` eagerly imports ~800 MB of sheet modules (Node load-time wall). Also
-  still wanted: within-sheet parallelism for the heaviest sheets.
+  cycle detection uses `extract_refs_shallow`. ✅ **Two more walls fixed
+  (2026-05-29, #22):** the emit was materializing all ~800 MB of generated module
+  strings before writing any (18 GB peak) — now **streamed** (write + drop per
+  module, heavy sheets one-at-a-time); and `partition_sheets` cloned every cell
+  (peak-memory doubling) — now **borrows** (`Vec<&CellData>`). The eager
+  `engine.js` still imports all modules, so `ete init --lazy-engine` adds an
+  on-demand engine for the run-the-oracle path. **Residual (deferred):**
+  `generate_sheet_module` builds a `Vec<String>` then joins (~2× a monster
+  transiently), and a single ~200 MB monster module is still heavy to import →
+  **row-chunk the 3 monster sheets** into smaller lazy modules. Also still wanted:
+  within-sheet parallelism for the heaviest sheets. **Not yet measured on the real
+  models** (gitignored) — a clean A1/A2 regen should confirm the emit completes.
 - **`--output-profile` / guided `ete create` ([#22]).** Skip the ~752 MB
   per-sheet engine emit when a consumer only needs ground truth + contract maps.
 - **Transpiler coverage — 11,813 `_fn()` fallbacks (unchanged old→new).** That

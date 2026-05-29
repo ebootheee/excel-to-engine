@@ -51,13 +51,35 @@ formulas. Validated: `cargo test` 17/17, `smoke` 78/78, `test:depgraph`/`runnabl
 `engine` 11/20/21. **Rebuild the release parser** (`cd pipelines/rust && cargo
 build --release`) before re-running the regen — the fix is in the binary.
 
-Next session (all nice-to-have, none on the critical path): **P3 (#22)**
-output-cone scoping / lazy sheet loading — now also the home for the two residual
-scaling walls (partition clones every cell → peak-memory doubling; `engine.js`
-eagerly imports ~800 MB of sheet modules → Node load-time wall, so even a complete
-build is slow to *run* as the oracle). Plus **deeper transpiler coverage** (the
-11,813 `_fn` offenders behind #26) and **cluster-once eval**. The Mippy contract +
-its trust gates are complete.
+**Latest session (chunked-build scaling walls, 2026-05-29):** the three #22 walls
+are closed. A clean build got *past* partitioning but the module-emit step drove
+the parser past 18 GB (it `collect()`ed all ~800 MB of generated module strings
+before writing any), and even a complete engine was slow to *run* (eager imports).
+- **Wall C (streamed emit):** `chunked_emitter.rs` writes each sheet module to
+  disk the instant it's generated and drops the string (heavy sheets ≥200k
+  formulas one-at-a-time, light ones parallel) — peak ≈ one monster module, files
+  land incrementally. **This is the fix for the 18 GB OOM the regen hit.**
+- **Wall B (borrowed partitions):** `SheetPartition<'a>` holds `Vec<&CellData>`
+  (`sheet_partition.rs`) instead of cloning ~6M cells — no more peak-memory
+  doubling during emit.
+- **Wall A (opt-in lazy engine):** `ete init --lazy-engine` (parser
+  `--lazy-engine`) emits an engine whose sheet modules load on demand via async
+  `load()`/`runScoped()` with **output-cone scoping** (`load({sheets})` /
+  `load({cells})` loads only the dependency closure, whole clusters included);
+  sync `run()` preserved, guarded against pre-load calls. **Default engine.js is
+  unchanged** (eager + sync) — Mippy / `ete eval` / smoke / engine suite untouched.
+  Eager & lazy share the `run()` body so they can't drift. New
+  `npm run test:lazy-engine` (19) + CI. **Rebuild the release parser before regen.**
+
+Next session (none on the critical path): **a clean A1/A2 regen** to confirm the
+emit completes within memory (couldn't be measured here — models are gitignored);
+then **row-chunk the 3 monster sheets** (Owned_Asset_PP_E, Future_Owned_Acquisitions,
+Technology) so even one is small to generate (`generate_sheet_module` still builds
+a `Vec<String>` then joins, ~2× a monster transiently) and import. Plus the rest of
+**#22's umbrella** (`--output-profile contract` to skip the per-sheet emit for
+contract-only consumers; guided `ete create` skill), **deeper transpiler coverage**
+(the 11,813 `_fn` offenders behind #26), and **cluster-once eval**. The Mippy
+contract + its trust gates are complete.
 
 **Baseline (real models, `npm run bench`):** Model A **84.3%**,
 Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
