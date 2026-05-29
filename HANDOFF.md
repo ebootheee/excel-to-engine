@@ -89,14 +89,14 @@ emit). Makes the oracle cheaper to run; **not required** — we don't ship the b
 These aren't on Mippy's critical path but back the "reliable" in "reliable
 calibration oracle":
 - **Golden-master CI assert** — A-1's regenerated GT matches the hand-port's
-  canonical returns to full float precision (Version Tracker row 22: grossMOIC
-  L22 ≈2.34916, grossIRR M22 ≈0.19233, netMOIC T22 ≈2.23137, netIRR U22
-  ≈0.18240). Add a CI test diffing the committed `named-outputs.baseCaseValue`s
-  (or hard-coded values; engine artifacts are gitignored). Pairs with #25/#26.
-- **Refiner mis-maps returns to a "UW Comparison" tab** (2.305x vs canonical
-  2.349x) — `SUMMARY_SHEET_PATTERN` over-ranks it. Fix so #25's value cells pin
-  to canonical/Version-Tracker tabs without manual per-model pinning. Add a
-  manifest invariant. File: `cli/commands/manifest-refine.mjs`.
+  canonical gross/net MOIC & IRR (Version Tracker row 22) to full float
+  precision. Add a CI test diffing those `named-outputs.baseCaseValue`s. The
+  canonical figures live in the gitignored `named-outputs.json` + project memory
+  — **do NOT commit the figures to this public repo.** Pairs with #25/#26.
+- **Refiner mis-maps returns to a "UW Comparison" tab** instead of the canonical
+  Version Tracker returns — `SUMMARY_SHEET_PATTERN` over-ranks it. Fix so #25's
+  value cells pin to canonical/Version-Tracker tabs without manual per-model
+  pinning. Add a manifest invariant. File: `cli/commands/manifest-refine.mjs`.
 - **Deeper transpiler coverage** — the 11,813 `_fn()` offenders behind #26's
   audit; inventory by frequency, implement top ones. `pipelines/rust/src/`.
 - **Cluster-once eval** (our accuracy harness, not Mippy's path): the 17-sheet

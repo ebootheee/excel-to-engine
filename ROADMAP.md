@@ -89,11 +89,11 @@ Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
 - Semantic manifest + ADR-017 contract maps emitted; circular refs now run
   per-cluster fixed-point loops.
 - **Golden master PASS.** Regenerated `_ground-truth.json` reproduces the
-  hand-port's canonical A-1 returns to full float precision (Version Tracker
-  row 22: grossMOIC L22 ≈2.34916, grossIRR M22 ≈0.19233, netMOIC T22 ≈2.23137,
-  netIRR U22 ≈0.18240). Pinning A-1's manifest to those cells makes
+  hand-port's canonical A-1 gross/net MOIC & IRR (Version Tracker row 22) to full
+  float precision. Pinning A-1's manifest to those cells makes
   `named-outputs.baseCaseValue` a ready CI golden-master assert. **Do this:** add
-  a golden-master test that diffs the committed contract JSON's baseCaseValues.
+  a golden-master test diffing those baseCaseValues. (Canonical figures stay in
+  the gitignored artifacts + project memory — not committed to this public repo.)
 
 **Open follow-ups:**
 - **Generation robustness on big models ([#23]) — blocks a clean full build.**
@@ -112,14 +112,14 @@ Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
   Inventory the missing Excel functions and prioritize by frequency. (See
   Transpiler Coverage below.)
 - **Refiner mis-maps returns to the "UW Comparison" tab.** Auto-manifest picked an
-  underwriting-comparison cell (2.305x) over the canonical Version Tracker returns
-  (2.349x) — `SUMMARY_SHEET_PATTERN` over-ranks "UW Comparison". The refiner
-  should recognize canonical returns / Version-Tracker tabs (or de-prioritize
+  underwriting-comparison cell over the canonical Version Tracker returns —
+  `SUMMARY_SHEET_PATTERN` over-ranks "UW Comparison". The refiner should recognize
+  canonical returns / Version-Tracker tabs (or de-prioritize
   underwriting-comparison tabs) so returns don't need manual per-model pinning.
 - **`named-inputs.json` empty** when a workbook exposes no formula-referenced
   defined-names (the Outpost case) — ADR-019 ranged inputs can't be auto-derived;
   needs a heuristic fallback or a documented manual-input path.
-- **MIP isn't a generated output (request #7).** The $51.8M is a hand-port
+- **MIP isn't a generated output (request #7).** The MIP figure is a hand-port
   calibration, not a single GT cell — MIP is modeled across per-block "MIP
   Proceeds" cells. Surface via a `requiredFor`/aggregate mapping, not a
   single-cell expectation. (See the Round 2 MIP-gating note above.)
