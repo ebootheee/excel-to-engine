@@ -1,5 +1,9 @@
 # excel-to-engine — Plan
 
+> **Next session: start at [`HANDOFF.md`](HANDOFF.md)** — prioritized backlog
+> (P0 cluster-once eval → generation robustness → `_fn()` coverage → refiner
+> fix → golden-master CI → …), current state, run commands, and gotchas.
+
 ## Status: Outpost accuracy benchmark + eval fixes — in progress 2026-05-28
 
 Standing up the multi-wave "next wave" effort on `feat/next-wave`, keystone

@@ -1,5 +1,14 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — HANDOFF.md (fresh-agent entry point)
+
+Added `HANDOFF.md` — the prioritized next-session plan (P0 cluster-once eval →
+generation robustness #23 → `_fn()` transpiler coverage → refiner UW-Comparison
+fix → golden-master CI → output-profile/large-sheet/perf → Polish), with current
+state, run commands, and the gotchas (gitignored real models, the GT-copy
+`_computed-values.json`, the per-sheet-eval Windows fix, the bench
+`discoverModels` gate vs the `-v2` regen). PLAN points to it.
+
 ## 2026-05-28 — Roadmap: Outpost regeneration findings (Mippy consumer)
 
 The downstream Mippy agent regenerated both Outpost engines from `main` and
