@@ -60,8 +60,12 @@ Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract
   artifacts. New `npm run test:runnable` + CI. See CHANGELOG/PLAN.
 - **P2 · [#25] — pin the value-bearing cells as named-outputs. ✅ DONE (2026-05-29).** Per-class MIP Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares — not just MOIC/IRR. Schedules and timeline timelines (such as debt, equity base, cash flow) are now surfaced and participate fully in closure analysis via range expansion. Drivable driver-inputs (`exitMultiple`, `exitYearSelector`, and `hurdleRate`) are also mapped under `named-inputs.json`.
 - **P2 · [#26] — `_fn` fallback audit (`_fn-fallbacks.json`). ✅ DONE (2026-05-29).** Scans the generated sheet modules → `_fn-fallbacks.json`, and checks each named output/schedule's dependency closure against it. **Reports** by default (annotates affected outputs with `resolvesThroughFallback`, records `stats.fallbackViolations`, `ete init` warns); **hard-fails only under `--assert-no-fallbacks`** so the gate doesn't block the real models (~11,813 fallbacks today). The "assert no value cell uses a stub" target is the golden-master CI check below, run with `--assert-no-fallbacks`.
-- **P3 (nice-to-have) · [#22] — output-cone scoping.** Cheaper oracle; not
-  required (we don't ship the blob).
+- **P3 (nice-to-have) · [#22] — output-cone scoping / lazy sheet loading.**
+  Cheaper oracle; not required (we don't ship the blob). Now also the home for
+  the two scaling walls that remain after the partition-hang fix below: the
+  partition step `clone()`s every cell (peak-memory doubling), and `engine.js`
+  eagerly imports ~800 MB of sheet modules (Node load-time wall — even a complete
+  build is slow to *run*). Scoping/lazy-loading addresses both.
 
 Supporting (makes the oracle trustworthy, not on the critical path):
 - **Golden-master CI assert ✅ DONE (2026-05-29).** `eval/golden-master.mjs` +
@@ -111,14 +115,18 @@ Issues filed: [#22] (output scoping) and [#23] (parser/emitter perf).
   CI runs the synthetic fixture).
 
 **Open follow-ups:**
-- **Generation robustness on big models ([#23]) — blocks a clean full build.**
-  Plain `ete init` hit its 10-min `spawnSync` cap, and the Rust parser was
-  OOM-killed at the cell-level dependency-graph step → `engine.js` (the `run()`
-  orchestrator) and `dependency-graph.json` closures **didn't land** (written
-  after the OOM step); regen needed direct-parse then `--reuse-parse`. Needs:
-  stream/incrementalize the dep-graph build (or raise its memory headroom),
-  within-sheet parallelism, streaming writes, and a higher/configurable init
-  timeout.
+- **Generation robustness on big models ([#23]).** The original OOM (parser killed
+  at the cell-level dependency-graph step, `engine.js` + closures written after it
+  so they never landed) was fixed by P1 — `engine.js` now writes first and the
+  dep-graph is streamed. ✅ **A second, distinct hang fixed (2026-05-29):** a clean
+  build then stalled ~12h *earlier*, inside `partition_sheets`, which called the
+  range-expanding `extract_refs` (post-Round-2 it explodes every range to ≤1000
+  cells per formula, then discards the same-sheet ones) on the 1.62M-formula PP&E
+  sheet → swap thrash. Now uses a sheet-names-only scanner (`collect_sheet_deps`);
+  cycle detection uses `extract_refs_shallow`. **Residual scaling walls (→ [#22]):**
+  partition still `clone()`s every cell (peak-memory doubling), and the generated
+  `engine.js` eagerly imports ~800 MB of sheet modules (Node load-time wall). Also
+  still wanted: within-sheet parallelism for the heaviest sheets.
 - **`--output-profile` / guided `ete create` ([#22]).** Skip the ~752 MB
   per-sheet engine emit when a consumer only needs ground truth + contract maps.
 - **Transpiler coverage — 11,813 `_fn()` fallbacks (unchanged old→new).** That

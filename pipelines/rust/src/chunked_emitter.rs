@@ -3,7 +3,7 @@
 ///
 /// This implements **Option C: Chunked Compilation** from PLAN-rust-pipeline.md.
 
-use crate::dependency::extract_refs;
+use crate::dependency::{extract_refs, extract_refs_shallow};
 use crate::formula_ast::parse_formula;
 use crate::parser::{CellValue, WorkbookData};
 use crate::sheet_partition::{
@@ -843,8 +843,13 @@ fn write_dependency_graph(partitions: &[SheetPartition], path: &Path) -> Result<
     )
     .map_err(werr)?;
 
+    // This is the heaviest sequential step on big models — it expands every
+    // range for every formula cell. It's bounded-memory (streamed) and makes
+    // forward progress, but with no output it's indistinguishable from a hang,
+    // so emit per-sheet progress.
+    let total_sheets = partitions.len();
     let mut count: usize = 0;
-    for partition in partitions {
+    for (si, partition) in partitions.iter().enumerate() {
         for cell in &partition.formula_cells {
             if let Some(formula) = &cell.formula {
                 let refs = extract_refs(formula, &partition.name);
@@ -867,7 +872,15 @@ fn write_dependency_graph(partitions: &[SheetPartition], path: &Path) -> Result<
                 count += 1;
             }
         }
+        eprint!(
+            "\r[chunked]   dep-graph: {}/{} sheets, {} edges...",
+            si + 1,
+            total_sheets,
+            count
+        );
+        std::io::stderr().flush().ok();
     }
+    eprintln!(); // newline after progress
 
     // Close the "edges" object, then append edgeCount last (we only know it
     // after streaming). Consumers read `.edges`; edgeCount is informational.
@@ -888,7 +901,12 @@ fn detect_intra_sheet_cycles(partition: &SheetPartition, sheet_name: &str) -> Ve
             let qualified = format!("{}!{}", sheet_name, cell.address);
             all_addrs.insert(qualified.clone());
 
-            let refs = extract_refs(formula, sheet_name);
+            // Shallow (non-expanding) on purpose: cycles between cells are what
+            // we care about, and exploding every same-sheet range to ≤1000 cells
+            // here is both ruinously expensive on large sheets and a source of
+            // spurious self-cycles (B10=SUM(B1:B10)). This matches the behaviour
+            // the known-good engines were built with.
+            let refs = extract_refs_shallow(formula, sheet_name);
             let intra_refs: Vec<String> = refs
                 .into_iter()
                 .filter(|r| {

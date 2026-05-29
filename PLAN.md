@@ -1,9 +1,33 @@
 # excel-to-engine — Plan
 
-> **Next session:** P3 (#22) output-cone scoping (still nice-to-have, not on the
-> critical path), deeper transpiler coverage (the 11,813 `_fn` offenders behind
-> #26), and cluster-once eval. The Mippy calibration-oracle contract + its
-> trustworthiness gates are now in place.
+> **Next session:** the real-model chunked build now gets *past* `partition_sheets`
+> (the 12h hang is fixed). The remaining scaling walls are about actually
+> *running* the oracle at this size — the partition step still clones every cell
+> (peak-memory doubling) and `engine.js` eagerly imports ~800 MB of sheet modules
+> (Node load-time wall). Both fold into **P3 (#22) output-cone scoping / lazy
+> sheet loading**. Also still open: deeper transpiler coverage (the 11,813 `_fn`
+> offenders behind #26) and cluster-once eval.
+
+## Status: Chunked-build partition hang fixed — landed 2026-05-29
+
+A clean `ete init` on the full models hung ~12h in the chunked emitter, right
+after `[chunked] Partitioning N sheets...`. The stall was **inside
+`partition_sheets`** (sheet_partition.rs), *before* the dependency-graph step
+that P1 (#23) addressed — so P1's streaming fix exposed it as the next wall.
+
+- **Cause:** `partition_sheets` only needs sheet-level edges, but called the
+  range-expanding `extract_refs`. After Round 2 (`59810f6`) taught `is_cell_ref`
+  to accept ranges, that exploded every range to ≤1000 cell strings per formula
+  (pushed + de-duped), then threw away all the same-sheet ones. ~10⁹ throwaway
+  allocations on the 1.62M-formula PP&E sheet → swap thrash.
+- **Fix:** new `collect_sheet_deps()` records just referenced sheet *names* (no
+  expansion, no per-cell allocation); `detect_intra_sheet_cycles` switched to a
+  new `extract_refs_shallow()` (the same blowup would have hit the sheet-module
+  phase next). `write_dependency_graph` keeps the full expander, so the
+  dependency-graph contract is unchanged. ~2000× faster on range-heavy formulas
+  (synthetic parity test).
+- **Validated:** `cargo test` 17/17, `smoke` 78/78, `test:depgraph` 11/11,
+  `test:runnable` 20/20, `test:engine` 21/21, full `npm test`.
 
 ## Status: Golden-master gate + P2 follow-ups — landed 2026-05-29
 

@@ -37,7 +37,27 @@ fixture/test, and the Mippy regeneration findings in ROADMAP.
 - **Refiner UW-Comparison fix** — `refineSheetTier` ranks canonical actuals (Version Tracker / Track Record) above an underwriting "UW Comparison" tab, so #25's returns pin to canonical tabs without per-model pinning. Invariant pattern documented in `skill/SKILL.md`.
 - **Two follow-ups closed** — driver named-inputs now emit under `--reuse-parse` w/o the workbook; schedule `baseCaseValue` uses the terminal level for balances (sum for flows, via a new `aggregation` field), `perYear` authoritative.
 
-Next session (all nice-to-have, none on the critical path): **P3 (#22)** output-cone scoping, **deeper transpiler coverage** (the 11,813 `_fn` offenders behind #26), and **cluster-once eval** (our accuracy harness). The Mippy contract + its trust gates are complete.
+**Latest session (chunked-build partition hang, 2026-05-29):** a clean `ete init`
+on the full models hung ~12h in the chunked emitter, right after
+`[chunked] Partitioning N sheets...` — the stall is **inside `partition_sheets`**
+(sheet_partition.rs), *before* the dep-graph step P1 fixed. Cause: it called the
+range-expanding `extract_refs` (which, post-Round-2, explodes every range to ≤1000
+cell strings per formula, then partition discards the same-sheet ones) on the
+1.62M-formula PP&E sheet → ~10⁹ throwaway allocations → swap thrash. Fix: new
+`collect_sheet_deps()` (sheet-names only, no expansion); `detect_intra_sheet_cycles`
+→ `extract_refs_shallow()` (it was the next wall); `write_dependency_graph` keeps
+the full expander so the contract is unchanged. ~2000× faster on range-heavy
+formulas. Validated: `cargo test` 17/17, `smoke` 78/78, `test:depgraph`/`runnable`/
+`engine` 11/20/21. **Rebuild the release parser** (`cd pipelines/rust && cargo
+build --release`) before re-running the regen — the fix is in the binary.
+
+Next session (all nice-to-have, none on the critical path): **P3 (#22)**
+output-cone scoping / lazy sheet loading — now also the home for the two residual
+scaling walls (partition clones every cell → peak-memory doubling; `engine.js`
+eagerly imports ~800 MB of sheet modules → Node load-time wall, so even a complete
+build is slow to *run* as the oracle). Plus **deeper transpiler coverage** (the
+11,813 `_fn` offenders behind #26) and **cluster-once eval**. The Mippy contract +
+its trust gates are complete.
 
 **Baseline (real models, `npm run bench`):** Model A **84.3%**,
 Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
