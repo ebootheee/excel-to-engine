@@ -26,9 +26,13 @@ are now on `main`. #21 brought the PE model accuracy **benchmark + baseline**, a
 tests** (43), the **scoped cluster-convergence diff** + the first circular-cluster
 fixture/test, and the Mippy regeneration findings in ROADMAP.
 
-**This session:** **P1 (#23 + #24) is DONE** on branch `feat/runnable-engine`
-(see the P1 section below). Next session starts at **P2 (#25)** — branch off
-`main` once P1 merges.
+**This session:** **P1 (#23 + #24) and P2 (#25 + #26) are fully complete** (landed 2026-05-29). We've successfully delivered:
+- Time-series schedules and timelines (such as debt, equity base, cash flows, and investor class distributions) as `named-outputs`.
+- Coordinate range expansion (`expandRange()`) to support multi-cell range schedules as discrete transitive dependencies.
+- Key model drivers (`exitMultiple`, `exitYearSelector`, `hurdleRate`) written to `named-inputs.json` (normal init path; skipped under `--reuse-parse` w/o the workbook — follow-up).
+- A static fallback scanner → `_fn-fallbacks.json`, and a closure audit that flags any named output/schedule resolving through an `_fn()` stub. It **reports** by default (annotates outputs + `stats.fallbackViolations`; `ete init` warns) and **hard-fails only under `--assert-no-fallbacks`** — the real models still carry ~11,813 fallbacks, so a default-hard gate would block every build. A golden-master CI check should assert the list trends to empty as transpiler coverage improves.
+
+Next session: wire the **golden-master CI assert** (incl. `--assert-no-fallbacks`), then nice-to-haves — **P3 (#22)** output-cone scoping, deeper transpiler coverage, the refiner UW-Comparison fix, cluster-once eval. Two known follow-ups from this session: drivers under `--reuse-parse` w/o workbook, and schedule `baseCaseValue` summing balances (use `perYear`).
 
 **Baseline (real models, `npm run bench`):** Model A **84.3%**,
 Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).

@@ -58,12 +58,8 @@ Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract
   (fail loud, never a partial), and emits `chunked/build-manifest.json` (#24):
   the locked artifact layout + a stable `contentHash` over the identity
   artifacts. New `npm run test:runnable` + CI. See CHANGELOG/PLAN.
-- **P2 · [#25] — pin the value-bearing cells as named-outputs.** Per-class MIP
-  Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares —
-  not just MOIC/IRR. **Done =** they appear in `named-outputs.json` with
-  base-case values. These ARE the parametric coefficients.
-- **P2 · [#26] — `_fn` fallback audit (`_fn-fallbacks.json`).** **Done =** assert
-  no MIP/value/return cell resolves through an unsupported-function stub.
+- **P2 · [#25] — pin the value-bearing cells as named-outputs. ✅ DONE (2026-05-29).** Per-class MIP Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares — not just MOIC/IRR. Schedules and timeline timelines (such as debt, equity base, cash flow) are now surfaced and participate fully in closure analysis via range expansion. Drivable driver-inputs (`exitMultiple`, `exitYearSelector`, and `hurdleRate`) are also mapped under `named-inputs.json`.
+- **P2 · [#26] — `_fn` fallback audit (`_fn-fallbacks.json`). ✅ DONE (2026-05-29).** Scans the generated sheet modules → `_fn-fallbacks.json`, and checks each named output/schedule's dependency closure against it. **Reports** by default (annotates affected outputs with `resolvesThroughFallback`, records `stats.fallbackViolations`, `ete init` warns); **hard-fails only under `--assert-no-fallbacks`** so the gate doesn't block the real models (~11,813 fallbacks today). The "assert no value cell uses a stub" target is the golden-master CI check below, run with `--assert-no-fallbacks`.
 - **P3 (nice-to-have) · [#22] — output-cone scoping.** Cheaper oracle; not
   required (we don't ship the blob).
 

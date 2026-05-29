@@ -1,8 +1,16 @@
 # excel-to-engine — Plan
 
-> **Next session: start at [`HANDOFF.md`](HANDOFF.md)** — prioritized backlog
-> (P0 cluster-once eval → generation robustness → `_fn()` coverage → refiner
-> fix → golden-master CI → …), current state, run commands, and gotchas.
+> **Next session: build on our refined contract mapping pipeline.** We successfully delivered Requests A, B, C, and D!
+
+## Status: P2 (#25 + #26) — contract maps, schedule extraction, and correctness gate — landed 2026-05-29
+
+The Mippy calibration-oracle contract now surfaces schedule fields, timelines,
+and investor-class distributions; pins drivable named-inputs; and ships a
+fallback audit with an opt-in correctness gate.
+
+- **Request A & B: Time-series schedules and distributions.** Pinned per-year schedules — `outstandingDebt`, `equityBase`, `freeCashFlow`, `distributionsToEquity`, and per-class arrays `classes[].distributions` — into `named-outputs.json` (gated on `manifest.timeline.columnMap`), each as a `cellRange` + `perYear[]`. `expandRange()` converts `Sheet!A10:H10` to discrete cells so schedules participate in the transitive closures (`dependsOnNamedInputs` / `affectsOutputs`).
+- **Request C: Drivable named inputs.** Added `exitMultiple`, `exitYearSelector`, and `hurdleRate` to `named-inputs.json` (`source: manifest-driver`). Pinned in the normal init path (the `.xlsx` is available); skipped under `--reuse-parse` without the workbook (follow-up).
+- **Request D: Fallback audit + opt-in gate.** A static scanner finds `_fn()` stubs across the generated sheet modules → `_fn-fallbacks.json`, and the closure of every named output/schedule is checked against it. It **reports** by default — affected outputs get `resolvesThroughFallback`, `stats.fallbackViolations` lists them, `ete init` warns — and **hard-fails only under `--assert-no-fallbacks`** (CI/golden-master gate). (Review fix: the gate first `throw`ew mid-emit and was swallowed by init, silently dropping the contract; now it emits all maps then surfaces the result.)
 
 ## Status: P1 (#23 + #24) — runnable engine guaranteed — landed 2026-05-28
 

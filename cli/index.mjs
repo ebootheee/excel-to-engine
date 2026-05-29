@@ -209,6 +209,8 @@ Commands:
                                     --reuse-parse (skip Rust parse if chunked/ exists),
                                     --timeout <seconds> (parser wall-clock cap;
                                     default 1800, 0 disables),
+                                    --assert-no-fallbacks (hard-fail if any named
+                                    output resolves through an _fn() stub),
                                     --emit-debug (retain dependency-graph.json,
                                     _graph.json, model-map.json for offline analysis)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)

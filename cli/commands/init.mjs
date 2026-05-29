@@ -346,6 +346,30 @@ export function runInit(excelPath, args) {
     for (const sk of maps.skipped) {
       lines.push(`  Skipped ${sk.file}: ${sk.reason}`);
     }
+
+    // #26 correctness audit: named outputs whose dependency closure passes
+    // through an unsupported-function stub (_fn). Surfaced, never swallowed:
+    // a warning by default (the real models still carry many fallbacks), or a
+    // hard failure under --assert-no-fallbacks (CI / golden-master gate).
+    const violations = maps.stats?.fallbackViolations || [];
+    if (violations.length > 0) {
+      const names = violations.map(v => v.output);
+      if (args.assertNoFallbacks) {
+        return {
+          error: `Correctness gate: ${violations.length} named output(s) resolve through an unsupported-function stub.`,
+          _formatted: [
+            ...lines,
+            `  ✗ --assert-no-fallbacks: ${violations.length} output(s) depend on _fn() stubs:`,
+            ...violations.slice(0, 10).map(v => `      ${v.output} ← ${v.cell} (${v.function})`),
+            violations.length > 10 ? `      …and ${violations.length - 10} more (see chunked/_fn-fallbacks.json)` : '',
+            '  Add transpiler coverage for those functions, or omit --assert-no-fallbacks to proceed.',
+          ].filter(Boolean).join('\n'),
+        };
+      }
+      lines.push(`  ⚠ ${violations.length} output(s) resolve through an _fn() stub` +
+        ` (annotated in named-outputs.json; see _fn-fallbacks.json; --assert-no-fallbacks to gate):` +
+        ` ${names.slice(0, 5).join(', ')}${names.length > 5 ? ', …' : ''}`);
+    }
   } catch (e) {
     lines.push(`  (Map emission skipped: ${e.message})`);
   }

@@ -1,5 +1,11 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — P2 (#25 + #26): time-series schedules, drivable inputs, fallback audit
+
+- **Schedules and distributions (Request A & B)**: pin per-year time-series outputs as schedules inside `named-outputs.json` — `distributionsToEquity`, `outstandingDebt`, `equityBase`, `freeCashFlow`, and per-class distribution arrays (`classes[].distributions`), gated on `manifest.timeline.columnMap`. Each schedule entry carries a `cellRange` + `perYear: [{year,value}]`. `expandRange()` expands `Sheet!C15:K15` to its constituent cells so schedules participate in the dependency closures (`dependsOnNamedInputs` / `affectsOutputs`). (Note: a schedule's scalar `baseCaseValue` is a sum across years — meaningful for flows, less so for balances; `perYear` is authoritative.)
+- **Drivable named inputs (Request C)**: pin `exitMultiple`, `exitYearSelector`, and `hurdleRate` into `named-inputs.json` (`source: manifest-driver`) so downstream models can sweep exit/return parameters. Pinned in the normal `ete init` path (the `.xlsx` is present); under `--reuse-parse` without the workbook they are currently skipped (follow-up).
+- **Fallback audit + correctness gate (Request D / #26)**: emit `_fn-fallbacks.json` (cell → unsupported function) by scanning the generated sheet modules, and flag every named output/schedule whose dependency closure passes through a stub. The audit **reports, it does not silently gate**: affected outputs are annotated with `resolvesThroughFallback` and listed in `stats.fallbackViolations`; `ete init` prints a warning by default and **hard-fails under `--assert-no-fallbacks`** (CI / golden-master gate). Review-hardening fix: the gate originally `throw`ew mid-emit, which `ete init`'s try/catch swallowed — silently dropping the entire contract (named-outputs/inputs/cell-types) while still reporting success. It now emits all maps first, then surfaces the result so it can never be swallowed.
+
 ## 2026-05-28 — P1 (#23 + #24): reliably emit a runnable engine.js
 
 A clean `ete init` on the real PE models did not finish: the chunked emitter
