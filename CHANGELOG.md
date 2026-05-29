@@ -11,8 +11,8 @@ names. Two cleanups before merging the next-wave PR:
   MIP is a hand-port calibration) — only the numbers are gone. Canonical values
   live in the gitignored artifacts + local notes and feed the golden-master test
   from there.
-- **Genericized the real model name** out of all committed files: renamed
-  `benchmarks/outpost-bench.mjs` → `benchmarks/bench.mjs` (npm script `bench`),
+- **Genericized the real model name** out of all committed files: renamed the
+  benchmark script → `benchmarks/bench.mjs` (npm script `bench`),
   and the benchmark now **anonymizes model identity** in printed + committed
   output (Model A, Model B, …) — real dir names stay only in the gitignored
   detail JSON. Prose in HANDOFF/ROADMAP/PLAN/CHANGELOG now says "the real PE
