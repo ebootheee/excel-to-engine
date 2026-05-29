@@ -1,5 +1,48 @@
 # excel-to-engine — Changelog
 
+## 2026-05-28 — P1 (#23 + #24): reliably emit a runnable engine.js
+
+A clean `ete init` on the real PE models did not finish: the chunked emitter
+built the **cell-level dependency graph** (every formula cell → its expanded
+refs) as a full in-memory `BTreeMap`, then serialized the whole document into a
+second in-memory `String` — ~doubling peak memory on top of an already-large
+workbook and OOM-killing the parser. Because `engine.js` (the `run()`
+orchestrator) was emitted **after** that step, the runnable engine never landed,
+and `ete init`'s fixed 10-minute `spawnSync` cap compounded it.
+
+- **engine.js now lands on every build.** `emit_chunked` writes the orchestrator
+  **before** the dependency-graph step (it depends only on the sheet-level DAG +
+  partitions, never the cell-level edges), so a runnable `run()` survives even a
+  hard kill of the later step. A write failure is fatal (`Err` → exit 1).
+- **Dependency graph is streamed to disk.** `write_dependency_graph` emits
+  `dependency-graph.json` one entry at a time through a `BufWriter`, never
+  materializing the full map or full JSON string — the OOM fix. Schema unchanged
+  (`cell-dependency-edges-v1`; consumers read only `.edges`); `edgeCount` is
+  written last. Output is deterministic (partition + sorted-cell order).
+- **Configurable parser timeout.** `ete init --timeout <seconds>` (default bumped
+  600 → 1800; `0` disables the cap). The fixed 10-minute cap was killing
+  legitimate large-model builds mid-emit.
+- **Fail loud, never a partial artifact.** After a fresh parse, `init` verifies
+  `chunked/engine.js` exists (fast fail before the minutes-long manifest
+  pipeline) and **won't swallow a failed emit**. `--reuse-parse` (use `chunked/`
+  as-is for manifest iteration) is exempt — it records the incomplete state
+  instead of blocking.
+- **#24 — locked artifact layout + content hash.** New `lib/build-manifest.mjs`
+  writes `chunked/build-manifest.json`: the canonical artifact set with
+  per-file/dir sha256, and a single top-level `contentHash` over the
+  *identity* artifacts (engine.js, sheets/, _ground-truth.json, manifest.json).
+  The derived contract maps carry a `generatedAt` and are hashed for integrity
+  but excluded from identity, so `contentHash` is **stable across rebuilds of the
+  same workbook** and **changes on drift** — a downstream consumer pins a build
+  and detects mismatch without per-version reconciliation. `--quiet` now emits
+  `contentHash`. This is also the comprehensive completeness gate: a fresh build
+  missing a required artifact hard-fails.
+- **Tests.** New `npm run test:runnable` (parser → engine.js exports `run()`,
+  streamed dep-graph edges intact, build-manifest layout/gate, contentHash
+  stable-across-rebuilds + drift-sensitive), wired into CI on ubuntu+windows.
+  Full suite green: smoke 78/78, test:engine 21, test:depgraph 11, test:slimming
+  13, Rust units 11, `npm test` (387).
+
 ## 2026-05-28 — Privacy scrub: genericize the real model name + figures
 
 This repo is public; CLAUDE.md forbids committing real financials or participant

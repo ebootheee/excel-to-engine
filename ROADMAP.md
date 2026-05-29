@@ -49,12 +49,15 @@ calibration oracle** — runnable, with the MIP coefficients exposed as
 named-outputs, and no stubbed value cells. Everything Mippy-specific stays in
 Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract):
 
-- **P1 · [#23] + [#24] — reliably emit a runnable `engine.js`.** Fix the
-  dep-graph OOM; **fail the build loud, never emit a partial artifact.**
-  **Done =** `chunked/engine.js` with `export function run()` exists on every
-  build; build errors hard if it can't. #24 also locks the artifact layout +
-  emits a content hash (consume downstream without per-version reconciliation).
-  Gates everything: without a runnable engine we can't sample MIP to calibrate.
+- **P1 · [#23] + [#24] — reliably emit a runnable `engine.js`. ✅ DONE
+  (2026-05-28).** The chunked emitter writes `engine.js` **before** the
+  cell-level dependency graph (independent of it), and that graph is now
+  **streamed** to disk rather than built as a full in-memory map + serialized
+  string — the OOM that was killing the parser. `ete init` gained a configurable
+  `--timeout` (default 1800s), verifies `engine.js` landed after a fresh parse
+  (fail loud, never a partial), and emits `chunked/build-manifest.json` (#24):
+  the locked artifact layout + a stable `contentHash` over the identity
+  artifacts. New `npm run test:runnable` + CI. See CHANGELOG/PLAN.
 - **P2 · [#25] — pin the value-bearing cells as named-outputs.** Per-class MIP
   Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares —
   not just MOIC/IRR. **Done =** they appear in `named-outputs.json` with

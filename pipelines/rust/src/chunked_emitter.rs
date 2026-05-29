@@ -11,7 +11,7 @@ use crate::sheet_partition::{
 };
 use crate::transpiler::{transpile, TranspileConfig};
 use rayon::prelude::*;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -162,37 +162,44 @@ pub fn emit_chunked(workbook: &WorkbookData, output_dir: &Path) -> Result<String
         t_lbl.elapsed().as_millis()
     );
 
-    // 4.5 Emit dependency-graph.json — cell-level forward edges (cell → cells
-    //     it reads). Lets consumers compute a named output's dependency closure
-    //     without re-running the engine or parsing the 636MB model-map.
-    eprint!("[chunked] Building dependency graph...");
-    std::io::stderr().flush().ok();
-    let t_dep = Instant::now();
-    let dep_edges = build_dependency_edges(&partitions);
-    let dep_doc = serde_json::json!({
-        "format": "cell-dependency-edges-v1",
-        "note": "Forward edges: cell -> [cells it reads]. Ranges expanded to individual cells. Only formula cells appear as keys.",
-        "edgeCount": dep_edges.len(),
-        "edges": dep_edges,
-    });
-    let dep_json = serde_json::to_string(&dep_doc)
-        .map_err(|e| format!("Failed to serialize dependency graph: {}", e))?;
-    fs::write(output_dir.join("dependency-graph.json"), &dep_json)
-        .map_err(|e| format!("Failed to write dependency-graph.json: {}", e))?;
-    eprintln!(
-        " done — {} formula cells ({}) in {}ms",
-        dep_edges.len(),
-        human_size(dep_json.len()),
-        t_dep.elapsed().as_millis()
-    );
-
-    // 5. Emit engine.js orchestrator
+    // 5. Emit engine.js orchestrator — the load-bearing runnable artifact.
+    //    Emitted BEFORE the dependency graph (step 6) on purpose: engine.js
+    //    depends only on the sheet-level DAG + partitions (both already built),
+    //    never on the cell-level edge map. The dependency-graph step is the
+    //    single most memory-intensive part of the build; emitting the engine
+    //    first guarantees a runnable `run()` lands even if that later step is
+    //    killed. A write failure here is fatal (Err → exit 1) — we never leave a
+    //    chunked/ dir without an engine.
     eprint!("[chunked] Writing engine.js orchestrator...");
     std::io::stderr().flush().ok();
     let engine_js = generate_orchestrator(&sheet_graph, &partitions);
     fs::write(output_dir.join("engine.js"), &engine_js)
         .map_err(|e| format!("Failed to write engine.js: {}", e))?;
     eprintln!(" done ({})", human_size(engine_js.len()));
+
+    // 6. Emit dependency-graph.json — cell-level forward edges (cell → cells it
+    //    reads). Lets consumers compute a named output's dependency closure
+    //    without re-running the engine or parsing the full model-map.
+    //    STREAMED to disk one entry at a time: the previous version built the
+    //    entire edge map in a BTreeMap and then serialized the whole document
+    //    into a second in-memory String, ~doubling peak memory on top of an
+    //    already-large workbook and OOM-killing the parser on multi-million-cell
+    //    models (the cell-level map with ranges expanded is the largest single
+    //    structure in the build). Streaming caps the extra memory at one cell's
+    //    refs at a time. Schema unchanged (cell-dependency-edges-v1; consumers
+    //    read only `.edges`).
+    eprint!("[chunked] Building dependency graph (streamed)...");
+    std::io::stderr().flush().ok();
+    let t_dep = Instant::now();
+    let dep_path = output_dir.join("dependency-graph.json");
+    let dep_count = write_dependency_graph(&partitions, &dep_path)?;
+    let dep_size = fs::metadata(&dep_path).map(|m| m.len() as usize).unwrap_or(0);
+    eprintln!(
+        " done — {} formula cells ({}) in {}ms",
+        dep_count,
+        human_size(dep_size),
+        t_dep.elapsed().as_millis()
+    );
 
     eprintln!(
         "[chunked] ✅ Complete in {:.1}s",
@@ -815,28 +822,62 @@ function numToCol(n) {
 // Intra-sheet cycle detection
 // ---------------------------------------------------------------------------
 
-/// Detect cells within a single sheet that form circular references.
-/// Returns the set of qualified addresses involved in cycles.
-/// Build the full cell-level forward dependency edge map (cell → cells it
-/// reads) across all sheets. extract_refs expands ranges to individual cells,
-/// so the graph is complete for transitive reachability. Only formula cells
-/// appear as keys; literal/input cells have no outgoing edges. BTreeMap keeps
-/// the output deterministic across builds.
-fn build_dependency_edges(partitions: &[SheetPartition]) -> BTreeMap<String, Vec<String>> {
-    let mut edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+/// Stream the cell-level forward dependency edge map (cell → cells it reads) to
+/// `path` as `dependency-graph.json`, writing one entry at a time so the full
+/// map is never materialized in memory (the OOM fix — see the call site).
+/// `extract_refs` expands ranges to individual cells, so the graph is complete
+/// for transitive reachability. Only formula cells with ≥1 detected ref appear
+/// as keys; literal/input cells and ref-less formulas (e.g. `=TODAY()`) are
+/// omitted, matching the previous behaviour. Iteration follows partition order
+/// then cell order — stable for a given workbook, so the output is
+/// deterministic across builds of the same model. Returns the entry count.
+fn write_dependency_graph(partitions: &[SheetPartition], path: &Path) -> Result<usize, String> {
+    let file = fs::File::create(path)
+        .map_err(|e| format!("Failed to create {}: {}", path.display(), e))?;
+    let mut w = std::io::BufWriter::new(file);
+    let werr = |e: std::io::Error| format!("Failed to write dependency-graph.json: {}", e);
+
+    // Header up to (and including) the opening brace of the "edges" object.
+    w.write_all(
+        br#"{"format":"cell-dependency-edges-v1","note":"Forward edges: cell -> [cells it reads]. Ranges expanded to individual cells. Only formula cells appear as keys.","edges":{"#,
+    )
+    .map_err(werr)?;
+
+    let mut count: usize = 0;
     for partition in partitions {
         for cell in &partition.formula_cells {
             if let Some(formula) = &cell.formula {
                 let refs = extract_refs(formula, &partition.name);
-                if !refs.is_empty() {
-                    edges.insert(format!("{}!{}", partition.name, cell.address), refs);
+                if refs.is_empty() {
+                    continue;
                 }
+                let key = format!("{}!{}", partition.name, cell.address);
+                // serde_json handles all JSON string/array escaping; only a
+                // single entry is held in memory at a time.
+                let key_json = serde_json::to_string(&key)
+                    .map_err(|e| format!("Failed to encode dependency key: {}", e))?;
+                let refs_json = serde_json::to_string(&refs)
+                    .map_err(|e| format!("Failed to encode dependency refs: {}", e))?;
+                if count > 0 {
+                    w.write_all(b",").map_err(werr)?;
+                }
+                w.write_all(key_json.as_bytes()).map_err(werr)?;
+                w.write_all(b":").map_err(werr)?;
+                w.write_all(refs_json.as_bytes()).map_err(werr)?;
+                count += 1;
             }
         }
     }
-    edges
+
+    // Close the "edges" object, then append edgeCount last (we only know it
+    // after streaming). Consumers read `.edges`; edgeCount is informational.
+    write!(w, "}},\"edgeCount\":{}}}", count).map_err(werr)?;
+    w.flush().map_err(werr)?;
+    Ok(count)
 }
 
+/// Detect cells within a single sheet that form circular references.
+/// Returns the set of qualified addresses involved in cycles.
 fn detect_intra_sheet_cycles(partition: &SheetPartition, sheet_name: &str) -> Vec<String> {
     // Build intra-sheet dependency graph
     let mut edges: HashMap<String, Vec<String>> = HashMap::new();

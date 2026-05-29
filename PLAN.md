@@ -4,6 +4,24 @@
 > (P0 cluster-once eval → generation robustness → `_fn()` coverage → refiner
 > fix → golden-master CI → …), current state, run commands, and gotchas.
 
+## Status: P1 (#23 + #24) — runnable engine guaranteed — landed 2026-05-28
+
+A clean `ete init` on the real models now finishes and always yields a runnable
+engine, or fails loud. The chunked emitter writes `engine.js` **before** the
+cell-level dependency graph (which it depends on nothing for), and that graph is
+now **streamed** to disk instead of built as a full in-memory map + serialized
+string — the allocation that OOM-killed the parser on multi-million-cell models.
+`ete init` gained a configurable `--timeout` (default 1800s; the old fixed 10-min
+cap killed legitimate builds), verifies `engine.js` landed after a fresh parse,
+and emits `chunked/build-manifest.json` (#24): the locked canonical artifact set
++ a stable `contentHash` over the identity artifacts (engine.js, sheets/,
+_ground-truth.json, manifest.json) so a downstream consumer pins a build and
+detects drift. New `npm run test:runnable` + CI step.
+
+**Next (Mippy oracle, per HANDOFF):** P2 #25 (pin value-bearing MIP cells as
+named-outputs), P2 #26 (`_fn-fallbacks.json` correctness gate), then the
+supporting golden-master CI + refiner UW-Comparison fix + cluster-once eval.
+
 ## Status: PE-model accuracy benchmark + eval fixes — in progress 2026-05-28
 
 Standing up the multi-wave "next wave" effort on `feat/next-wave`, keystone
