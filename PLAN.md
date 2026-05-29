@@ -1,6 +1,31 @@
 # excel-to-engine — Plan
 
-> **Next session: build on our refined contract mapping pipeline.** We successfully delivered Requests A, B, C, and D!
+> **Next session:** P3 (#22) output-cone scoping (still nice-to-have, not on the
+> critical path), deeper transpiler coverage (the 11,813 `_fn` offenders behind
+> #26), and cluster-once eval. The Mippy calibration-oracle contract + its
+> trustworthiness gates are now in place.
+
+## Status: Golden-master gate + P2 follow-ups — landed 2026-05-29
+
+A trustworthiness pass closing out the P2 contract work.
+
+- **Golden-master CI assert.** `eval/golden-master.mjs` + `npm run test:golden`
+  + a dedicated CI step: asserts no return/value output resolves through an `_fn`
+  stub (`--assert-no-fallbacks`) and diffs `named-outputs.baseCaseValue`s against
+  canonical returns to full float precision. CI runs a synthetic committed
+  fixture; the proprietary figures stay gitignored and are diffed only when
+  `ETE_GOLDEN_DIR` points at the real model.
+- **Refiner Version-Tracker fix.** `refineSheetTier` ranks canonical actuals
+  (Version Tracker / Track Record) above an underwriting "UW Comparison" tab, so
+  returns pin to the canonical tab without per-model pinning. Invariant trip-wire
+  pattern documented in `skill/SKILL.md`.
+- **Schedule `baseCaseValue` correctness.** Balances (debt, equity base/NAV) use
+  the terminal level; flows keep the life-to-date sum; a new `aggregation` field
+  records which. `perYear[]` stays authoritative.
+- **Drivers under `--reuse-parse`.** The manifest-driver inputs (`exitMultiple` /
+  `exitYearSelector` / `hurdleRate`) now emit even without the workbook (they
+  derive from manifest + ground truth); only the defined-name inputs need the
+  `.xlsx`.
 
 ## Status: P2 (#25 + #26) — contract maps, schedule extraction, and correctness gate — landed 2026-05-29
 

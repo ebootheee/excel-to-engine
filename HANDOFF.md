@@ -5,7 +5,7 @@ Start-here doc for a fresh agent. Read this, then `ROADMAP.md` (full backlog),
 project memory files (the Mippy contract + the real-model shape/baseline notes,
 auto-loaded from your memory index).
 
-_Last updated: 2026-05-28._
+_Last updated: 2026-05-29._
 
 ## The job, in one line
 
@@ -32,7 +32,12 @@ fixture/test, and the Mippy regeneration findings in ROADMAP.
 - Key model drivers (`exitMultiple`, `exitYearSelector`, `hurdleRate`) written to `named-inputs.json` (normal init path; skipped under `--reuse-parse` w/o the workbook — follow-up).
 - A static fallback scanner → `_fn-fallbacks.json`, and a closure audit that flags any named output/schedule resolving through an `_fn()` stub. It **reports** by default (annotates outputs + `stats.fallbackViolations`; `ete init` warns) and **hard-fails only under `--assert-no-fallbacks`** — the real models still carry ~11,813 fallbacks, so a default-hard gate would block every build. A golden-master CI check should assert the list trends to empty as transpiler coverage improves.
 
-Next session: wire the **golden-master CI assert** (incl. `--assert-no-fallbacks`), then nice-to-haves — **P3 (#22)** output-cone scoping, deeper transpiler coverage, the refiner UW-Comparison fix, cluster-once eval. Two known follow-ups from this session: drivers under `--reuse-parse` w/o workbook, and schedule `baseCaseValue` summing balances (use `perYear`).
+**Latest session (golden-master + P2 follow-ups, 2026-05-29):** the trustworthiness pass is done.
+- **Golden-master CI assert** — `eval/golden-master.mjs` + `npm run test:golden` + a dedicated CI step. `--assert-no-fallbacks` fails if any return/value output resolves through an `_fn` stub; `--canonical <file>` diffs `named-outputs.baseCaseValue`s to full float precision. CI runs a synthetic committed fixture; run it against the real A-1 build with `ETE_GOLDEN_DIR=<chunkedDir>` + a gitignored `<chunkedDir>/canonical-returns.json` (figures stay out of this public repo).
+- **Refiner UW-Comparison fix** — `refineSheetTier` ranks canonical actuals (Version Tracker / Track Record) above an underwriting "UW Comparison" tab, so #25's returns pin to canonical tabs without per-model pinning. Invariant pattern documented in `skill/SKILL.md`.
+- **Two follow-ups closed** — driver named-inputs now emit under `--reuse-parse` w/o the workbook; schedule `baseCaseValue` uses the terminal level for balances (sum for flows, via a new `aggregation` field), `perYear` authoritative.
+
+Next session (all nice-to-have, none on the critical path): **P3 (#22)** output-cone scoping, **deeper transpiler coverage** (the 11,813 `_fn` offenders behind #26), and **cluster-once eval** (our accuracy harness). The Mippy contract + its trust gates are complete.
 
 **Baseline (real models, `npm run bench`):** Model A **84.3%**,
 Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
@@ -40,8 +45,10 @@ Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
 ## How to run
 
 ```bash
-npm test                 # full JS suite (387 assertions)
+npm test                 # full JS suite
 npm run smoke            # chunked-engine accuracy 78/78
+npm run test:golden      # golden-master gate (synthetic fixture; CI step)
+ETE_GOLDEN_DIR=<abs chunkedDir> npm run test:golden   # + real-model canonical diff (opt-in)
 npm run bench --  --root "<abs path>/engines"   # accuracy + efficacy on the real models
 node eval/per-sheet-eval.mjs <chunkedDir> --concurrency 3 [--skip-clusters]
 cd pipelines/rust && cargo build --release   # the parser
@@ -97,15 +104,18 @@ emit). Makes the oracle cheaper to run; **not required** — we don't ship the b
 
 These aren't on Mippy's critical path but back the "reliable" in "reliable
 calibration oracle":
-- **Golden-master CI assert** — A-1's regenerated GT matches the hand-port's
-  canonical gross/net MOIC & IRR (Version Tracker row 22) to full float
-  precision. Add a CI test diffing those `named-outputs.baseCaseValue`s. The
-  canonical figures live in the gitignored `named-outputs.json` + project memory
-  — **do NOT commit the figures to this public repo.** Pairs with #25/#26.
-- **Refiner mis-maps returns to a "UW Comparison" tab** instead of the canonical
-  Version Tracker returns — `SUMMARY_SHEET_PATTERN` over-ranks it. Fix so #25's
-  value cells pin to canonical/Version-Tracker tabs without manual per-model
-  pinning. Add a manifest invariant. File: `cli/commands/manifest-refine.mjs`.
+- **Golden-master CI assert ✅ DONE (2026-05-29).** `eval/golden-master.mjs` +
+  `npm run test:golden` + a CI step diff `named-outputs.baseCaseValue`s against
+  canonical returns to full float precision and assert no return resolves through
+  an `_fn` stub. CI runs a synthetic committed fixture
+  (`tests/cli/fixtures/golden-master/`); the canonical figures stay **gitignored**
+  (never committed to this public repo) and are diffed only when
+  `ETE_GOLDEN_DIR=<chunkedDir>` + `<chunkedDir>/canonical-returns.json` are present.
+- **Refiner mis-maps returns to a "UW Comparison" tab ✅ DONE (2026-05-29).**
+  `refineSheetTier` (`cli/commands/manifest-refine.mjs`) ranks canonical actuals
+  (Version Tracker / Track Record) above the underwriting tab, so #25's value
+  cells pin to canonical tabs without manual per-model pinning. The manifest
+  invariant trip-wire pattern is documented in `skill/SKILL.md`.
 - **Deeper transpiler coverage** — the 11,813 `_fn()` offenders behind #26's
   audit; inventory by frequency, implement top ones. `pipelines/rust/src/`.
 - **Cluster-once eval** (our accuracy harness, not Mippy's path): the 17-sheet

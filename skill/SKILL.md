@@ -272,6 +272,20 @@ If the manifest has an `invariants` block, doctor enforces it. Schema:
 
 String-equality only — no regex. If `path` resolves to an aggregate object, its JSON-stringified form is compared.
 
+**Returns belong on the canonical actuals tab, not the underwriting projection.** The refiner now ranks a "Version Tracker" / "Track Record" tab above an underwriting "UW Comparison" tab automatically (`refineSheetTier`), so returns pin to the actuals tab without per-model pinning. For a model where this distinction matters, also encode it as a durable invariant so a future re-map can't slip past doctor:
+
+```json
+{
+  "invariants": [
+    {
+      "path": "equity.classes[0].grossIRR",
+      "forbid": ["UW Comparison!C12"],
+      "note": "Gross IRR must bind to the canonical Version Tracker (actuals), not the UW Comparison projection."
+    }
+  ]
+}
+```
+
 ### 2b. When to Use Python Over the CLI
 
 The CLI is the right tool for targeted questions. It's the wrong tool for bulk scans — each `ete query --search` reloads the ground truth (~200 MB on large models). If you need to sweep more than 5 cells or walk label patterns across many rows:

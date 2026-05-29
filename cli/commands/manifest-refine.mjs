@@ -24,7 +24,16 @@ import {
 // The pattern here is common across PE models — a dedicated summary/comparison
 // tab holds the clean, "final" number, while the same label on operational
 // tabs may point to a sub-total or per-period figure.
-const SUMMARY_SHEET_PATTERN = /^(cheat\s*sheet|uw\s*comparison|summary|valuation|cover|returns|dashboard|exec\s*summary)/i;
+//
+// Canonical returns live on the model owner's *actuals* tab — a "Version
+// Tracker" / "Track Record" — which must outrank every other tab. An
+// underwriting "UW Comparison" tab carries *projected* returns under the same
+// labels (Gross IRR, Net MOIC, …); it used to sit in SUMMARY_SHEET_PATTERN's
+// top tier and so shadowed the canonical tab, mis-mapping returns to
+// underwriting. It is now its own (lower) tier so a Version Tracker wins
+// automatically without per-model pinning.
+const CANONICAL_RETURNS_PATTERN = /version\s*track|track\s*record|fund\s*track/i;
+const SUMMARY_SHEET_PATTERN = /^(cheat\s*sheet|summary|valuation|cover|returns|dashboard|exec\s*summary)/i;
 
 // Rollup sheets aggregate per-class data and are almost always what you want
 // when both a rollup sheet and its underlying per-class sheets share a label.
@@ -33,6 +42,21 @@ const SUMMARY_SHEET_PATTERN = /^(cheat\s*sheet|uw\s*comparison|summary|valuation
 // "GP Fees - Hold" aggregation sheet plays the same role. Both should
 // outrank any single underlying class sheet.
 const ROLLUP_SHEET_PATTERN = /\b(roll[-\s]?up|rollup|consolidat|combined|total|aggregate|all\s+class|gp\s+fees)\b/i;
+
+// Underwriting / comparison tabs hold projected (not actual) figures. They rank
+// below summary and rollup tabs but above plain operational sheets — only the
+// last fallback when nothing more authoritative carries the label.
+const UNDERWRITING_SHEET_PATTERN = /underwrit|\buw\b/i;
+
+// Refiner candidate ranking tiers (lower = more authoritative): canonical
+// actuals → summary → rollup → underwriting projection → operational/other.
+function refineSheetTier(sheet) {
+  if (CANONICAL_RETURNS_PATTERN.test(sheet)) return 0;
+  if (SUMMARY_SHEET_PATTERN.test(sheet)) return 1;
+  if (ROLLUP_SHEET_PATTERN.test(sheet)) return 2;
+  if (UNDERWRITING_SHEET_PATTERN.test(sheet)) return 3;
+  return 4;
+}
 
 const REQUIRED_FIELDS = [
   {
@@ -289,8 +313,10 @@ export function runManifestRefine(modelDir, args) {
  * Search for a field using the pre-built index (O(labels) instead of O(gt^2)).
  *
  * Candidate ranking (most → least preferred):
- *   1. On a summary/comparison sheet (Cheat Sheet / UW Comparison / Summary /
- *      Valuation / ...) — the "final" number usually lives here.
+ *   1. Sheet tier (refineSheetTier): canonical actuals (Version Tracker /
+ *      Track Record) → summary/valuation → rollup → underwriting projection
+ *      (UW Comparison) → operational. The canonical tab wins over an
+ *      underwriting comparison so returns don't mis-map to projected figures.
  *   2. Match the template's declared scenario column when `opts.hints` carries
  *      `scenarioColumns[sheet]` or `scenarioColumns.default`.
  *   3. Non-zero value (a zero in a totals column is almost always a restated-
@@ -358,22 +384,26 @@ function searchForFieldIndexed(index, field, opts = {}) {
     });
 
     const best = pool[0];
+    const tier = refineSheetTier(lm.sheet);
     candidates.push({
       cell: best.addr,
       value: best.value,
       labelAddr: lm.addr,
       labelText: lm.text.trim(),
       sheet: lm.sheet,
-      onSummarySheet: SUMMARY_SHEET_PATTERN.test(lm.sheet),
+      tier,
+      onSummarySheet: tier <= 1,    // canonical actuals or summary/valuation tab
       onRollupSheet: ROLLUP_SHEET_PATTERN.test(lm.sheet),
       matchedHintCol: preferredCols ? preferredCols.includes(best.col) : null,
     });
   }
 
-  // Deduplicate by cell; then rank with summary-sheet candidates first,
-  // rollup-sheet candidates next, then hint-matched cols, then by distance.
-  // This matters most for multi-class PE models where the same label appears
-  // on N per-class sheets plus a rollup — we always want the rollup.
+  // Deduplicate by cell; then rank by sheet tier (canonical → summary → rollup
+  // → underwriting → operational), breaking ties with hint-matched columns.
+  // This matters most for (a) returns that appear on both a canonical Version
+  // Tracker and an underwriting UW Comparison — the canonical tab wins — and
+  // (b) multi-class PE models where the same label appears on N per-class
+  // sheets plus a rollup, where the rollup wins.
   const seen = new Set();
   const deduped = candidates.filter(c => {
     if (seen.has(c.cell)) return false;
@@ -381,10 +411,7 @@ function searchForFieldIndexed(index, field, opts = {}) {
     return true;
   });
   deduped.sort((a, b) => {
-    if (a.onSummarySheet && !b.onSummarySheet) return -1;
-    if (!a.onSummarySheet && b.onSummarySheet) return 1;
-    if (a.onRollupSheet && !b.onRollupSheet) return -1;
-    if (!a.onRollupSheet && b.onRollupSheet) return 1;
+    if (a.tier !== b.tier) return a.tier - b.tier;
     if (a.matchedHintCol && !b.matchedHintCol) return -1;
     if (!a.matchedHintCol && b.matchedHintCol) return 1;
     return 0;

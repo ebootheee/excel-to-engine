@@ -989,6 +989,45 @@ console.log('Testing: refiner rollup preference inside candidate ranking');
   rmSync(tmp, { recursive: true, force: true });
 }
 
+// Returns must pin to the canonical Version Tracker (the model owner's actuals),
+// NOT an underwriting "UW Comparison" tab that carries projected returns under
+// the same labels. The old SUMMARY_SHEET_PATTERN ranked "UW Comparison" in the
+// top tier, so returns mis-mapped to projections. refineSheetTier now ranks
+// canonical actuals above underwriting — no per-model pinning needed.
+console.log('Testing: refiner prefers canonical Version Tracker over UW Comparison for returns');
+{
+  const gt = {
+    // Underwriting projections — same labels; would have won under old ranking.
+    'UW Comparison!B12': 'Gross IRR',  'UW Comparison!C12': 0.31,
+    'UW Comparison!B13': 'Gross MOIC', 'UW Comparison!C13': 3.10,
+    // Canonical actuals on the Version Tracker (the model owner's row 22).
+    'Version Tracker!B22': 'Gross IRR',  'Version Tracker!C22': 0.284,
+    'Version Tracker!B23': 'Gross MOIC', 'Version Tracker!C23': 2.85,
+  };
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-canon-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  const m = {
+    $schema: 'manifest-v1.0',
+    model: { name: 'x', type: 'pe_platform', groundTruth: './_ground-truth.json' },
+    timeline: {}, segments: [], outputs: {}, equity: { classes: [] },
+    carry: {}, debt: {}, lineItems: {}, subsegments: {}, customCells: {},
+    baseCaseOutputs: {},
+  };
+  writeFileSync(join(tmp, 'chunked', 'manifest.json'), JSON.stringify(m, null, 2));
+  const rep = runManifestRefine(join(tmp, 'chunked'), { apply: true });
+  const after = JSON.parse(readFileSync(join(tmp, 'chunked', 'manifest.json'), 'utf-8'));
+  const c0 = after.equity?.classes?.[0] || {};
+  assert(c0.grossIRR === 'Version Tracker!C22',
+    `grossIRR pins to Version Tracker, not UW Comparison (got ${JSON.stringify(c0.grossIRR)})`);
+  assert(c0.grossMOIC === 'Version Tracker!C23',
+    `grossMOIC pins to Version Tracker, not UW Comparison (got ${JSON.stringify(c0.grossMOIC)})`);
+  // The UW Comparison cell was considered but lost — it's recorded as an alternate.
+  assert(rep.alternates?.['Gross IRR']?.[0]?.cell === 'UW Comparison!C12',
+    'UW Comparison candidate recorded as a runner-up alternate');
+  rmSync(tmp, { recursive: true, force: true });
+}
+
 // ===========================================================================
 // L. MANIFEST INVARIANTS — trip-wires for domain rules
 // ===========================================================================
@@ -1060,6 +1099,37 @@ console.log('Testing: doctor passes when invariants match');
   const out = run(`manifest doctor "${join(tmp, 'chunked')}"`);
   assert(/All checks passed/.test(out) || !/is forbidden/.test(out),
     `doctor passes when invariant satisfied (output: ${out.substring(0, 200)})`);
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// Belt-and-suspenders for the refiner Version-Tracker fix: even though
+// refineSheetTier now pins returns to the canonical tab automatically, a model
+// owner can encode a durable trip-wire so a future re-map back to the
+// underwriting tab can't slip past doctor silently.
+console.log('Testing: invariant trip-wire forbids returns reverting to UW Comparison');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ship-inv-uw-'));
+  mkdirSync(join(tmp, 'chunked'), { recursive: true });
+  const gt = {
+    'Version Tracker!B22': 'Gross IRR', 'Version Tracker!C22': 0.284,
+    'UW Comparison!B12': 'Gross IRR',   'UW Comparison!C12': 0.31,
+  };
+  writeFileSync(join(tmp, 'chunked', '_ground-truth.json'), JSON.stringify(gt));
+  const m = {
+    $schema: 'manifest-v1.0',
+    model: { name: 'x', type: 'pe_platform', groundTruth: './_ground-truth.json' },
+    timeline: {}, segments: [], outputs: {},
+    equity: { classes: [{ id: 'a', grossIRR: 'UW Comparison!C12' }] }, // reverted to projection
+    carry: {}, debt: {}, lineItems: {}, subsegments: {}, customCells: {},
+    invariants: [
+      { path: 'equity.classes[0].grossIRR', forbid: ['UW Comparison!C12'],
+        note: 'Gross IRR must bind to the canonical Version Tracker, not the UW Comparison projection.' },
+    ],
+  };
+  writeFileSync(join(tmp, 'chunked', 'manifest.json'), JSON.stringify(m, null, 2));
+  const out = run(`manifest doctor "${join(tmp, 'chunked')}"`);
+  assert(/is forbidden/.test(out), 'doctor flags returns reverted to UW Comparison');
+  assert(/canonical Version Tracker/.test(out), 'doctor surfaces the canonical-tab note');
   rmSync(tmp, { recursive: true, force: true });
 }
 
