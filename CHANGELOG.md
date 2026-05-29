@@ -1,5 +1,42 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Fix chunked-build hang in `partition_sheets` (range-expansion blowup)
+
+A clean `ete init` on the full real models hung for ~12h in the chunked emitter,
+right after `[chunked] Partitioning N sheets...`. Root cause: a Round-2
+regression in dependency extraction, not the dependency-graph step that P1 (#23)
+fixed.
+
+- **`partition_sheets` no longer expands ranges (`sheet_partition.rs`,
+  `dependency.rs`).** It needs only sheet-level edges (which *other sheets* each
+  formula references), but it called the range-expanding `extract_refs`, which —
+  after Round 2 taught `is_cell_ref` to accept ranges — exploded every range to
+  ≤1000 individual cell strings per formula, pushed and de-duped them, then
+  discarded all the same-sheet ones. On a 1.62M-formula sheet that's ~10⁹
+  throwaway allocations on a single core → swap thrash → the 12h stall. New
+  `collect_sheet_deps()` scans for `Name!` / `'Sheet Name'!` tokens and records
+  just the sheet name — no range expansion, no per-cell allocation. A synthetic
+  parity test measures **~2000× faster** on range-heavy formulas.
+- **Intra-sheet cycle detection no longer expands ranges either
+  (`chunked_emitter.rs`).** `detect_intra_sheet_cycles` would have been the *next*
+  wall in the sheet-module phase for the same reason. It now uses a new
+  `extract_refs_shallow()` (top-left endpoint only) — restoring the pre-Round-2
+  behaviour the known-good engines were built with, and avoiding spurious
+  self-cycles from `B10=SUM(B1:B10)`-style ranges.
+- **The dependency-graph contract is untouched.** `write_dependency_graph` still
+  uses the full range-expanding `extract_refs`, so `dependency-graph.json` /
+  the `affectsOutputs` / `dependsOnNamedInputs` closures remain complete
+  (`test:depgraph` 11/11). The fix is behaviour-preserving for the sheet
+  dependency set (parity test) and for engine accuracy (smoke 78/78,
+  `test:engine` 21/21 incl. cluster convergence).
+- Validated: `cargo test` 17/17, `smoke` 78/78, `test:depgraph`/`test:runnable`/
+  `test:engine` 11/20/21, full `npm test`.
+- **Still open (not the cause of this hang):** the partition step still
+  `clone()`s every cell (peak-memory doubling) and the generated `engine.js`
+  eagerly imports ~800 MB of sheet modules (load-time wall) — both are scaling
+  ceilings for actually *running* the oracle, tracked under #22 (output-cone
+  scoping) / lazy sheet loading.
+
 ## 2026-05-29 — Golden-master CI gate + P2 follow-ups (schedules, drivers, refiner)
 
 Trustworthiness pass on the P2 contract: a golden-master CI assert plus the three

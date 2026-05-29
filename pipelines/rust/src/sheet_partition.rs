@@ -3,7 +3,7 @@
 /// Groups cells by worksheet, computes cross-sheet dependencies at the sheet level,
 /// and produces a topological ordering of sheets for evaluation.
 
-use crate::dependency::extract_refs;
+use crate::dependency::collect_sheet_deps;
 use crate::parser::{CellData, CellValue, WorkbookData};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -52,7 +52,13 @@ pub struct SheetGraphEntry {
 pub fn partition_sheets(workbook: &WorkbookData) -> Vec<SheetPartition> {
     let sheet_names: HashSet<String> = workbook.sheet_names.iter().cloned().collect();
 
-    // Process each sheet in parallel — extract_refs is the bottleneck (3M cells)
+    // Process each sheet in parallel. We only need sheet-level edges here, so we
+    // scan for referenced sheet *names* directly (collect_sheet_deps) instead of
+    // calling the range-expanding extract_refs: the latter exploded every range
+    // to ≤1000 cell strings per formula and then we discarded all the same-sheet
+    // ones — O(formula_cells × range_size) wasted work that hung this step on
+    // multi-million-formula sheets. The cell-level dependency-graph contract
+    // (write_dependency_graph) still uses the expanding extract_refs.
     let partitions: Vec<SheetPartition> = workbook
         .sheets
         .par_iter()
@@ -64,17 +70,7 @@ pub fn partition_sheets(workbook: &WorkbookData) -> Vec<SheetPartition> {
             for cell in &sheet.cells {
                 if let Some(formula) = &cell.formula {
                     formula_cells.push(cell.clone());
-
-                    // Extract cross-sheet references
-                    let refs = extract_refs(formula, &sheet.name);
-                    for r in &refs {
-                        if let Some(bang) = r.find('!') {
-                            let ref_sheet = &r[..bang];
-                            if ref_sheet != sheet.name && sheet_names.contains(ref_sheet) {
-                                sheet_deps.insert(ref_sheet.to_string());
-                            }
-                        }
-                    }
+                    collect_sheet_deps(formula, &sheet.name, &sheet_names, &mut sheet_deps);
                 } else if cell.value.is_some() {
                     input_cells.push(cell.clone());
                 }

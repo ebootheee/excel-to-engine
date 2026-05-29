@@ -5,7 +5,7 @@
 /// is added by the caller.
 
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -49,8 +49,32 @@ pub struct ConvergenceCluster {
 /// We look for patterns:
 ///   • Simple refs: A1, B12, AA100 (col letters + row digits)
 ///   • Cross-sheet: Sheet1!A1  or  'Sheet Name'!B3
-///   • Ranges: A1:B10 (both endpoints become edges)
+///   • Ranges: A1:B10 — **expanded to every interior cell** (capped at 1000),
+///     so the cell-level dependency-graph contract is complete for transitive
+///     reachability.
+///
+/// Range expansion is the expensive part: a single `SUM(A1:A1000)` yields 1000
+/// strings. Callers that only need dependency *shape* (which sheets, or which
+/// cells form a cycle) — not every interior cell — must use
+/// [`extract_refs_shallow`] or [`collect_sheet_deps`] instead; expanding here and
+/// discarding the result is what hung the chunked build on multi-million-formula
+/// models (see those functions).
 pub fn extract_refs(formula: &str, current_sheet: &str) -> Vec<String> {
+    extract_refs_impl(formula, current_sheet, true)
+}
+
+/// Like [`extract_refs`] but **does not expand ranges**: `A1:B10` contributes
+/// only its top-left endpoint. Use this where you need the dependency *shape*
+/// cheaply (e.g. intra-sheet cycle detection) and exploding every range to ≤1000
+/// cells would be catastrophic. This restores the pre-Round-2 behaviour for
+/// cycle detection — same-sheet ranges are not enumerated — which is what the
+/// known-good engines were built with; self-including ranges (`B10=SUM(B1:B10)`)
+/// stay benign because single-node SCCs aren't treated as cycles.
+pub fn extract_refs_shallow(formula: &str, current_sheet: &str) -> Vec<String> {
+    extract_refs_impl(formula, current_sheet, false)
+}
+
+fn extract_refs_impl(formula: &str, current_sheet: &str, expand: bool) -> Vec<String> {
     let mut refs = Vec::new();
     let bytes = formula.as_bytes();
     let len = bytes.len();
@@ -85,7 +109,7 @@ pub fn extract_refs(formula: &str, current_sheet: &str) -> Vec<String> {
             if i < len && bytes[i] == b'!' {
                 i += 1;
                 // Now read cell reference
-                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..]) {
+                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..], expand) {
                     for a in addr {
                         refs.push(format!("{}!{}", sheet_name, a));
                     }
@@ -108,7 +132,7 @@ pub fn extract_refs(formula: &str, current_sheet: &str) -> Vec<String> {
                 // It's a cross-sheet ref
                 let sheet_name = &formula[start..j];
                 i = j + 1;
-                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..]) {
+                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..], expand) {
                     for a in addr {
                         refs.push(format!("{}!{}", sheet_name, a));
                     }
@@ -118,7 +142,7 @@ pub fn extract_refs(formula: &str, current_sheet: &str) -> Vec<String> {
                 continue;
             }
             // Not a sheet ref — might be a function name or just letters; read as potential cell ref
-            if let Some((addr, consumed)) = read_cell_or_range(&formula[start..]) {
+            if let Some((addr, consumed)) = read_cell_or_range(&formula[start..], expand) {
                 // Only if we consumed more than zero and it looks like a cell address
                 // (We need to check it's not just a function name like SUM)
                 // A cell ref must start with letters then have digits
@@ -148,8 +172,10 @@ pub fn extract_refs(formula: &str, current_sheet: &str) -> Vec<String> {
 }
 
 /// Read a cell reference or range starting at `s`.
-/// Returns (list of cell addresses, chars consumed).
-fn read_cell_or_range(s: &str) -> Option<(Vec<String>, usize)> {
+/// Returns (list of cell addresses, chars consumed). When `expand` is false a
+/// range yields only its top-left endpoint (the interior is not enumerated);
+/// `consumed` is identical either way, so scanning is unaffected.
+fn read_cell_or_range(s: &str, expand: bool) -> Option<(Vec<String>, usize)> {
     let bytes = s.as_bytes();
     let len = bytes.len();
     if len == 0 {
@@ -198,10 +224,14 @@ fn read_cell_or_range(s: &str) -> Option<(Vec<String>, usize)> {
     // Check if it's a range A1:B10
     if i + 1 < len && bytes[i] == b':' {
         let rest = &s[i + 1..];
-        if let Some((second, consumed2)) = read_cell_or_range(rest) {
-            // Expand range to individual cells
-            let cells = expand_range(&first_addr, &second[0]);
-            return Some((cells, i + 1 + consumed2));
+        if let Some((second, consumed2)) = read_cell_or_range(rest, expand) {
+            if expand {
+                // Expand range to individual cells
+                let cells = expand_range(&first_addr, &second[0]);
+                return Some((cells, i + 1 + consumed2));
+            }
+            // Shallow: top-left endpoint only — never enumerate the interior.
+            return Some((vec![first_addr], i + 1 + consumed2));
         }
     }
 
@@ -251,6 +281,131 @@ fn is_cell_ref(s: &str) -> bool {
         }
     }
     i == bytes.len()
+}
+
+/// True if `s` begins with an A1-style cell reference: optional `$`, 1–3
+/// uppercase letters, optional `$`, 1–7 digits. This is exactly the prefix
+/// `read_cell_or_range` accepts (same column/row length caps), so it tells us
+/// whether a `Name!…` token is a real cross-sheet *cell* reference vs. e.g. a
+/// defined name (`Sheet!MyRange`) — without allocating anything.
+fn starts_with_cell_ref(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    if i < len && bytes[i] == b'$' {
+        i += 1;
+    }
+    let col_start = i;
+    while i < len && bytes[i].is_ascii_uppercase() {
+        i += 1;
+    }
+    let col_len = i - col_start;
+    if col_len == 0 || col_len > 3 {
+        return false;
+    }
+    if i < len && bytes[i] == b'$' {
+        i += 1;
+    }
+    let row_start = i;
+    while i < len && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    let row_len = i - row_start;
+    row_len >= 1 && row_len <= 7
+}
+
+/// Collect the set of *other* sheet names referenced by `formula` into `out`.
+///
+/// This is the cheap counterpart to [`extract_refs`] for sheet-level
+/// partitioning, which only needs to know *which sheets* a formula touches — not
+/// every cell. Crucially it **never expands ranges** and **never allocates a
+/// string per referenced cell**: calling the range-expanding `extract_refs`
+/// here meant a single `SUM(A1:A1000)` produced 1000 throwaway strings (then
+/// the de-dup cloned them), and `partition_sheets` discarded every same-sheet
+/// one — O(formula_cells × range_size) wasted work that hung the chunked build
+/// on multi-million-formula sheets.
+///
+/// Tokenisation mirrors `extract_refs` exactly, and a dependency is recorded
+/// only when a `Name!` / `'Sheet Name'!` token is followed by a real cell
+/// reference (the old `read_cell_or_range`-returned-`Some` gate), the name is
+/// not `current_sheet`, and the name is a member of `sheet_names`. So the
+/// detected sheet-dependency set is identical to the old extract-then-filter
+/// path — this is a pure performance fix, not a behaviour change.
+pub fn collect_sheet_deps(
+    formula: &str,
+    current_sheet: &str,
+    sheet_names: &HashSet<String>,
+    out: &mut BTreeSet<String>,
+) {
+    let bytes = formula.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        // Skip string literals
+        if bytes[i] == b'"' {
+            i += 1;
+            while i < len && bytes[i] != b'"' {
+                if bytes[i] == b'\\' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Quoted sheet name: 'Sheet Name'!
+        if bytes[i] == b'\'' {
+            let start = i + 1;
+            i += 1;
+            while i < len && bytes[i] != b'\'' {
+                i += 1;
+            }
+            if i >= len {
+                break;
+            }
+            let sheet_name = &formula[start..i];
+            i += 1; // skip closing '
+            if i < len && bytes[i] == b'!' {
+                i += 1;
+                if starts_with_cell_ref(&formula[i..])
+                    && sheet_name != current_sheet
+                    && sheet_names.contains(sheet_name)
+                {
+                    out.insert(sheet_name.to_string());
+                }
+            }
+            continue;
+        }
+
+        // Unquoted sheet name: Name!  (word chars + spaces, per extract_refs)
+        if bytes[i].is_ascii_alphabetic() || bytes[i] == b'_' {
+            let start = i;
+            let mut j = i;
+            while j < len && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_' || bytes[j] == b' ') {
+                j += 1;
+            }
+            if j < len && bytes[j] == b'!' {
+                let sheet_name = &formula[start..j];
+                let after = j + 1;
+                if starts_with_cell_ref(&formula[after..])
+                    && sheet_name != current_sheet
+                    && sheet_names.contains(sheet_name)
+                {
+                    out.insert(sheet_name.to_string());
+                }
+                i = after;
+                continue;
+            }
+            // Not a sheet ref — skip this identifier run (same-sheet cells are
+            // irrelevant to sheet-level partitioning).
+            i = if j > i { j } else { i + 1 };
+            continue;
+        }
+
+        i += 1;
+    }
 }
 
 /// Expand a range like A1:C3 into all cell addresses.
@@ -590,4 +745,170 @@ fn condensation_topo(
             }
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::{BTreeSet, HashSet};
+
+    fn names(list: &[&str]) -> HashSet<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn sheet_deps(formula: &str, current: &str, sheets: &HashSet<String>) -> BTreeSet<String> {
+        let mut out = BTreeSet::new();
+        collect_sheet_deps(formula, current, sheets, &mut out);
+        out
+    }
+
+    /// The pre-fix derivation: expand every ref, then keep distinct cross-sheet
+    /// sheet names. `collect_sheet_deps` must match this exactly.
+    fn legacy_sheet_deps(formula: &str, current: &str, sheets: &HashSet<String>) -> BTreeSet<String> {
+        let mut deps = BTreeSet::new();
+        for r in extract_refs(formula, current) {
+            if let Some(bang) = r.find('!') {
+                let ref_sheet = &r[..bang];
+                if ref_sheet != current && sheets.contains(ref_sheet) {
+                    deps.insert(ref_sheet.to_string());
+                }
+            }
+        }
+        deps
+    }
+
+    #[test]
+    fn extract_refs_full_expands_ranges() {
+        // The dependency-graph contract relies on full expansion.
+        let refs = extract_refs("SUM(A1:A1000)", "PP&E");
+        assert_eq!(refs.len(), 1000, "full extract_refs must enumerate the range");
+        assert!(refs.contains(&"PP&E!A1".to_string()));
+        assert!(refs.contains(&"PP&E!A1000".to_string()));
+    }
+
+    #[test]
+    fn extract_refs_shallow_keeps_only_top_left() {
+        // Same formula, shallow: one ref, not 1000 — this is the blowup that
+        // hung the build (1000x fewer allocations per range).
+        let refs = extract_refs_shallow("SUM(A1:A1000)", "PP&E");
+        assert_eq!(refs, vec!["PP&E!A1".to_string()]);
+
+        // Single cells are unaffected.
+        assert_eq!(
+            extract_refs_shallow("A1+B2", "S"),
+            vec!["S!A1".to_string(), "S!B2".to_string()]
+        );
+
+        // Cross-sheet ranges are also not enumerated.
+        let refs = extract_refs_shallow("Other!C1:C500", "S");
+        assert_eq!(refs, vec!["Other!C1".to_string()]);
+    }
+
+    #[test]
+    fn starts_with_cell_ref_matches_read_cell_or_range_gate() {
+        assert!(starts_with_cell_ref("A1"));
+        assert!(starts_with_cell_ref("$A$1"));
+        assert!(starts_with_cell_ref("AA100)"));
+        assert!(starts_with_cell_ref("ZZ9999999")); // 7 digits ok
+        assert!(!starts_with_cell_ref("A"));        // no row
+        assert!(!starts_with_cell_ref("1"));        // no col
+        assert!(!starts_with_cell_ref("ABCD1"));    // 4 col letters
+        assert!(!starts_with_cell_ref("A12345678")); // 8 digits
+        assert!(!starts_with_cell_ref("MyRange"));  // defined name, not a cell
+        assert!(!starts_with_cell_ref(""));
+    }
+
+    #[test]
+    fn collect_sheet_deps_basic() {
+        let sheets = names(&["Summary", "Cash Flow", "Debt", "Other"]);
+
+        // Cross-sheet (quoted + unquoted), same-sheet ranges, function names.
+        assert_eq!(
+            sheet_deps("'Cash Flow'!A1 + Debt!B2:B10 + SUM(C1:C5)", "Summary", &sheets),
+            BTreeSet::from(["Cash Flow".to_string(), "Debt".to_string()])
+        );
+
+        // A range-heavy same-sheet formula yields NO sheet deps (the case that
+        // was generating ~2000 throwaway strings per cell in partition_sheets).
+        assert!(sheet_deps("SUM(A1:A1000)+SUM(B1:B1000)", "PP&E", &names(&["PP&E", "Other"])).is_empty());
+
+        // Self-reference via explicit sheet name is not a dependency.
+        assert!(sheet_deps("Summary!A1", "Summary", &sheets).is_empty());
+
+        // A name not in the workbook's sheet set is ignored (e.g. a function-like
+        // token before '!' that isn't a real sheet).
+        assert!(sheet_deps("Bogus!A1", "Summary", &sheets).is_empty());
+
+        // `Sheet!DefinedName` (no cell ref after '!') is NOT counted — matches
+        // the old read_cell_or_range gate.
+        assert!(sheet_deps("Debt!MyRange", "Summary", &sheets).is_empty());
+    }
+
+    #[test]
+    fn collect_sheet_deps_matches_legacy_on_varied_formulas() {
+        let sheets = names(&["Summary", "Cash Flow", "Debt", "Other", "Assumptions"]);
+        let cur = "Summary";
+        let cases = [
+            "Other!A1",
+            "Other!A1:Z99",
+            "'Cash Flow'!B2 + Debt!C3:C40 - Assumptions!D1",
+            "SUM(A1:A100) + Other!B1*2",
+            "IF(Debt!A1>0, 'Cash Flow'!B2, 0)",
+            "VLOOKUP(A1, Other!$A$1:$D$500, 3, FALSE)",
+            "Summary!A1 + A2 + B3:B9",         // self + same-sheet only
+            "Bogus!A1 + Other!ZZ100",          // unknown sheet ignored
+            "Debt!MyDefinedName + Other!E5",   // defined name not a dep; E5 is
+            "\"Other!A1\" & Debt!B2",          // string literal must be skipped
+            "1+2*3",                            // no refs
+        ];
+        for f in cases {
+            assert_eq!(
+                sheet_deps(f, cur, &sheets),
+                legacy_sheet_deps(f, cur, &sheets),
+                "sheet-dep parity mismatch for formula: {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn collect_sheet_deps_parity_and_speed_at_scale() {
+        // Mimics a heavy operational sheet: every formula carries a big
+        // same-sheet range (discarded by partitioning) plus one cross-sheet
+        // range. The legacy path expanded ~2000 cells per formula and threw
+        // almost all of them away; collect_sheet_deps never allocates them.
+        let sheets = names(&["PP&E", "Debt"]);
+        let cur = "PP&E";
+        const N: usize = 2_000;
+        let formulas: Vec<String> = (1..=N)
+            .map(|r| format!("SUM(A{r}:A1000)+Debt!C1:C1000+B{r}"))
+            .collect();
+
+        let t0 = std::time::Instant::now();
+        let mut legacy_total = 0usize;
+        for f in &formulas {
+            legacy_total += legacy_sheet_deps(f, cur, &sheets).len();
+        }
+        let legacy_ms = t0.elapsed().as_secs_f64() * 1000.0;
+
+        let t1 = std::time::Instant::now();
+        let mut new_total = 0usize;
+        for f in &formulas {
+            new_total += sheet_deps(f, cur, &sheets).len();
+        }
+        let new_ms = t1.elapsed().as_secs_f64() * 1000.0;
+
+        // Same answer (each formula depends on exactly "Debt").
+        assert_eq!(legacy_total, new_total);
+        assert_eq!(new_total, N);
+
+        eprintln!(
+            "[partition-scan] {N} range-heavy formulas: legacy(extract+filter)={legacy_ms:.1}ms, \
+             collect_sheet_deps={new_ms:.1}ms ({:.0}x faster)",
+            if new_ms > 0.0 { legacy_ms / new_ms } else { 0.0 }
+        );
+    }
 }
