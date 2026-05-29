@@ -14,7 +14,7 @@
  */
 
 import XLSX from 'xlsx';
-import { readFileSync, existsSync, mkdtempSync, cpSync, rmSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, mkdtempSync, cpSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -62,7 +62,7 @@ console.log('Testing: collectNamedOutputs shape + drift');
   assert(drift === 0, `no drift vs resolveBaseCaseOutputs (got ${drift})`);
 
   // enumerateOutputCells keys are a superset of what we emit (1:1 here).
-  assert(Object.keys(enumerateOutputCells(manifest)).length === Object.keys(no).length,
+  assert(Object.keys(enumerateOutputCells(manifest, gt)).length === Object.keys(no).length,
     'enumerateOutputCells matches emitted output count');
 }
 
@@ -134,7 +134,7 @@ function buildWorkbook() {
   };
 }
 {
-  const inputs = collectNamedInputs(buildWorkbook());
+  const inputs = collectNamedInputs(buildWorkbook(), manifest, gt);
   assert(inputs.Exit_Year?.cell === 'Assumptions!B1', 'Exit_Year cell resolved');
   assert(inputs.Exit_Year?.default === 2029, 'Exit_Year default captured');
   assert(inputs.Exit_Year?.type === 'number', 'Exit_Year typed number');
@@ -142,6 +142,11 @@ function buildWorkbook() {
   assert(inputs.Exit_Year?.referencedBy >= 1, 'Exit_Year confirmed read by ≥1 formula');
   assert(!('Scratch' in inputs), 'named-but-unreferenced cell excluded (not a real input)');
   assert(inputs.Exit_Year?.affectsOutputs === undefined, 'affectsOutputs absent in Round 1');
+
+  // Test dynamic manifest-driver input resolution (Request C)
+  assert(inputs.exitMultiple?.cell === 'Valuation!K54', 'exitMultiple driver cell resolved from manifest');
+  assert(inputs.exitMultiple?.default === 18.5, 'exitMultiple default resolved from ground truth');
+  assert(inputs.exitMultiple?.source === 'manifest-driver', 'exitMultiple source is manifest-driver');
 }
 
 // ---------------------------------------------------------------------------
@@ -197,6 +202,42 @@ console.log('Testing: emitManifestMaps without .xlsx (graceful skip)');
   assert(typeof out.modelHash === 'string' && out.modelHash.startsWith('sha256:'), 'modelHash present');
   assert(out.namedOutputs && Object.keys(out.namedOutputs).length >= 10, 'namedOutputs populated');
   rmSync(tmp, { recursive: true, force: true });
+}
+
+console.log('Testing: Correctness audit flags fallbacks WITHOUT aborting (Request D / #26)');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ete-maps-'));
+  cpSync(FIXTURES, tmp, { recursive: true });
+
+  const sheetsDir = join(tmp, 'sheets');
+  mkdirSync(sheetsDir, { recursive: true });
+
+  // The fixture pins carry.totalCell → "GP Promote!D88"; stub that cell so the
+  // totalCarry output's closure (trivially, itself) hits an unsupported fn.
+  writeFileSync(join(sheetsDir, 'Promote.mjs'), `// mock
+    ctx.set("GP Promote!D88", _fn('SOMETHING_UNSUPPORTED', []));
+  `);
+
+  // Must NOT throw — the maps still emit; the violation is reported, not fatal.
+  const res = emitManifestMaps(tmp, {});
+  assert(existsSync(join(tmp, '_fn-fallbacks.json')), 'audit emits _fn-fallbacks.json');
+  assert(existsSync(join(tmp, 'named-outputs.json')), 'named-outputs.json still emitted (no mid-emit abort)');
+  assert(existsSync(join(tmp, 'cell-types.json')), 'cell-types.json still emitted (no mid-emit abort)');
+  assert(Array.isArray(res.stats.fallbackViolations), 'stats.fallbackViolations is an array');
+  assert(res.stats.fallbackViolations.some(v => v.cell === 'GP Promote!D88' && v.output === 'totalCarry'),
+    'records the totalCarry → GP Promote!D88 violation');
+  const no = JSON.parse(readFileSync(join(tmp, 'named-outputs.json'), 'utf-8')).namedOutputs;
+  assert(no.totalCarry?.resolvesThroughFallback?.function === 'SOMETHING_UNSUPPORTED',
+    'affected output annotated with resolvesThroughFallback');
+
+  // No stubs on output paths → no violations (clean build stays clean).
+  const tmp2 = mkdtempSync(join(tmpdir(), 'ete-maps-'));
+  cpSync(FIXTURES, tmp2, { recursive: true });
+  const res2 = emitManifestMaps(tmp2, {});
+  assert(res2.stats.fallbackViolations.length === 0, 'no violations when no stubs on output paths');
+
+  rmSync(tmp, { recursive: true, force: true });
+  rmSync(tmp2, { recursive: true, force: true });
 }
 
 console.log('Testing: emitManifestMaps with .xlsx (full set)');

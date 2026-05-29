@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
 import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
+import { emitBuildManifest } from '../../lib/build-manifest.mjs';
 import { loadLabelIndex } from '../../lib/manifest.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +33,26 @@ export function runInit(excelPath, args) {
   lines.push(`Parsing: ${excelPath}`);
   lines.push(`Output:  ${absOutput}`);
   lines.push('');
+
+  // Parser wall-clock cap. The cell-level parse + chunked emit on a
+  // multi-million-cell model legitimately runs for several minutes; the old
+  // fixed 10-min cap killed real builds mid-emit. Configurable via
+  // --timeout <seconds> (0 disables the cap entirely). Default 30 min.
+  let parseTimeoutMs = 1800 * 1000;
+  if (args.timeout === true) {
+    lines.push('Note: --timeout needs a value in seconds (e.g. --timeout 1800); using default 1800s.');
+    lines.push('');
+  } else if (args.timeout != null) {
+    const t = Number(args.timeout);
+    if (!Number.isFinite(t) || t < 0) {
+      lines.push(`Note: ignoring invalid --timeout "${args.timeout}"; using default 1800s.`);
+      lines.push('');
+    } else if (t === 0) {
+      parseTimeoutMs = undefined; // disabled — no wall-clock cap
+    } else {
+      parseTimeoutMs = t * 1000;
+    }
+  }
 
   // --reuse-parse: skip the Rust parse step when chunked/_ground-truth.json
   // already exists. Useful when iterating on manifest configuration against
@@ -91,7 +112,7 @@ export function runInit(excelPath, args) {
       const result = spawnSync(
         parserBin,
         parserArgs,
-        { encoding: 'utf-8', timeout: 600000, maxBuffer: 50 * 1024 * 1024 }
+        { encoding: 'utf-8', timeout: parseTimeoutMs, maxBuffer: 50 * 1024 * 1024 }
       );
       if (result.error) throw result.error;
       if (result.status !== 0) {
@@ -112,6 +133,36 @@ export function runInit(excelPath, args) {
         _formatted: `Error: Rust parser failed.\n${e.stderr || e.message}`,
       };
     }
+  }
+
+  // Fail-loud: a successful parse MUST yield a runnable engine. The chunked
+  // emitter writes engine.js before the memory-heavy dependency-graph step and
+  // errors hard if it can't — but a process the OS OOM-kills mid-emit can still
+  // surface a non-zero exit without engine.js. Verify the load-bearing artifact
+  // landed rather than proceeding to build a manifest around a directory with no
+  // engine ("don't swallow a failed emit"). Cheap check here fails fast, before
+  // the minutes-long manifest pipeline; emitBuildManifest re-checks at the end.
+  const enginePath = join(chunkedDir, 'engine.js');
+  if (!existsSync(enginePath)) {
+    if (!canReuse) {
+      // A fresh parse MUST yield a runnable engine — fail hard rather than build
+      // a manifest around an engine-less directory.
+      return {
+        error: `No runnable engine: ${enginePath} is missing after the parse step.`,
+        _formatted: [
+          ...lines,
+          '',
+          'Error: no runnable engine.js was produced — this build is incomplete.',
+          '  The parser exited without writing chunked/engine.js (most likely an out-of-memory',
+          '  kill during chunked emission). Re-run on a machine with more memory, or scope the model.',
+        ].join('\n'),
+      };
+    }
+    // --reuse-parse: the user opted into the existing chunked/ as-is (for fast
+    // manifest iteration). A missing engine isn't fatal here, but the dir isn't
+    // runnable — surface it; the build manifest below records complete:false.
+    lines.push('  Note: reused chunked/ has no engine.js — manifest steps will still run,');
+    lines.push('        but the build is not runnable. Re-run without --reuse-parse to rebuild it.');
   }
 
   // Clean up redundant root-level model-map.json / formulas.json in chunked
@@ -295,6 +346,30 @@ export function runInit(excelPath, args) {
     for (const sk of maps.skipped) {
       lines.push(`  Skipped ${sk.file}: ${sk.reason}`);
     }
+
+    // #26 correctness audit: named outputs whose dependency closure passes
+    // through an unsupported-function stub (_fn). Surfaced, never swallowed:
+    // a warning by default (the real models still carry many fallbacks), or a
+    // hard failure under --assert-no-fallbacks (CI / golden-master gate).
+    const violations = maps.stats?.fallbackViolations || [];
+    if (violations.length > 0) {
+      const names = violations.map(v => v.output);
+      if (args.assertNoFallbacks) {
+        return {
+          error: `Correctness gate: ${violations.length} named output(s) resolve through an unsupported-function stub.`,
+          _formatted: [
+            ...lines,
+            `  ✗ --assert-no-fallbacks: ${violations.length} output(s) depend on _fn() stubs:`,
+            ...violations.slice(0, 10).map(v => `      ${v.output} ← ${v.cell} (${v.function})`),
+            violations.length > 10 ? `      …and ${violations.length - 10} more (see chunked/_fn-fallbacks.json)` : '',
+            '  Add transpiler coverage for those functions, or omit --assert-no-fallbacks to proceed.',
+          ].filter(Boolean).join('\n'),
+        };
+      }
+      lines.push(`  ⚠ ${violations.length} output(s) resolve through an _fn() stub` +
+        ` (annotated in named-outputs.json; see _fn-fallbacks.json; --assert-no-fallbacks to gate):` +
+        ` ${names.slice(0, 5).join(', ')}${names.length > 5 ? ', …' : ''}`);
+    }
   } catch (e) {
     lines.push(`  (Map emission skipped: ${e.message})`);
   }
@@ -319,6 +394,43 @@ export function runInit(excelPath, args) {
     }
   } else {
     lines.push('  --emit-debug: retained dependency-graph.json + _graph.json');
+  }
+
+  // Step 5c: Finalize — lock the artifact layout + emit a content hash so a
+  // downstream consumer can pin this exact build and detect drift without
+  // re-deriving the expected file set per version. Runs AFTER slimming so it
+  // describes the shipped layout. This is also the comprehensive completeness
+  // gate (#23/#24): if any required artifact (above all engine.js) is missing,
+  // the build is incomplete and init fails hard rather than reporting success.
+  let buildContentHash = null;
+  lines.push('');
+  lines.push('Finalizing: build manifest (artifact lock + content hash)...');
+  try {
+    const bm = emitBuildManifest(chunkedDir, { toolVersion: readToolVersion() });
+    buildContentHash = bm.contentHash;
+    if (!bm.ok && !canReuse) {
+      // Fresh build is missing a required artifact (above all engine.js) — the
+      // comprehensive completeness gate. Fail hard rather than report success.
+      return {
+        error: `Incomplete build — missing required artifact(s): ${bm.missing.join(', ')}.`,
+        _formatted: [
+          ...lines,
+          `  ✗ Missing required: ${bm.missing.join(', ')}`,
+          '  The build was NOT finalized; chunked/ must not be treated as runnable.',
+        ].join('\n'),
+      };
+    }
+    if (!bm.ok) {
+      // --reuse-parse: record the incomplete state honestly, don't block.
+      lines.push(`  Build incomplete (reused dir): missing ${bm.missing.join(', ')} — re-run without --reuse-parse for a runnable build.`);
+    } else {
+      lines.push(`  build-manifest.json written — ${bm.contentHash}`);
+    }
+  } catch (e) {
+    return {
+      error: `Failed to write build manifest: ${e.message}`,
+      _formatted: [...lines, `  ✗ build manifest failed: ${e.message}`].join('\n'),
+    };
   }
 
   // Step 6: Print summary
@@ -355,6 +467,7 @@ export function runInit(excelPath, args) {
       ok: true,
       outputDir: absOutput,
       chunkedDir,
+      contentHash: buildContentHash,
       modelType: m?.model?.type,
       sheets: m ? (Object.keys(new Set((Object.keys(m.baseCaseOutputs || {}))) )).length : undefined,
       segments: m?.segments?.length || 0,
@@ -380,6 +493,15 @@ export function runInit(excelPath, args) {
     manifest: manifestResult.manifest,
     _formatted: lines.join('\n'),
   };
+}
+
+/** Best-effort tool version from package.json, for build-manifest provenance. */
+function readToolVersion() {
+  try {
+    return JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf-8')).version || null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

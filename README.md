@@ -343,7 +343,7 @@ Excel (.xlsx)
 
 ### Downstream contract artifacts
 
-`ete init` emits three small JSON files into `chunked/` so other apps can wire
+`ete init` emits a few small JSON files into `chunked/` so other apps can wire
 up the engine **by name, at build time** — without running the engine to
 discover which cells hold the outputs (and without shipping the silent-`NaN`
 bug you get from guessing the wrong cell):
@@ -353,6 +353,7 @@ bug you get from guessing the wrong cell):
 | **`named-outputs.json`** | `name → { cell, label, type, format, baseCaseValue, source, dependsOnNamedInputs }` | The contract for downstream apps. Look up `grossMOIC`, get its cell + base-case value, spot-check on import. If your observed value ≠ `baseCaseValue`, your cell map is stale — fail the build. |
 | **`named-inputs.json`** | `name → { cell, type, default, referencedBy, affectsOutputs }` | Drive `engine.run({ [cell]: value })` for what-ifs. `affectsOutputs` says which outputs to invalidate (don't regenerate the whole grid). Only Excel **defined-name** cells **read by ≥1 formula** are listed. |
 | **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label string from a numeric output, and a real `0` (present, `"number"`) from a never-computed cell (absent from this map). |
+| **`build-manifest.json`** | `{ layoutVersion, engine:{ entry, export }, contentHash, complete, artifacts[] }` | The locked artifact layout + a stable `contentHash` over the identity artifacts (engine.js, sheets/, _ground-truth.json, manifest.json). Pin a build by its `contentHash`; it's stable across rebuilds of the same workbook and changes on drift, so you reconcile deliberately, not per version. `complete:false` / `missingRequired` flag an unrunnable build. |
 | **`dependency-graph.json`** *(debug)* | `{ edges: cell → [cells it reads] }` | Cell-level forward edges (ranges expanded) — the raw material for the `dependsOnNamedInputs` / `affectsOutputs` closures above. **Removed from the default output** once those closures are baked into the named maps; it's the largest artifact on big models (ranges expand). Re-run `ete init --emit-debug` to keep it (plus `_graph.json` and the root `model-map.json`) for offline analysis or closure recomputation. |
 
 **Names come from the workbook's defined-name table** (the model owner's
@@ -367,7 +368,7 @@ heuristic detection. Regenerate without a re-parse:
 
 **Default output stays small.** `ete init` keeps only what consumers and the
 CLI actually read: the engine modules, `_ground-truth.json` (compact),
-`_labels.json`, the contract maps, and the manifest. The large
+`_labels.json`, the contract maps, the manifest, and `build-manifest.json`. The large
 intermediate/debug artifacts — the cell-level `dependency-graph.json`, the
 sheet-level `_graph.json`, and the root `model-map.json` (600+ MB on the
 biggest models) — are dropped after the closures are computed. The high-value
@@ -409,6 +410,7 @@ excel-to-engine/
 |---------|---------|
 | `lib/manifest.mjs` | Manifest schema, auto-generation, validation, cell resolvers, label search |
 | `lib/manifest-maps.mjs` | Downstream contract maps (named-outputs/inputs.json, cell-types.json) |
+| `lib/build-manifest.mjs` | Locked artifact layout + content hash (build-manifest.json) |
 | `lib/irr.mjs` | Newton-Raphson IRR with bisection fallback, XIRR for irregular dates |
 | `lib/waterfall.mjs` | American + European PE waterfall structures |
 | `lib/calibration.mjs` | Scale factor calibration against Excel targets |

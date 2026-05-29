@@ -1,8 +1,34 @@
 # excel-to-engine — Plan
 
-> **Next session: start at [`HANDOFF.md`](HANDOFF.md)** — prioritized backlog
-> (P0 cluster-once eval → generation robustness → `_fn()` coverage → refiner
-> fix → golden-master CI → …), current state, run commands, and gotchas.
+> **Next session: build on our refined contract mapping pipeline.** We successfully delivered Requests A, B, C, and D!
+
+## Status: P2 (#25 + #26) — contract maps, schedule extraction, and correctness gate — landed 2026-05-29
+
+The Mippy calibration-oracle contract now surfaces schedule fields, timelines,
+and investor-class distributions; pins drivable named-inputs; and ships a
+fallback audit with an opt-in correctness gate.
+
+- **Request A & B: Time-series schedules and distributions.** Pinned per-year schedules — `outstandingDebt`, `equityBase`, `freeCashFlow`, `distributionsToEquity`, and per-class arrays `classes[].distributions` — into `named-outputs.json` (gated on `manifest.timeline.columnMap`), each as a `cellRange` + `perYear[]`. `expandRange()` converts `Sheet!A10:H10` to discrete cells so schedules participate in the transitive closures (`dependsOnNamedInputs` / `affectsOutputs`).
+- **Request C: Drivable named inputs.** Added `exitMultiple`, `exitYearSelector`, and `hurdleRate` to `named-inputs.json` (`source: manifest-driver`). Pinned in the normal init path (the `.xlsx` is available); skipped under `--reuse-parse` without the workbook (follow-up).
+- **Request D: Fallback audit + opt-in gate.** A static scanner finds `_fn()` stubs across the generated sheet modules → `_fn-fallbacks.json`, and the closure of every named output/schedule is checked against it. It **reports** by default — affected outputs get `resolvesThroughFallback`, `stats.fallbackViolations` lists them, `ete init` warns — and **hard-fails only under `--assert-no-fallbacks`** (CI/golden-master gate). (Review fix: the gate first `throw`ew mid-emit and was swallowed by init, silently dropping the contract; now it emits all maps then surfaces the result.)
+
+## Status: P1 (#23 + #24) — runnable engine guaranteed — landed 2026-05-28
+
+A clean `ete init` on the real models now finishes and always yields a runnable
+engine, or fails loud. The chunked emitter writes `engine.js` **before** the
+cell-level dependency graph (which it depends on nothing for), and that graph is
+now **streamed** to disk instead of built as a full in-memory map + serialized
+string — the allocation that OOM-killed the parser on multi-million-cell models.
+`ete init` gained a configurable `--timeout` (default 1800s; the old fixed 10-min
+cap killed legitimate builds), verifies `engine.js` landed after a fresh parse,
+and emits `chunked/build-manifest.json` (#24): the locked canonical artifact set
++ a stable `contentHash` over the identity artifacts (engine.js, sheets/,
+_ground-truth.json, manifest.json) so a downstream consumer pins a build and
+detects drift. New `npm run test:runnable` + CI step.
+
+**Next (Mippy oracle, per HANDOFF):** P2 #25 (pin value-bearing MIP cells as
+named-outputs), P2 #26 (`_fn-fallbacks.json` correctness gate), then the
+supporting golden-master CI + refiner UW-Comparison fix + cluster-once eval.
 
 ## Status: PE-model accuracy benchmark + eval fixes — in progress 2026-05-28
 

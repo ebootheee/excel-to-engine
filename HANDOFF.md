@@ -20,12 +20,19 @@ sample-able engine + contract.
 (#18, ubuntu+windows), `refine` consumes `_labels.json` + lazy numerics (#19),
 single-GT-parse per `init` (#20).
 
-**Open PR — review/merge first:** **#21 `feat/next-wave`** (CI green). Contains
-the the PE model accuracy **benchmark + baseline**, a **per-sheet-eval Windows crash
-fix**, `searchByLabel` lazy numerics, **lib/ unit tests** (43), the
-**scoped cluster-convergence diff** + the first circular-cluster fixture/test,
-and the Mippy regeneration findings in ROADMAP. **If #21 isn't merged yet, branch
-off `feat/next-wave`; otherwise off `main`.**
+**Merged since this handoff:** **#21 `feat/next-wave`** + **#27** (privacy scrub)
+are now on `main`. #21 brought the PE model accuracy **benchmark + baseline**, a
+**per-sheet-eval Windows crash fix**, `searchByLabel` lazy numerics, **lib/ unit
+tests** (43), the **scoped cluster-convergence diff** + the first circular-cluster
+fixture/test, and the Mippy regeneration findings in ROADMAP.
+
+**This session:** **P1 (#23 + #24) and P2 (#25 + #26) are fully complete** (landed 2026-05-29). We've successfully delivered:
+- Time-series schedules and timelines (such as debt, equity base, cash flows, and investor class distributions) as `named-outputs`.
+- Coordinate range expansion (`expandRange()`) to support multi-cell range schedules as discrete transitive dependencies.
+- Key model drivers (`exitMultiple`, `exitYearSelector`, `hurdleRate`) written to `named-inputs.json` (normal init path; skipped under `--reuse-parse` w/o the workbook — follow-up).
+- A static fallback scanner → `_fn-fallbacks.json`, and a closure audit that flags any named output/schedule resolving through an `_fn()` stub. It **reports** by default (annotates outputs + `stats.fallbackViolations`; `ete init` warns) and **hard-fails only under `--assert-no-fallbacks`** — the real models still carry ~11,813 fallbacks, so a default-hard gate would block every build. A golden-master CI check should assert the list trends to empty as transpiler coverage improves.
+
+Next session: wire the **golden-master CI assert** (incl. `--assert-no-fallbacks`), then nice-to-haves — **P3 (#22)** output-cone scoping, deeper transpiler coverage, the refiner UW-Comparison fix, cluster-once eval. Two known follow-ups from this session: drivers under `--reuse-parse` w/o workbook, and schedule `baseCaseValue` summing balances (use `perYear`).
 
 **Baseline (real models, `npm run bench`):** Model A **84.3%**,
 Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
@@ -49,20 +56,21 @@ the old `the `engines/` model dirs`.
 
 All filed on ebootheee/excel-to-engine. Done-criteria are the contract.
 
-### P1 · #23 + #24 — reliably emit a runnable `engine.js` ★ blocks everything
-A clean `ete init` on a real model currently **does not finish**: the Rust parser
-is OOM-killed at the cell-level dependency-graph step, and `ete init` hits its
-10-min `spawnSync` cap → `engine.js` (the `run()` orchestrator) + the
-`dependency-graph.json` closures **don't land** (written after the OOM step).
-- **Done =** `chunked/engine.js` with `export function run()` exists on **every**
-  build; the build **errors hard** if it can't — **never a partial artifact**.
-- #24 also: **lock the artifact layout + emit a content hash** so downstream
-  consumes without per-version reconciliation.
-- Without a runnable engine we can't sample MIP to calibrate/validate — this
-  gates everything below.
-- Files: `pipelines/rust/` (dep-graph build: stream/incrementalize or raise
-  headroom; fail-loud), `cli/commands/init.mjs` (configurable timeout; don't
-  swallow a failed emit).
+### P1 · #23 + #24 — reliably emit a runnable `engine.js` ✅ DONE (2026-05-28, `feat/runnable-engine`)
+Was: a clean `ete init` on a real model **did not finish** — the chunked emitter
+built the cell-level dependency graph as a full in-memory map + serialized string
+(OOM on multi-million-cell models), and `engine.js` was emitted *after* it, so the
+runnable engine never landed; the fixed 10-min `spawnSync` cap compounded it.
+- **Fixed:** `emit_chunked` now writes `engine.js` **before** the dep-graph step
+  (it depends only on the sheet DAG + partitions); the dep-graph is **streamed**
+  to disk one entry at a time (`write_dependency_graph`) — the OOM fix.
+- `ete init --timeout <seconds>` (default 1800; `0` disables), verifies
+  `engine.js` after a fresh parse (fail loud, never partial; `--reuse-parse`
+  exempt), and emits `chunked/build-manifest.json` — locked layout + stable
+  `contentHash` over the identity artifacts (#24). `--quiet` carries `contentHash`.
+- Tests: `npm run test:runnable` (+ CI). New `lib/build-manifest.mjs`.
+- Files touched: `pipelines/rust/src/chunked_emitter.rs`, `cli/commands/init.mjs`,
+  `lib/build-manifest.mjs`, `cli/index.mjs`, `.github/workflows/ci.yml`.
 
 ### P2 · #25 — pin the value-bearing cells as named-outputs
 Per-class **MIP Proceeds**, **hurdle/threshold**, **participation %**, **equity

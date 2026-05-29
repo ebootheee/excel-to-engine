@@ -74,5 +74,8 @@ jobs:
       - name: Engine runtime contract
         run: npm run test:engine
 
+      - name: Runnable engine + build manifest
+        run: npm run test:runnable
+
       - name: Artifact slimming
         run: npm run test:slimming
