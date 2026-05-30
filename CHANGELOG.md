@@ -1,5 +1,55 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Analyst onboarding + coding-agent handoff (Wave 1)
+
+Reframes the toolkit around a non-technical finance user who wants to convert
+their Excel model — often to "build a web app for my LPs" — working through an AI
+assistant. Two halves: make the human on-ramp obvious, and make the developer
+handoff bundle so clear a coding agent can build from it immediately. Driven by
+running realistic synthetic models through the full pipeline and watching where
+trust breaks.
+
+### Coding-agent handoff bundle (emitted by `ete init`)
+- New `lib/integration-doc.mjs` → `chunked/INTEGRATION.md` (a guide tailored to
+  the specific model: `run()` API, input/output tables with base-case values,
+  a web-app wiring sketch) + a runnable `chunked/example.mjs` (base case + a real
+  what-if, with an automatic base-case drift check).
+- New `lib/verify-engine.mjs` (`verifyEngine`) — confirms `engine.run()`
+  reproduces the spreadsheet's base case for every named output.
+
+### Detector accuracy (trust at first glance)
+- **Periodicity** no longer mislabels a normal 5–7-year model as "monthly" (the
+  year-header detector only ever sees integer years → annual by construction).
+- **Exit multiple** prefers an *Exit*-labeled cell over the *Entry* one (was
+  first-match, usually grabbing entry); EBITDA-row detection skips
+  "… EBITDA Multiple / per share / margin" labels.
+- **Carry total** prefers a dollar-magnitude cell over the carry-*rate* fraction
+  (a "GP Carried Interest" = 0.20 assumption no longer masquerades as the total).
+  `ete manifest doctor` now flags a carry total that resolves to a fraction.
+
+### Onboarding (human + agent)
+- `README.md` rewritten to lead with the analyst + AI-assistant journey; Rust /
+  `cargo` moved to a one-time "manual setup" section behind `npm run build:parser`.
+- New `GETTING_STARTED.md` — the guided "walk me through it" companion with
+  copy-paste prompts and a "build a web app" handoff section.
+- `skill/SKILL.md` gains a **Guided onboarding** play (setup → convert →
+  sanity-check WITH the user → verify fidelity → hand off) + an engine-fidelity /
+  `run()` contract note documenting the intra-sheet *staircase* limitation and
+  the standard column=time, row=metric layout that avoids it. `CLAUDE.md` points
+  to it.
+- `scripts/check-env.mjs` rewritten: cross-platform (Windows `where` + `.exe`),
+  separates REQUIRED (Node, parser, deps) from OPTIONAL (eval, API key), prints
+  exact next-step commands. New `npm run build:parser`. Friendlier
+  "parser not found" error in `ete init`.
+
+### Tests / harness
+- `tests/personas/lib/model-builder.mjs` — synthetic `.xlsx` factory (bakes in
+  the SheetJS-ESM buffer-write gotcha and formula↔cached-value consistency) +
+  a realistic PE-buyout reference generator. The basis for persona usability
+  testing.
+- `tests/cli/test-onboarding.mjs` (11 assertions) wired into `npm test`: detector
+  fixes + bundle emission + `node example.mjs` + engine base-case fidelity.
+
 ## 2026-05-28 — Artifact slimming (Round 2, part 2)
 
 Round 2 of the Mippy request, #8: keep the default `chunked/` output small.

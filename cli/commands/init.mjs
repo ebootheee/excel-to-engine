@@ -69,9 +69,21 @@ export function runInit(excelPath, args) {
     const parserBin = parserPaths.find(p => existsSync(p));
 
     if (!parserBin) {
+      const hasCargo = (() => {
+        try { spawnSync('cargo', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
+      })();
+      const buildHint = hasCargo
+        ? '  npm run build:parser'
+        : (process.platform === 'win32'
+            ? '  1) Install Rust: https://rustup.rs/  (or: winget install Rustlang.Rustup)\n  2) npm run build:parser'
+            : "  1) Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n  2) npm run build:parser");
       return {
-        error: 'Rust parser not found. Build it first:\n  cd pipelines/rust && cargo build --release',
-        _formatted: 'Error: Rust parser not found.\n\nBuild it:\n  cd pipelines/rust && cargo build --release\n\nThen re-run:\n  ete init ' + excelPath,
+        error: 'Rust parser not found. Build it first: npm run build:parser',
+        _formatted:
+          'Error: the one-time Rust parser build is missing.\n\n' +
+          'This is the only build step. Run:\n' + buildHint + '\n\n' +
+          'Then re-run:\n  node cli/index.mjs init ' + excelPath + ' --output <dir>\n\n' +
+          '(Check your environment any time with:  npm run check-env)',
       };
     }
 

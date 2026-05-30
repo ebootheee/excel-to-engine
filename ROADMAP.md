@@ -1,5 +1,32 @@
 # excel-to-engine — Roadmap
 
+## Now — Analyst usability + coding-agent handoff (2026-05-29)
+
+Make the toolkit genuinely usable by a non-technical finance analyst (PE/VC/RE/
+IB/corp-dev) working through an AI assistant, end-to-end to a web-app handoff.
+
+**Wave 1 — done (branch `feat/analyst-onboarding`):**
+- Coding-agent handoff bundle from `ete init`: `chunked/INTEGRATION.md` +
+  runnable `chunked/example.mjs`; `lib/verify-engine.mjs` (base-case fidelity).
+- Detector accuracy: annual periodicity; exit-multiple prefers Exit over Entry;
+  carry total prefers dollar over the rate fraction (+ doctor guard).
+- Onboarding: README reframe, `GETTING_STARTED.md`, guided play in `skill/SKILL.md`,
+  cross-platform `check-env`, `npm run build:parser`.
+- `tests/personas/` synthetic-model harness + `tests/cli/test-onboarding.mjs`.
+
+**Open (next waves):**
+- Generate a persona-matrix of synthetic models (asset class × skill × seniority)
+  and run simulated-journey scoring loops; iterate on whatever blocks the
+  end-to-end benchmark.
+- Engine fidelity: intra-sheet topological ordering so cross-row "staircase"
+  schedules (opening = prior row's closing) compute correctly — currently only
+  the standard column=time / row=metric layout is evaluation-safe. Touches the
+  Rust emitter; gate with smoke + engine suites (Mippy depends on `run()`).
+- Summary clarity: separate revenue vs cost segments (cost rows currently appear
+  under "Revenue Segments" and inflate "Platform EBITDA"); friendlier empty-equity
+  messaging.
+- `npx ete` / `npm link` ergonomics so users type `ete` not `node cli/index.mjs`.
+
 ## Now — Engine-integration contract (Mippy request, 2026-05-27)
 
 Surfaced by a production consumer wiring the chunked engine into a Tier-1

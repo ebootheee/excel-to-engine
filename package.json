@@ -37,6 +37,7 @@
   "scripts": {
     "setup": "npm install && cd eval && npm install && echo 'Setup complete. Build Rust parser: cd pipelines/rust && cargo build --release'",
     "check-env": "node scripts/check-env.mjs",
+    "build:parser": "cd pipelines/rust && cargo build --release",
     "smoke": "node pipelines/rust/tests/smoke-chunked.mjs",
     "test:engine": "node pipelines/rust/tests/test-engine-runtime.mjs",
     "test:depgraph": "node pipelines/rust/tests/test-dependency-graph.mjs",
