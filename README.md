@@ -4,6 +4,7 @@
 > JavaScript bundle your developer (or AI coding agent) can drop into a web app.
 > **You don't have to be a programmer to use it.**
 
+[![CI](https://github.com/ebootheee/excel-to-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/ebootheee/excel-to-engine/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ---
@@ -242,17 +243,126 @@ handoff bundle (`INTEGRATION.md` + `example.mjs`) into the output folder.
 
 ### Downstream contract artifacts
 
-`ete init` emits small JSON files so an app can wire up the engine **by name, at
-build time** — without running it to discover which cells hold the outputs:
+`ete init` emits a few small JSON files into `chunked/` so other apps can wire
+up the engine **by name, at build time** — without running the engine to
+discover which cells hold the outputs (and without shipping the silent-`NaN`
+bug you get from guessing the wrong cell):
 
 | File | Shape | Use |
 |------|-------|-----|
-| **`named-outputs.json`** | `name → { cell, baseCaseValue, format, dependsOnNamedInputs }` | The answers your UI shows. Spot-check `run().values[cell]` vs `baseCaseValue`. |
-| **`named-inputs.json`** | `name → { cell, default, affectsOutputs }` | The levers. Drive `run({ [cell]: value })`. |
-| **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label from a number, a real `0` from a never-computed cell. |
-| **`INTEGRATION.md`** + **`example.mjs`** | docs + runnable demo | The developer/coding-agent on-ramp. |
+| **`named-outputs.json`** | `name → { cell, label, type, format, baseCaseValue, source, dependsOnNamedInputs }` | The contract for downstream apps. Look up `grossMOIC`, get its cell + base-case value, spot-check on import. If your observed value ≠ `baseCaseValue`, your cell map is stale — fail the build. Time-series outputs are `type:"schedule"` with `cellRange` + `perYear:[{year,value}]`; their scalar `baseCaseValue` is a life-to-date `sum` for flows and the `terminal` level for balances (`aggregation` says which) — `perYear` is authoritative. |
+| **`named-inputs.json`** | `name → { cell, type, default, referencedBy, affectsOutputs }` | Drive `engine.run({ [cell]: value })` for what-ifs. `affectsOutputs` says which outputs to invalidate (don't regenerate the whole grid). Lists Excel **defined-name** cells **read by ≥1 formula** plus the model drivers `exitMultiple` / `exitYearSelector` / `hurdleRate` (`source:"manifest-driver"`, derived from the manifest + ground truth, so they emit even without the `.xlsx`). |
+| **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label string from a numeric output, and a real `0` (present, `"number"`) from a never-computed cell (absent from this map). |
+| **`build-manifest.json`** | `{ layoutVersion, engine:{ entry, export }, contentHash, complete, artifacts[] }` | The locked artifact layout + a stable `contentHash` over the identity artifacts (engine.js, sheets/, _ground-truth.json, manifest.json). Pin a build by its `contentHash`; it's stable across rebuilds of the same workbook and changes on drift, so you reconcile deliberately, not per version. `complete:false` / `missingRequired` flag an unrunnable build. |
+| **`dependency-graph.json`** *(debug)* | `{ format:"cell-dependency-edges-v2", edges: cell → [cells/ranges it reads] }` | Cell-level forward edges — the raw material for the `dependsOnNamedInputs` / `affectsOutputs` closures above. Ranges are kept as **compact tokens** (`Sheet!A1:B10`), not expanded to interior cells: full expansion was 37 GB / ~7 min on the real models and OOM-killed the closure-baking step (#32); the compact form is ~0.5 GB. Written **one edge per line** (still valid JSON) so a >512 MiB graph can be read line-by-line without exceeding Node's max string length. Consumers expand a token lazily against the cells they care about. **Removed from the default output** once the closures are baked into the named maps; re-run `ete init --emit-debug` to keep it (plus the root `model-map.json`) for offline analysis or closure recomputation. |
 
----
+**Names come from the workbook's defined-name table** (the model owner's
+curated named cells) when present — these are authoritative and override
+heuristic detection. Regenerate without a re-parse:
+`ete manifest maps ./my-model/chunked/ --excel model.xlsx`.
+
+> Note: the **defined-name** inputs and defined-name enrichment of outputs
+> require the source `.xlsx`. Without it (e.g. `--reuse-parse` against an
+> already-parsed dir), outputs + cell-types + the **manifest-driver** inputs
+> (`exitMultiple` / `exitYearSelector` / `hurdleRate`) still emit from the
+> manifest and ground truth; only the defined-name inputs are skipped.
+
+**Default output stays small.** `ete init` keeps only what consumers and the
+CLI actually read: the engine modules, `_ground-truth.json` (compact),
+`_labels.json`, the sheet-level `_graph.json` (3 KB — topo order + clusters, read
+by the per-sheet eval), the contract maps, the manifest, and
+`build-manifest.json`. The large intermediate/debug artifacts — the cell-level
+`dependency-graph.json` (~0.5 GB) and the root `model-map.json` (600+ MB on the
+biggest models) — are dropped after the closures are computed. The high-value
+data survives as the closures inside the named maps. Pass `--emit-debug` to
+retain `dependency-graph.json`.
+
+**Golden-master gate.** `eval/golden-master.mjs` (run via `npm run golden <chunkedDir>`)
+is the post-build assert for these artifacts: with `--assert-no-fallbacks` it
+fails if any return/value output resolves through an unsupported-function (`_fn`)
+stub, and with `--canonical <file>` it diffs `named-outputs.baseCaseValue`s
+against a canonical returns map to **full float precision**. CI runs it on a
+synthetic fixture (`npm run test:golden`); point it at a real build with
+`ETE_GOLDEN_DIR` + a gitignored `canonical-returns.json` to verify a regenerated
+model still reproduces the hand-port's gross/net MOIC & IRR exactly.
+
+### Lazy engine for large models (`--lazy-engine`)
+
+The default `engine.js` statically imports every per-sheet module, so
+`import('engine.js')` pulls **all** of them into memory (hundreds of MB on the
+big PE models — dominated by a couple of monster sheets) before `run()` can be
+called. For a consumer that only needs to *sample* the model (the calibration-
+oracle use case), that load is the wall.
+
+`ete init --lazy-engine` emits an engine that imports sheet modules **on demand**:
+
+```js
+import engine from './my-model/chunked/engine.js';
+
+// Load only what you need, then run() synchronously (same return shape as always).
+await engine.load({ cells: ['Returns!D22', 'Returns!E22'] }); // loads just the
+                                                               // dependency cone
+const { values, meta } = engine.run({ 'Assumptions!B3': 18 });  // override + run
+
+// Or do both in one call:
+const r = await engine.runScoped({ 'Assumptions!B3': 18 }, { cells: ['Returns!D22'] });
+```
+
+- **`load(options)`** — `{ sheets: [...] }` and/or `{ cells: ['Sheet!A1', ...] }`
+  loads only those sheets plus their transitive dependency closure (whole
+  circular clusters are pulled in as a unit). No options ⇒ load everything (still
+  lazy, but complete). To scope to named outputs, map their names → cells via
+  `named-outputs.json`, then pass `cells`.
+- **`run(inputs, options)`** — unchanged synchronous semantics; throws if called
+  before anything is loaded. Sheets outside the loaded cone are simply skipped.
+- **`runScoped(inputs, options)`** — `await load(options)` then `run(inputs, options)`.
+
+The **default build is unchanged** — `engine.js` stays eager and `run()` stays
+synchronous, so existing integrations are untouched. `--lazy-engine` is purely
+opt-in. (Per-sheet modules are emitted either way; the flag only changes how
+`engine.js` loads them.)
+
+### The Delta Cascade
+
+When you run a scenario, the CLI doesn't re-execute the full engine (which can take 10+ minutes on large models). Instead, it:
+
+1. Reads base case values from ground truth (instant — JSON lookup)
+2. Applies your adjustments to the annual P&L
+3. Recomputes the chain: **exit EBITDA → terminal value → exit equity → MOIC → IRR → carry**
+4. Uses `lib/irr.mjs` (Newton-Raphson) and `lib/waterfall.mjs` (American/European PE structures) for returns
+
+This is a first-order approximation — accurate for linear sensitivities (revenue %, cost %, multiple changes, exit timing, leverage). For highly non-linear scenarios (MIP triggers, complex pref compounding), use the full chunked engine.
+
+### Project Structure
+
+```
+excel-to-engine/
+├── cli/                         # The `ete` command
+│   ├── index.mjs                # Entry point + arg parsing
+│   ├── commands/                # init, summary, query, pnl, scenario, sensitivity, compare, manifest
+│   ├── extractors/              # date-detector, annual-aggregator, segment-detector, waterfall-detector, line-item-resolver
+│   └── solvers/                 # delta-cascade (financial math), scenario-engine (orchestrator)
+├── skill/SKILL.md               # Claude Code skill (PE language → CLI translation)
+├── pipelines/
+│   ├── rust/                    # Excel → JS transpiler (8 Rust modules, ~60 Excel functions)
+│   └── js-reasoning/            # Claude-driven pipeline for smaller models
+├── eval/                        # Blind eval, per-sheet eval, golden-master gate, auto-iteration
+├── lib/                         # Financial libraries (IRR, waterfall, calibration, sensitivity, manifest)
+└── tests/cli/                   # 166 tests (34 integration + 132 use-case scenarios)
+```
+
+### Libraries
+
+| Library | Purpose |
+|---------|---------|
+| `lib/manifest.mjs` | Manifest schema, auto-generation, validation, cell resolvers, label search |
+| `lib/manifest-maps.mjs` | Downstream contract maps (named-outputs/inputs.json, cell-types.json) |
+| `lib/build-manifest.mjs` | Locked artifact layout + content hash (build-manifest.json) |
+| `lib/irr.mjs` | Newton-Raphson IRR with bisection fallback, XIRR for irregular dates |
+| `lib/waterfall.mjs` | American + European PE waterfall structures |
+| `lib/calibration.mjs` | Scale factor calibration against Excel targets |
+| `lib/sensitivity.mjs` | Surface extraction, slope comparison, breakpoint detection |
+| `lib/excel-parser.mjs` | Cell reading, sheet fingerprinting, year detection, field mapping |
 
 ## Accuracy
 

@@ -176,6 +176,14 @@ Silently falls through to a normal parse if `chunked/_ground-truth.json` is
 missing — safe to default on when iterating. Turns the tighten-the-manifest
 loop from minutes to seconds.
 
+The refine step inside that loop is also faster on big models: it reads labels
+from the parser's `chunked/_labels.json` and probes only the matched rows for
+values, instead of indexing every cell (it used to scan the whole ground truth,
+including giant unlabeled grids it never consults). And `init` now parses the
+ground truth **once** and shares it across generate → refine → doctor → maps,
+instead of each step re-parsing the full 200 MB+ file. Transparent — same
+commands, same results.
+
 **Default output is slim.** `ete init` drops the large debug/intermediate
 artifacts (`dependency-graph.json`, `_graph.json`, root `model-map.json`) once
 the dependency closures are baked into `named-outputs.json` / `named-inputs.json`.
@@ -331,6 +339,20 @@ If the manifest has an `invariants` block, doctor enforces it. Schema:
 **Read invariants like a warning siren.** If doctor fails because an invariant fires, do NOT override it by mechanically following "use the combined model" or similar heuristics — the invariant exists because that heuristic has produced the wrong answer before. Fix the cell reference to match the invariant, or ask the user before overriding. When you add new cell mappings that should never regress, add an invariant rather than relying on a comment that agents will re-interpret away.
 
 String-equality only — no regex. If `path` resolves to an aggregate object, its JSON-stringified form is compared.
+
+**Returns belong on the canonical actuals tab, not the underwriting projection.** The refiner now ranks a "Version Tracker" / "Track Record" tab above an underwriting "UW Comparison" tab automatically (`refineSheetTier`), so returns pin to the actuals tab without per-model pinning. For a model where this distinction matters, also encode it as a durable invariant so a future re-map can't slip past doctor:
+
+```json
+{
+  "invariants": [
+    {
+      "path": "equity.classes[0].grossIRR",
+      "forbid": ["UW Comparison!C12"],
+      "note": "Gross IRR must bind to the canonical Version Tracker (actuals), not the UW Comparison projection."
+    }
+  ]
+}
+```
 
 ### 2b. When to Use Python Over the CLI
 

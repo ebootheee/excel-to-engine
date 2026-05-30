@@ -37,6 +37,203 @@ emitter, gated by smoke + engine suites — Mippy depends on `run()`); per-year
 time-series outputs (debt/covenant monitors); non-defined-name driver levers
 (corporate budget); model-type classification (lens already compensates for
 display). See `tests/personas/FINDINGS.md`.
+> **Next session:** a clean **full `ete init`** now completes end-to-end on the
+> real Outpost A-1/A-2 models — the last two regen blockers are fixed. **#32**: the
+> cell-level dependency graph no longer expands ranges (37 GB / 7 min → ~0.5 GB
+> compact tokens), so the JS closure-baking step parses it without OOM; closures
+> are computed by a range-aware indexed BFS and `ete init` re-execs with a 12 GB
+> heap. **#33**: `generate_sheet_module` streams to the file instead of building a
+> `Vec<String>` + join. Both A-1 and A-2 regenerated; see `benchmarks/BASELINE.md`.
+> **Still open:** the #33 returns-cone shrink needs **cluster-breaking** (the
+> returns sit in a 17-of-20-sheet atomic cluster) — coupled to **cluster-once
+> eval**; the manifest pipeline's full-GT O(N) passes (generate/refine/doctor) are
+> the remaining build-time cost; deeper transpiler coverage (11,813 `_fn`).
+
+## Status: `ete init` completes on the real models + A-1/A-2 regenerated + benchmarked (#32, #33) — landed 2026-05-29
+
+A clean **full `ete init`** now runs end-to-end on both Outpost models and emits a
+complete, Mippy-consumable contract. **#32** (three layered fixes): compact range
+tokens (37 GB → ~0.5 GB), newline-delimited graph + a chunked streaming loader
+(~0.5 GB still exceeds Node's 512 MiB string cap — `readFileSync` was silently
+dropping the closures), and per-output range-token dedup (closure bake ~15 min →
+~2.6 min); plus a 12 GB `init` heap re-exec guard. **#33**: streamed sheet-module
+writer (no `Vec<String>`+join). Also fixed a slimming bug that dropped the 3 KB
+`_graph.json` the benchmark needs; added `scripts/verify-contract.mjs`.
+
+**Regenerated A-1 + A-2 (~21 min each):** both pass `verify-contract` —
+**closures baked 17/17 and 18/18** (A-2's 539 MB graph was the exact prior failure
+case). **Accuracy 98.0% / 97.8%** standalone, live recompute (up from 84.3% /
+85.5% on the older build; cluster + 190 MB PP&E still skipped). Build mem: emit
+~2.4 GB, closure-bake ~7.4 GB. `golden-master --assert-no-fallbacks` shows the
+returns resolve through 4 untranspiled functions (`XNPV`, `FILTER`, `MINIFS`,
+`MAXIFS`) — the concrete next transpiler-coverage target. **Remaining build cost:**
+the manifest pipeline's full-GT O(N) passes (generate/refine/doctor) +
+`collectFileFallbacks` reading the monster modules now dominate `ete init`.
+
+## Status: Chunked-build scaling walls closed (streamed emit + borrowed partitions + opt-in lazy engine) — landed 2026-05-29
+
+With the partition hang fixed, a clean build got *past* partitioning but then the
+module-emit step drove the parser past 18 GB (it materialized all ~800 MB of
+generated module strings before writing any), and even a complete ~800 MB engine
+was slow to *run* (eager imports). Three walls (#22) closed:
+
+- **Wall C — streamed emit (`chunked_emitter.rs`).** Each sheet module is written
+  to disk the instant it's generated and the string dropped, instead of
+  collect-all-then-write; heavy sheets (≥200k formulas) emit one-at-a-time, light
+  ones in parallel. Peak emit memory ≈ one monster module, not the whole output.
+- **Wall B — borrowed partitions (`sheet_partition.rs`).** `SheetPartition<'a>`
+  holds `Vec<&'a CellData>` instead of cloning ~6M cells; removes the second
+  full copy that doubled peak memory during emit.
+- **Wall A — opt-in `--lazy-engine` (`chunked_emitter.rs`, `main.rs`, `cli/`).**
+  Emits a chunked `engine.js` whose sheet modules load on demand via async
+  `load()`/`runScoped()` with output-cone scoping; sync `run()` is preserved
+  (guarded against pre-load calls). **Default engine.js is unchanged** (eager +
+  sync) — the Mippy contract and all in-repo consumers are untouched. Eager/lazy
+  share the `run()` body, so they can't drift.
+
+New `npm run test:lazy-engine` (19) + CI. Validated: `cargo test` 17/17, `smoke`
+78/78, `test:engine`/`test:runnable`/`test:depgraph` 21/20/11, `test:lazy-engine`
+19/19, `test:slimming`/`test:golden` 13/20, full `npm test`, `ete init
+--lazy-engine` e2e. **Residual (deferred):** `generate_sheet_module` still builds
+a `Vec<String>` then joins (~2× a monster transiently), and a single monster
+module is still heavy to import — row-chunking the monster sheets is the next step.
+
+## Status: Chunked-build partition hang fixed — landed 2026-05-29
+
+A clean `ete init` on the full models hung ~12h in the chunked emitter, right
+after `[chunked] Partitioning N sheets...`. The stall was **inside
+`partition_sheets`** (sheet_partition.rs), *before* the dependency-graph step
+that P1 (#23) addressed — so P1's streaming fix exposed it as the next wall.
+
+- **Cause:** `partition_sheets` only needs sheet-level edges, but called the
+  range-expanding `extract_refs`. After Round 2 (`59810f6`) taught `is_cell_ref`
+  to accept ranges, that exploded every range to ≤1000 cell strings per formula
+  (pushed + de-duped), then threw away all the same-sheet ones. ~10⁹ throwaway
+  allocations on the 1.62M-formula PP&E sheet → swap thrash.
+- **Fix:** new `collect_sheet_deps()` records just referenced sheet *names* (no
+  expansion, no per-cell allocation); `detect_intra_sheet_cycles` switched to a
+  new `extract_refs_shallow()` (the same blowup would have hit the sheet-module
+  phase next). `write_dependency_graph` keeps the full expander, so the
+  dependency-graph contract is unchanged. ~2000× faster on range-heavy formulas
+  (synthetic parity test).
+- **Validated:** `cargo test` 17/17, `smoke` 78/78, `test:depgraph` 11/11,
+  `test:runnable` 20/20, `test:engine` 21/21, full `npm test`.
+
+## Status: Golden-master gate + P2 follow-ups — landed 2026-05-29
+
+A trustworthiness pass closing out the P2 contract work.
+
+- **Golden-master CI assert.** `eval/golden-master.mjs` + `npm run test:golden`
+  + a dedicated CI step: asserts no return/value output resolves through an `_fn`
+  stub (`--assert-no-fallbacks`) and diffs `named-outputs.baseCaseValue`s against
+  canonical returns to full float precision. CI runs a synthetic committed
+  fixture; the proprietary figures stay gitignored and are diffed only when
+  `ETE_GOLDEN_DIR` points at the real model.
+- **Refiner Version-Tracker fix.** `refineSheetTier` ranks canonical actuals
+  (Version Tracker / Track Record) above an underwriting "UW Comparison" tab, so
+  returns pin to the canonical tab without per-model pinning. Invariant trip-wire
+  pattern documented in `skill/SKILL.md`.
+- **Schedule `baseCaseValue` correctness.** Balances (debt, equity base/NAV) use
+  the terminal level; flows keep the life-to-date sum; a new `aggregation` field
+  records which. `perYear[]` stays authoritative.
+- **Drivers under `--reuse-parse`.** The manifest-driver inputs (`exitMultiple` /
+  `exitYearSelector` / `hurdleRate`) now emit even without the workbook (they
+  derive from manifest + ground truth); only the defined-name inputs need the
+  `.xlsx`.
+
+## Status: P2 (#25 + #26) — contract maps, schedule extraction, and correctness gate — landed 2026-05-29
+
+The Mippy calibration-oracle contract now surfaces schedule fields, timelines,
+and investor-class distributions; pins drivable named-inputs; and ships a
+fallback audit with an opt-in correctness gate.
+
+- **Request A & B: Time-series schedules and distributions.** Pinned per-year schedules — `outstandingDebt`, `equityBase`, `freeCashFlow`, `distributionsToEquity`, and per-class arrays `classes[].distributions` — into `named-outputs.json` (gated on `manifest.timeline.columnMap`), each as a `cellRange` + `perYear[]`. `expandRange()` converts `Sheet!A10:H10` to discrete cells so schedules participate in the transitive closures (`dependsOnNamedInputs` / `affectsOutputs`).
+- **Request C: Drivable named inputs.** Added `exitMultiple`, `exitYearSelector`, and `hurdleRate` to `named-inputs.json` (`source: manifest-driver`). Pinned in the normal init path (the `.xlsx` is available); skipped under `--reuse-parse` without the workbook (follow-up).
+- **Request D: Fallback audit + opt-in gate.** A static scanner finds `_fn()` stubs across the generated sheet modules → `_fn-fallbacks.json`, and the closure of every named output/schedule is checked against it. It **reports** by default — affected outputs get `resolvesThroughFallback`, `stats.fallbackViolations` lists them, `ete init` warns — and **hard-fails only under `--assert-no-fallbacks`** (CI/golden-master gate). (Review fix: the gate first `throw`ew mid-emit and was swallowed by init, silently dropping the contract; now it emits all maps then surfaces the result.)
+
+## Status: P1 (#23 + #24) — runnable engine guaranteed — landed 2026-05-28
+
+A clean `ete init` on the real models now finishes and always yields a runnable
+engine, or fails loud. The chunked emitter writes `engine.js` **before** the
+cell-level dependency graph (which it depends on nothing for), and that graph is
+now **streamed** to disk instead of built as a full in-memory map + serialized
+string — the allocation that OOM-killed the parser on multi-million-cell models.
+`ete init` gained a configurable `--timeout` (default 1800s; the old fixed 10-min
+cap killed legitimate builds), verifies `engine.js` landed after a fresh parse,
+and emits `chunked/build-manifest.json` (#24): the locked canonical artifact set
++ a stable `contentHash` over the identity artifacts (engine.js, sheets/,
+_ground-truth.json, manifest.json) so a downstream consumer pins a build and
+detects drift. New `npm run test:runnable` + CI step.
+
+**Next (Mippy oracle, per HANDOFF):** P2 #25 (pin value-bearing MIP cells as
+named-outputs), P2 #26 (`_fn-fallbacks.json` correctness gate), then the
+supporting golden-master CI + refiner UW-Comparison fix + cluster-once eval.
+
+## Status: PE-model accuracy benchmark + eval fixes — in progress 2026-05-28
+
+Standing up the multi-wave "next wave" effort on `feat/next-wave`, keystone
+first: a repeatable accuracy + efficacy benchmark over the real PE models
+(`benchmarks/bench.mjs` → `benchmarks/BASELINE.md`, aggregate-only).
+
+**Baseline:** Model A 84.3%, Model B 85.5% on standalone sheets; the
+17-sheet circular cluster and the 190 MB PP&E sheet are skipped pending deeper
+fixes. Landed alongside: a **Windows crash fix** in `per-sheet-eval` (bare
+absolute ESM import → `pathToFileURL`; it had silently zeroed accuracy on
+Windows/real engines and wasn't in CI — now guarded by `test-per-sheet-eval`),
+a `--skip-clusters` flag, and the **searchByLabel lazy-numerics** wave
+(query/carry stop scanning the full GT for adjacent values).
+
+**Wave status (this branch):**
+- ✅ Keystone benchmark + baseline; ✅ searchByLabel (query/carry).
+- 🔜 Accuracy blockers — now precisely diagnosed: single-pass orchestrator eval
+  for the 17-sheet cluster (it's re-run once per member today), large-sheet eval
+  (190 MB PP&E > 150 MB limit), array formulas (the Headcount sheet lives inside
+  the cluster). `_computed-values.json` is a GT copy — not an accuracy source.
+- 🔜 Manifest-pipeline perf (generate detectors / maps cell-types on ~6M cells).
+- 🔜 Polish→Publish (lib/ unit tests, npm publish prep, example project,
+  contributing guide).
+
+## Status: single GT parse per init — landed 2026-05-28
+
+`ete init` now loads the ground truth once and shares the parsed object across
+the whole manifest pipeline — generate → refine → doctor → maps — instead of
+each step re-reading and re-parsing the full ground truth from disk (up to four
+parses of a 200 MB+ file; ~3.6 s per parse on the real PE models). This was
+the dominant cost of init on large models and the real driver behind the
+"~2.5 min" refine loop. The GT is read-only in all four consumers, so a single
+shared object is safe; each command falls back to loading the GT itself when no
+injection is supplied (standalone `ete manifest …` is unchanged). New
+`test-init-shared-gt.mjs` (8) proves each consumer honors the injected GT and
+never touches disk for it.
+
+This closes the refine-perf thread opened by the label-index work; Tier B (the
+row-values artifact) was measured on the real ~200 MB models and deprioritized
+(they're dense-label, so it'd be only ~1.6× while inflating output ~60% — see
+ROADMAP). Remaining follow-up: apply the same lazy-numerics path to
+`searchByLabel` (`query`/`carry`).
+
+## Status: refine label-index optimization — landed 2026-05-28
+
+`ete manifest refine` now sources labels from the parser's `_labels.json`
+(O(labels), no full GT scan) and resolves same-row numerics lazily by probing,
+instead of bucketing every numeric in the workbook up front (`buildIndex`). The
+giant unlabeled grids that dominate big models — the very thing that made refine
+slow — are no longer touched. Behavior-preserving (rankings unchanged; suites
+green). New `tests/cli/test-refine-label-index.mjs` (14) proves consumption +
+parity. The remaining cost floor is the ground-truth JSON parse; lifting that
+would need a parser-emitted row-values artifact (Tier B). The same lazy-numerics
+treatment is still open for `searchByLabel` (the `query`/`carry` path), and the
+per-command GT re-parse multiplier in `init` (generate → refine → doctor → maps
+each reload the GT) remains a separate follow-up.
+
+## Status: Continuous integration — landed 2026-05-28
+
+`.github/workflows/ci.yml` runs the full test matrix (Rust build + 11 unit
+tests, the 7 JS suites = 132 assertions, and smoke/depgraph/engine/slimming)
+on `ubuntu-latest` + `windows-latest` for every push/PR to `main`. Nothing
+guarded the suite on push before. First item of the Polish→Publish phase
+checked off; the rest (lib/ unit tests, npm publish prep, example project,
+contributing guide) remain.
 
 ## Status: Artifact slimming (Round 2, part 2) — landed 2026-05-28
 
@@ -287,8 +484,10 @@ excel-to-engine/
 - [ ] Wide sheet column disambiguation for blind eval
 
 ## Next Phase — Polish + Publish
-- [ ] Unit tests for all lib/ modules
-- [ ] GitHub Actions CI
+- [x] Unit tests for all lib/ modules — `tests/lib/test-lib.mjs` (43: irr,
+      waterfall, calibration, sensitivity), in `npm test`/CI (2026-05-28)
+- [x] GitHub Actions CI — `.github/workflows/ci.yml` (ubuntu + windows; Rust
+      build/tests + JS suite + smoke/depgraph/engine/slimming), landed 2026-05-28
 - [ ] npm publish preparation
 - [ ] Example project with synthetic data
 - [ ] Contributing guide

@@ -111,6 +111,527 @@ trust breaks.
   testing.
 - `tests/cli/test-onboarding.mjs` (11 assertions) wired into `npm test`: detector
   fixes + bundle emission + `node example.mjs` + engine base-case fidelity.
+## 2026-05-29 — Compact dependency graph + streamed module writer: `ete init` completes on the real models (#32, #33)
+
+With the #22 scaling walls closed, the **Rust parser** finished on the real
+models — but a full `ete init` (parser + JS manifest pipeline) still could not.
+Two follow-ups surfaced by regenerating the gitignored Outpost A-1/A-2 engines,
+now fixed; a clean `ete init` runs end-to-end and the contract maps land.
+
+- **#32 — compact dependency graph (was 37 GB / 7 min → ~0.5 GB).** The
+  cell-level `dependency-graph.json` expanded every range to its interior cells:
+  `SUM(A1:A1000)` became 1000 edge strings. On A-1 that was **37 GB / ~7 min**,
+  and `ete init`'s closure-baking step then `JSON.parse`d it back into Node →
+  guaranteed OOM. The emitter now keeps ranges as **compact tokens**
+  (`Sheet!A1:B10`) via a new `extract_refs_ranges` / `RangeMode::Keep`
+  (`dependency.rs`, `chunked_emitter.rs`); the graph is **504 MB (A-1) / 532 MB
+  (A-2)** — ~70× smaller — and parses without OOM. Schema bumped to
+  `cell-dependency-edges-v2`.
+- **#32 — newline-delimited graph + streaming loader (the >512 MiB string cap).**
+  Even at ~0.5 GB the graph still broke `readFileSync(path,'utf-8')`: Node caps a
+  *string* at ~512 MiB, so the 532 MB A-2 graph threw "Cannot create a string
+  longer than 0x1fffffe8 characters" — caught and silently skipped, so the
+  closures never baked. The emitter now writes **one edge per line** (still valid
+  JSON), and `loadDependencyEdges` (`lib/manifest-maps.mjs`) reads it in 64 MB
+  chunks with a `StringDecoder`, `JSON.parse`-ing each small line — no >512 MiB
+  string ever exists. Tested on both the whole-file and forced-streaming paths.
+- **#32 — range-aware closure BFS + range-token dedup (`lib/manifest-maps.mjs`).**
+  The two consumers (`dependsOnNamedInputs`/`affectsOutputs` closures + the `_fn`
+  fallback audit) expand a range token **lazily** against three column-indexed
+  structures (formula-cell keys, named-input cells, fallback cells) with
+  binary-search interval queries — identical closures, no materialization, graph
+  read once, both consumers in one pass (`computeOutputClosures`). Crucially, each
+  output's BFS expands a given range token **once** (`seenRanges`): on A-1 the
+  3.7M range refs collapse to ~1M distinct tokens, and expanding with repeats
+  touches **2.8 billion** cells vs **34 million** distinct — the ~84× blowup that
+  made the per-output closure pass take ~15 min; it's now ~2.6 min. New
+  `extract_refs_ranges` Rust test + closure-through-a-range + streaming-loader
+  tests.
+- **#32 — `ete init` heap guard (`cli/index.mjs`).** Baking closures on a
+  ~6M-cell model peaks at ~7.4 GB (graph + ground truth + indexes + BFS), over
+  Node's ~4 GB default — and 8 GB left no margin. `init` now re-execs itself once
+  with a **12 GB** old-space (`--max-old-space-size`, gated to `init`, opt out
+  `ETE_NO_REEXEC=1`, size `ETE_INIT_HEAP_MB`) so a consumer never has to know to
+  pass `NODE_OPTIONS`.
+- **Slimming keeps `_graph.json` (`cli/commands/init.mjs`).** The default slim
+  dropped the 3 KB sheet-level `_graph.json` claiming nothing read it — but
+  `eval/per-sheet-eval.mjs` reads it for circular-cluster membership, so the
+  benchmark was silently mis-scoring cluster sheets. Only the ~0.5 GB
+  `dependency-graph.json` is slimmed now.
+- **#33 — streamed sheet-module writer (`chunked_emitter.rs`).**
+  `generate_sheet_module` built a `Vec<String>` of every line then `.join("\n")`
+  — for a monster sheet (PP&E ~190 MB of JS) that held the line vector *and* the
+  joined string at once (~2× transiently). `write_sheet_module<W: Write>` now
+  streams each line straight to the file's buffered writer; live memory is one
+  transpiled cell expression plus the writer buffer, regardless of module size.
+  Emit peak on the real build stays ~2.4 GB. Output is byte-identical.
+- **#33 — cone-shrinking deferred (documented).** The other #33 direction —
+  shrinking the `--lazy-engine` returns cone — needs **cluster-breaking**: the
+  returns sit in a 17-of-20-sheet circular cluster that loads atomically (incl.
+  all 3 monster modules), so row-chunking alone can't shrink it (the issue's own
+  analysis). That's correctness-sensitive and coupled to cluster-once eval; left
+  as a tracked follow-up rather than risk the eager engine Mippy consumes.
+- New `scripts/verify-contract.mjs` — asserts a built `chunked/` satisfies the
+  Mippy consumer contract (layout complete + `contentHash`, `engine.js` parses +
+  exports `run`, value cells pinned with real base-case values, closures baked,
+  fallback audit ran) without running the full engine.
+- **Regenerated A-1 + A-2 (clean full `ete init`, ~21 min each).** Both pass
+  `verify-contract` — **closures baked 17/17 (A-1) and 18/18 (A-2)** (the A-2
+  539 MB graph was the exact case that previously dropped all closures via the
+  string cap). Live-recompute accuracy on the standalone sheets is **98.0% (A-1)
+  / 97.8% (A-2)** — up from the 84.3% / 85.5% baseline (the prior baseline was
+  measured on an older build; same sheets, more cells match). The 17-sheet
+  cluster + 190 MB PP&E sheet remain skipped (cluster-once / large-sheet eval).
+  `golden-master --assert-no-fallbacks` pinpoints the returns' transpiler debt to
+  **4 functions** — `XNPV`, `FILTER`, `MINIFS`, `MAXIFS` — a concrete coverage
+  target list (replaces the vague "11,813 fallbacks" for the return path).
+- Validated: `cargo test` 18/18, `smoke` 78/78, `test-manifest-maps` 78/78 (incl.
+  the streaming-loader path), `test:engine`/`test:runnable`/`test:depgraph`/
+  `test:lazy-engine`/`test:slimming`/`test:golden` 21/20/14/19/13/20, full
+  `npm test`, and a clean full `ete init` on real A-1 + A-2 (build perf + accuracy
+  in `benchmarks/BASELINE.md`; Mippy contract checked by
+  `scripts/verify-contract.mjs`).
+
+## 2026-05-29 — Chunked-build scaling walls: streamed emit, borrowed partitions, opt-in lazy engine (#22)
+
+With the partition-hang fixed, a clean `ete init` on the real models got *past*
+partitioning but then drove the parser past 18 GB in the module-emit step (and a
+complete build was still slow to *run* as an oracle). Three walls closed — two
+internal memory fixes done unconditionally, one opt-in runtime feature.
+
+- **Wall C — streamed module emit (`chunked_emitter.rs`).** The emit did
+  `partitions.par_iter().map(generate_sheet_module).collect()` and wrote in a
+  *second* pass — holding **all ~800 MB** of generated JS in memory at once (on
+  top of the multi-million-cell workbook), with nothing in `sheets/` until every
+  module finished. It now **writes each module the instant it's generated and
+  drops the string**; the few "heavy" sheets (≥200k formula cells) are emitted
+  one-at-a-time (peak ≈ one big module) while the many light sheets stay parallel.
+  Files land incrementally; a write failure is still fatal.
+- **Wall B — `SheetPartition` borrows cells instead of cloning
+  (`sheet_partition.rs`).** `partition_sheets` did `cell.clone()` into the
+  partition while `workbook.sheets` still held the originals — a full second copy
+  of ~6M `CellData` (addresses + values + formula strings) → peak-memory doubling.
+  `SheetPartition<'a>` now holds `Vec<&'a CellData>` (the workbook outlives every
+  partition), so the partition is a few pointers per cell. The four consumers are
+  read-only, so they're unchanged beyond the borrow.
+- **Wall A — opt-in `--lazy-engine` (`chunked_emitter.rs`, `main.rs`,
+  `cli/`).** The default `engine.js` statically imports every sheet module, so
+  `import('engine.js')` pulls ~800 MB into the heap before `run()` can be called.
+  `ete init --lazy-engine` (parser `--lazy-engine`) now emits a lazy orchestrator:
+  sheet modules load on demand via `export async function load(options)` (with
+  **output-cone scoping** — `load({ sheets })` / `load({ cells })` loads only the
+  requested sheets' transitive dependency closure, expanding whole clusters), a
+  synchronous `run()` guarded against being called before any load, and
+  `runScoped(inputs, options)` (load + run in one await). **The default engine is
+  unchanged** — it stays eager + synchronous, so the Mippy contract, `ete eval`,
+  the smoke test, and the engine suite are untouched. The eager and lazy engines
+  share the `run()` body via `emit_run_function`, so they can't drift.
+- New `npm run test:lazy-engine` (19) + CI step: asserts the lazy engine has no
+  static sheet imports, exports `run`/`load`/`runScoped`, throws before load,
+  matches the eager engine's `run()` output after load (base + cross-sheet
+  override), and that cone scoping loads only the closure.
+- Validated: `cargo build --release`, `cargo test` 17/17, `smoke` 78/78,
+  `test:engine` 21/21, `test:runnable` 20/20, `test:depgraph` 11/11,
+  `test:lazy-engine` 19/19, `test:slimming` 13/13, `test:golden` 20/20, full
+  `npm test`, and an `ete init --lazy-engine` end-to-end build.
+- **Residual (deeper, deferred):** `generate_sheet_module` builds a `Vec<String>`
+  of lines then `.join("\n")` — ~2× a monster module transiently; and even one
+  ~200 MB monster module is heavy to import. Row-chunking the monster sheets
+  (Owned_Asset_PP_E, Future_Owned_Acquisitions, Technology) into smaller lazy
+  modules is the next step to make them usable, not just emittable.
+
+## 2026-05-29 — Fix chunked-build hang in `partition_sheets` (range-expansion blowup)
+
+A clean `ete init` on the full real models hung for ~12h in the chunked emitter,
+right after `[chunked] Partitioning N sheets...`. Root cause: a Round-2
+regression in dependency extraction, not the dependency-graph step that P1 (#23)
+fixed.
+
+- **`partition_sheets` no longer expands ranges (`sheet_partition.rs`,
+  `dependency.rs`).** It needs only sheet-level edges (which *other sheets* each
+  formula references), but it called the range-expanding `extract_refs`, which —
+  after Round 2 taught `is_cell_ref` to accept ranges — exploded every range to
+  ≤1000 individual cell strings per formula, pushed and de-duped them, then
+  discarded all the same-sheet ones. On a 1.62M-formula sheet that's ~10⁹
+  throwaway allocations on a single core → swap thrash → the 12h stall. New
+  `collect_sheet_deps()` scans for `Name!` / `'Sheet Name'!` tokens and records
+  just the sheet name — no range expansion, no per-cell allocation. A synthetic
+  parity test measures **~2000× faster** on range-heavy formulas.
+- **Intra-sheet cycle detection no longer expands ranges either
+  (`chunked_emitter.rs`).** `detect_intra_sheet_cycles` would have been the *next*
+  wall in the sheet-module phase for the same reason. It now uses a new
+  `extract_refs_shallow()` (top-left endpoint only) — restoring the pre-Round-2
+  behaviour the known-good engines were built with, and avoiding spurious
+  self-cycles from `B10=SUM(B1:B10)`-style ranges.
+- **The dependency-graph contract is untouched.** `write_dependency_graph` still
+  uses the full range-expanding `extract_refs`, so `dependency-graph.json` /
+  the `affectsOutputs` / `dependsOnNamedInputs` closures remain complete
+  (`test:depgraph` 11/11). The fix is behaviour-preserving for the sheet
+  dependency set (parity test) and for engine accuracy (smoke 78/78,
+  `test:engine` 21/21 incl. cluster convergence).
+- Validated: `cargo test` 17/17, `smoke` 78/78, `test:depgraph`/`test:runnable`/
+  `test:engine` 11/20/21, full `npm test`.
+- **Still open (not the cause of this hang):** the partition step still
+  `clone()`s every cell (peak-memory doubling) and the generated `engine.js`
+  eagerly imports ~800 MB of sheet modules (load-time wall) — both are scaling
+  ceilings for actually *running* the oracle, tracked under #22 (output-cone
+  scoping) / lazy sheet loading.
+
+## 2026-05-29 — Golden-master CI gate + P2 follow-ups (schedules, drivers, refiner)
+
+Trustworthiness pass on the P2 contract: a golden-master CI assert plus the three
+follow-ups the P2 work left open.
+
+- **Golden-master gate (`eval/golden-master.mjs` + `npm run test:golden`, CI step).**
+  A post-build assert for the named-outputs contract. `--assert-no-fallbacks`
+  fails if any **return / value-bearing** output (`moic|irr|carry|mip|proceeds|
+  hurdle|…`) carries `resolvesThroughFallback` (i.e. its closure passes through an
+  `_fn` stub); `--canonical <file>` diffs every named output's `baseCaseValue`
+  against a canonical returns map to **full float precision** (`Object.is`, with an
+  optional `--epsilon` relative tolerance). CI exercises the mechanism on a
+  **synthetic committed fixture** (`tests/cli/fixtures/golden-master/`); the real
+  per-model figures stay **gitignored** (never committed to this public repo) and
+  are diffed only when `ETE_GOLDEN_DIR` (+ a gitignored `canonical-returns.json`)
+  points at a real build. New `tests/cli/test-golden-master.mjs` (20). Graceful
+  skip (exit 0) when the model/artifacts/canonical file are absent, so public CI
+  passes without the proprietary data.
+- **Refiner: canonical returns outrank "UW Comparison" (`cli/commands/manifest-refine.mjs`).**
+  `SUMMARY_SHEET_PATTERN` lumped an underwriting "UW Comparison" tab into the top
+  tier, so returns (Gross/Net MOIC & IRR) mis-mapped to *projected* figures instead
+  of the model owner's actuals. New `refineSheetTier` ranks **canonical actuals
+  (Version Tracker / Track Record) → summary → rollup → underwriting → operational**,
+  so #25's value cells pin to the canonical tab without per-model pinning. Documented
+  the durable invariant trip-wire in `skill/SKILL.md`. Regression tests added (the
+  ranking + the invariant); existing single-sheet "UW" bindings are unaffected
+  (tier only breaks cross-sheet ties).
+- **Schedule `baseCaseValue` no longer sums balances across years (`lib/manifest-maps.mjs`).**
+  A schedule's scalar was a blind cross-year sum — correct for flows
+  (distributions, cash flow) but meaningless for **balances** (debt outstanding,
+  equity base/NAV), which double-counted a point-in-time level. Schedules are now
+  classified: balances use the **terminal** (last-year) level with `terminalYear`,
+  flows keep the life-to-date **sum**, and each entry records which via a new
+  `aggregation: "sum"|"terminal"` field. An empty series yields `null` (honest),
+  not a spurious `0`. `perYear[]` remains authoritative.
+- **Driver named-inputs emit under `--reuse-parse` without the workbook.** The
+  manifest-driver inputs (`exitMultiple` / `exitYearSelector` / `hurdleRate`)
+  derive from the manifest + ground truth alone, but `emitManifestMaps` only built
+  `named-inputs.json` when a workbook was present, dropping the drivers when the
+  `.xlsx` wasn't reachable. It now always resolves them (the defined-name scan is
+  still skipped without the workbook). `named-outputs`/`cell-types`/drivers all
+  emit; only the defined-name inputs need the `.xlsx`.
+- **Tests.** `npm test` green (full JS suite); new golden-master suite + refiner
+  and schedule regressions. CI gains a dedicated **Golden-master gate** step
+  (ubuntu + windows).
+
+## 2026-05-29 — P2 (#25 + #26): time-series schedules, drivable inputs, fallback audit
+
+- **Schedules and distributions (Request A & B)**: pin per-year time-series outputs as schedules inside `named-outputs.json` — `distributionsToEquity`, `outstandingDebt`, `equityBase`, `freeCashFlow`, and per-class distribution arrays (`classes[].distributions`), gated on `manifest.timeline.columnMap`. Each schedule entry carries a `cellRange` + `perYear: [{year,value}]`. `expandRange()` expands `Sheet!C15:K15` to its constituent cells so schedules participate in the dependency closures (`dependsOnNamedInputs` / `affectsOutputs`). (Note: a schedule's scalar `baseCaseValue` is a sum across years — meaningful for flows, less so for balances; `perYear` is authoritative.)
+- **Drivable named inputs (Request C)**: pin `exitMultiple`, `exitYearSelector`, and `hurdleRate` into `named-inputs.json` (`source: manifest-driver`) so downstream models can sweep exit/return parameters. Pinned in the normal `ete init` path (the `.xlsx` is present); under `--reuse-parse` without the workbook they are currently skipped (follow-up).
+- **Fallback audit + correctness gate (Request D / #26)**: emit `_fn-fallbacks.json` (cell → unsupported function) by scanning the generated sheet modules, and flag every named output/schedule whose dependency closure passes through a stub. The audit **reports, it does not silently gate**: affected outputs are annotated with `resolvesThroughFallback` and listed in `stats.fallbackViolations`; `ete init` prints a warning by default and **hard-fails under `--assert-no-fallbacks`** (CI / golden-master gate). Review-hardening fix: the gate originally `throw`ew mid-emit, which `ete init`'s try/catch swallowed — silently dropping the entire contract (named-outputs/inputs/cell-types) while still reporting success. It now emits all maps first, then surfaces the result so it can never be swallowed.
+
+## 2026-05-28 — P1 (#23 + #24): reliably emit a runnable engine.js
+
+A clean `ete init` on the real PE models did not finish: the chunked emitter
+built the **cell-level dependency graph** (every formula cell → its expanded
+refs) as a full in-memory `BTreeMap`, then serialized the whole document into a
+second in-memory `String` — ~doubling peak memory on top of an already-large
+workbook and OOM-killing the parser. Because `engine.js` (the `run()`
+orchestrator) was emitted **after** that step, the runnable engine never landed,
+and `ete init`'s fixed 10-minute `spawnSync` cap compounded it.
+
+- **engine.js now lands on every build.** `emit_chunked` writes the orchestrator
+  **before** the dependency-graph step (it depends only on the sheet-level DAG +
+  partitions, never the cell-level edges), so a runnable `run()` survives even a
+  hard kill of the later step. A write failure is fatal (`Err` → exit 1).
+- **Dependency graph is streamed to disk.** `write_dependency_graph` emits
+  `dependency-graph.json` one entry at a time through a `BufWriter`, never
+  materializing the full map or full JSON string — the OOM fix. Schema unchanged
+  (`cell-dependency-edges-v1`; consumers read only `.edges`); `edgeCount` is
+  written last. Output is deterministic (partition + sorted-cell order).
+- **Configurable parser timeout.** `ete init --timeout <seconds>` (default bumped
+  600 → 1800; `0` disables the cap). The fixed 10-minute cap was killing
+  legitimate large-model builds mid-emit.
+- **Fail loud, never a partial artifact.** After a fresh parse, `init` verifies
+  `chunked/engine.js` exists (fast fail before the minutes-long manifest
+  pipeline) and **won't swallow a failed emit**. `--reuse-parse` (use `chunked/`
+  as-is for manifest iteration) is exempt — it records the incomplete state
+  instead of blocking.
+- **#24 — locked artifact layout + content hash.** New `lib/build-manifest.mjs`
+  writes `chunked/build-manifest.json`: the canonical artifact set with
+  per-file/dir sha256, and a single top-level `contentHash` over the
+  *identity* artifacts (engine.js, sheets/, _ground-truth.json, manifest.json).
+  The derived contract maps carry a `generatedAt` and are hashed for integrity
+  but excluded from identity, so `contentHash` is **stable across rebuilds of the
+  same workbook** and **changes on drift** — a downstream consumer pins a build
+  and detects mismatch without per-version reconciliation. `--quiet` now emits
+  `contentHash`. This is also the comprehensive completeness gate: a fresh build
+  missing a required artifact hard-fails.
+- **Tests.** New `npm run test:runnable` (parser → engine.js exports `run()`,
+  streamed dep-graph edges intact, build-manifest layout/gate, contentHash
+  stable-across-rebuilds + drift-sensitive), wired into CI on ubuntu+windows.
+  Full suite green: smoke 78/78, test:engine 21, test:depgraph 11, test:slimming
+  13, Rust units 11, `npm test` (387).
+
+## 2026-05-28 — Privacy scrub: genericize the real model name + figures
+
+This repo is public; CLAUDE.md forbids committing real financials or participant
+names. Two cleanups before merging the next-wave PR:
+
+- **Removed the real return figures** (gross/net MOIC & IRR, the UW-comparison
+  multiple, the MIP dollar amount) from the committed docs. The findings stay
+  (golden-master match on Version Tracker row 22; refiner UW-Comparison mis-map;
+  MIP is a hand-port calibration) — only the numbers are gone. Canonical values
+  live in the gitignored artifacts + local notes and feed the golden-master test
+  from there.
+- **Genericized the real model name** out of all committed files: renamed the
+  benchmark script → `benchmarks/bench.mjs` (npm script `bench`),
+  and the benchmark now **anonymizes model identity** in printed + committed
+  output (Model A, Model B, …) — real dir names stay only in the gitignored
+  detail JSON. Prose in HANDOFF/ROADMAP/PLAN/CHANGELOG now says "the real PE
+  models" / "Model A/B". (The `test-e2e4-fixes` scrub-guard that asserts template
+  names are generic is intentionally kept.)
+
+## 2026-05-28 — Mippy calibration-oracle feature set (priority amendment)
+
+Refined the "fully ready for Mippy" target: the e2e agent's job is to make the
+full model a **reliable calibration oracle** — runnable, MIP coefficients exposed
+as named-outputs, no stubbed value cells. Documented the priority order in
+ROADMAP ("Now — Mippy calibration oracle") and HANDOFF.md, and in the
+`project_mippy_contract` memory:
+
+- **P1 · #23 + #24** — reliably emit a runnable `engine.js` (fix dep-graph OOM;
+  fail loud, never a partial artifact; lock layout + content hash).
+- **P2 · #25** — pin value-bearing cells (per-class MIP Proceeds, hurdle,
+  participation %, equity basis, valuation/shares) as named-outputs.
+- **P2 · #26** — emit `_fn-fallbacks.json`; assert no value cell uses an
+  unsupported-function stub.
+- **P3 · #22** — output-cone scoping (nice-to-have).
+
+Supporting/trustworthiness (off critical path): golden-master CI, refiner
+UW-Comparison fix, deeper `_fn` coverage, cluster-once eval.
+
+## 2026-05-28 — HANDOFF.md (fresh-agent entry point)
+
+Added `HANDOFF.md` — the prioritized next-session plan (P0 cluster-once eval →
+generation robustness #23 → `_fn()` transpiler coverage → refiner UW-Comparison
+fix → golden-master CI → output-profile/large-sheet/perf → Polish), with current
+state, run commands, and the gotchas (gitignored real models, the GT-copy
+`_computed-values.json`, the per-sheet-eval Windows fix, the bench
+`discoverModels` gate vs the `-v2` regen). PLAN points to it.
+
+## 2026-05-28 — Roadmap: PE-model regeneration findings (Mippy consumer)
+
+The downstream Mippy agent regenerated both PE engines from `main` and
+reported back. Captured the findings in ROADMAP.md ("Now — PE-model regeneration
+findings"). Confirmed wins vs the old build: **dates fixed** (old leaked
+`ExcelDateTime { … }` debug strings — 2,686 in A-1; new emits serial numbers, 0
+leaks), **~42–45% smaller** (model-map.json + the GT-copy `_computed-values.json`
+gone), contract maps emitted, circular refs converge, and a **golden-master PASS**
+— the regenerated ground truth reproduces the hand-port's canonical A-1 returns
+to full float precision (Version Tracker row 22). New follow-ups: generation
+robustness on big models (dep-graph OOM + `init` 10-min timeout — issue #23),
+`--output-profile` to scope artifacts (#22), the **11,813 `_fn()` unsupported-
+function fallbacks** per engine (transpiler-coverage accuracy suspect), the
+refiner mis-mapping returns to a "UW Comparison" tab, empty `named-inputs.json`
+when no formula-referenced defined-names exist, and MIP-as-output (#7). A
+ready-made golden-master CI assert (diff committed `named-outputs.baseCaseValue`)
+is noted.
+
+## 2026-05-28 — Circular-cluster eval: scoped convergence diff + first cluster test
+
+Progress on the circular-cluster accuracy blocker (the 17-of-21-sheet cluster on
+the real models that wouldn't evaluate).
+
+- **Scoped convergence diff.** The cluster convergence loop in
+  `per-sheet-eval.mjs` checked for a fixed point by diffing **every** cell in the
+  context each iteration — and the context is seeded with the full (multi-million-
+  cell) ground truth, so that was O(all cells) × up to 200 iterations. It now
+  tracks the cells `compute()` actually writes (`ctx._written`) and diffs only
+  those (the cluster's own outputs). Behavior-preserving; large constant-factor
+  win on big clusters.
+- **First circular-cluster test + fixture.** `tests/cli/fixtures/cluster-model/`
+  is a synthetic 2-sheet circular model (SheetA ↔ SheetB, converges to
+  a=50,b=50,c=100,d=100). `tests/cli/test-per-sheet-eval.mjs` now evaluates it
+  through the convergence loop and asserts 100% — the cluster path had no
+  coverage before, and this guards the scoped-diff change.
+
+**Still the key fix (cluster-once):** measured on the real model, scoped-diff
+alone is *not* enough — `per-sheet-eval` re-runs the entire cluster convergence
+**once per member sheet** (17×), and engine inaccuracies keep some clusters from
+converging (200 iters). The remaining work is single-pass orchestrator eval:
+converge the cluster once, then score every member from that converged state
+(one task per cluster, not per sheet). The fixture above is the ready-made test
+oracle. Until then the benchmark runs with `--skip-clusters`.
+
+## 2026-05-28 — Unit tests for lib/ (Polish→Publish)
+
+The shared financial libraries had no direct coverage. Added
+`tests/lib/test-lib.mjs` (43 known-answer assertions), wired into `npm test`
+(runs first) so CI guards them on every push:
+
+- **`lib/irr.mjs`** — NPV/NPV-derivative identities; IRR of classic cash-flow
+  series (−100→+150 = 50%, −1000 then 200×8 ≈ 11.89%, 3-year bullet); Newton ≡
+  bisection agreement; NPV(IRR) ≈ 0; null on no-sign-change; XIRR on dated flows.
+- **`lib/waterfall.mjs`** — American 80/20 + 8% pref + catch-up (LP/GP splits,
+  carry %), no-catch-up variant, loss case (no carry), the flat-MOIC-hurdle
+  promote (incl. the hold-period-independence invariant), European builder; the
+  LP+GP = distributed conservation invariant across structures.
+- **`lib/calibration.mjs`** — nested get/set; `validateOutputs` pass/fail +
+  suggested corrective factor.
+- **`lib/sensitivity.mjs`** — `flattenOutputs` group/type filtering.
+
+## 2026-05-28 — PE-model accuracy benchmark + eval-tooling fixes
+
+Stood up a repeatable accuracy + efficacy benchmark over the real ~200 MB
+PE models so improvements can be tracked over time, and fixed the eval
+tooling that was silently broken on them.
+
+### Benchmark (`benchmarks/bench.mjs`, `npm run bench`)
+
+- Wraps `eval/per-sheet-eval.mjs` (live engine-vs-ground-truth) for every model
+  under a root dir; reports overall accuracy, per-sheet pass/skip counts, and
+  timings. **Aggregate-only** results go to the committed `benchmarks/BASELINE.md`;
+  full per-sheet detail stays in the gitignored `benchmarks/results/`. No cell
+  value or label is ever committed.
+- **Baseline (2026-05-28):** Model A **84.3%**, Model B **85.5%** on the
+  standalone sheets. (The 17-sheet circular cluster and the 190 MB PP&E sheet are
+  skipped for now — see below.)
+
+### per-sheet-eval fixes (it wasn't in CI, so these went unnoticed)
+
+- **Windows crash fixed.** The generated per-sheet wrapper imported each sheet's
+  `compute()` by a bare absolute path (`"C:\\..."`), which Node ESM rejects on
+  Windows — so *every* sheet "crashed" at load (0% accuracy) on Windows and on
+  the real engines. Now uses `pathToFileURL()`. New `tests/cli/test-per-sheet-eval.mjs`
+  (6) guards it; CI runs it on **windows-latest** too.
+- **`--skip-clusters`** flag: record circular-cluster sheets as skipped instead
+  of evaluating them. The current convergence path re-runs the *whole* cluster
+  once per member sheet (O(cluster²)), which is infeasible on big models; this
+  yields a fast, real number for the standalone sheets while the single-pass
+  orchestrator eval is built (ROADMAP).
+
+### searchByLabel: lazy numerics (query / carry)
+
+`searchByLabel` previously scanned the entire ground truth once per matched row
+to collect adjacent numerics. It now probes the row's columns on demand (same
+approach as the refiner), with a directed `caseColumn` lookup probing its exact
+cell so a far scenario column is never missed. Behavior-preserving (query/carry/
+ai-interface suites green).
+
+### Findings that scope the accuracy-blocker work
+
+- The 190 MB PP&E sheet exceeds the 150 MB per-sheet limit → **large-sheet eval**
+  blocker confirmed.
+- The circular cluster is **17 of 21 sheets** and is evaluated redundantly
+  (once per member) → the concrete reason behind "circular-cluster won't
+  evaluate." Single-pass orchestrator eval is the fix.
+- `_computed-values.json` in these engines is **byte-identical to ground truth**
+  (a seeded copy), so it is not a valid accuracy source — accuracy must come from
+  live recompute.
+
+## 2026-05-28 — `init` parses the ground truth once (shared across the pipeline)
+
+The real driver behind the "~2.5 min" refine loop wasn't one command — it was
+that `ete init` runs **generate → refine → doctor → maps** in sequence and
+**each independently re-read and re-parsed the full ground truth** from disk. On
+the real ~200 MB PE models that's four parses of a 200 MB+ file at ~3.6 s
+each, plus each command's own O(N) scan.
+
+### What changed
+
+- `init` now loads the ground truth (and label index) **once**, after the parse,
+  and shares the parsed object across all four manifest steps. The GT is
+  read-only in every consumer (verified — no `gt[...] =` / `delete` / `assign`
+  anywhere), so a single shared object is safe.
+- Each consumer (`runGenerate`, `runManifestRefine`, `runDoctor`,
+  `emitManifestMaps`) gained an optional injected GT (`_gt` / `opts.gt`) and
+  label index. When absent — i.e. standalone `ete manifest generate|refine|
+  doctor|maps` — they load from disk exactly as before. Fully backward-compatible.
+- Eliminates 3 of the 4 full-GT parses per init (~11 s on a 200 MB GT) at **zero
+  disk cost** — and it's independent of model shape, unlike a row-values artifact.
+
+### Why not the row-values artifact (Tier B)
+
+Measured on both real ~200 MB PE models: they're **dense-label** (≈90% of
+rows labeled, ≈93% of numerics on labeled rows), not the giant-grid case Tier B's
+big win assumed. A general row-values artifact would be ≈30% of GT (≈60% of the
+post-#17 compact GT) — only ~1.6× on refine while inflating output ~60%, fighting
+the #17 slimming. Deprioritized in favor of this shared-parse change. See ROADMAP.
+
+### Tests
+
+- `tests/cli/test-init-shared-gt.mjs` (8), wired into `npm test`: with **no**
+  `_ground-truth.json` on disk, an injected GT makes generate/refine/doctor/maps
+  all succeed and produce correct results (a consumer that read disk would
+  error); a negative control confirms disk is otherwise the only source.
+
+## 2026-05-28 — refine consumes `_labels.json` + lazy numeric probes
+
+`ete manifest refine` rebuilt a full label+numeric index over the **entire**
+ground truth on every run (`buildIndex`), even though it only ever inspects
+numerics on a *matched label's own row*. On big models the bulk of that work
+indexed giant **unlabeled** grids (e.g. a 190 MB PP&E depreciation schedule)
+that the refiner never consults — pure waste. (Investigation also found refine
+did **not** consume the parser's `_labels.json` at all, despite that index
+existing since V4.)
+
+### What changed
+
+- **Labels now come from `chunked/_labels.json`** when the parser emitted it —
+  an O(labels) read instead of scanning every cell. Legacy engines without the
+  index fall back to a one-time GT scan (`buildLabelIndex`), so nothing breaks.
+- **Numerics are resolved lazily, per matched row**, by probing that row's
+  columns on demand (`numericsForRow`, memoized) — instead of bucketing every
+  numeric in a multi-million-cell workbook up front. The giant unlabeled grids
+  are never touched.
+- **Behavior-preserving:** the candidate ranking, dedup, value-range, and
+  summary/rollup/hint logic are untouched. The full manifest + ship-ready
+  suites stay green.
+
+### Impact
+
+The eliminated `buildIndex` pass scales with *total* cell count; the new probe
+cost scales with *matched label rows* (a few dozen). On a synthetic giant-grid
+ground truth the removed pass alone was ~1.4 s (1.4 M cells) / ~7.9 s (6.4 M
+cells); end-to-end refine now finishes in less time than the old index build
+took. The remaining floor is the unavoidable JSON parse of the ground truth — a
+follow-up could lift that with a parser-emitted row-values artifact (see
+ROADMAP), and the same lazy-numerics treatment could be extended to
+`searchByLabel` (the `query` / `carry` path).
+
+### Tests
+
+- `tests/cli/test-refine-label-index.mjs` (14), wired into `npm test`:
+  correctness off `_labels.json`; **parity** between the index path and the
+  GT-scan fallback; lazy-probe far/gapped columns + value ranges; and a
+  **consumption proof** — a label present only in the index (not as a GT
+  string) is still resolved, which the fallback provably cannot do.
+
+## 2026-05-28 — Continuous integration (GitHub Actions)
+
+The test suite is now substantial (132 JS assertions across 7 suites, plus the
+Rust unit tests and the `smoke` / `test:depgraph` / `test:engine` /
+`test:slimming` integration suites) but nothing guarded it on push. Added
+`.github/workflows/ci.yml`.
+
+### What runs
+
+- **On every push to `main` and every PR to `main`**, a matrix across
+  **`ubuntu-latest` + `windows-latest`** (this project is developed on Windows
+  but ships cross-platform, so both are required; `fail-fast: false` so one
+  OS's failure doesn't mask the other).
+- Steps per OS: `npm ci` → `cargo build --release` → `cargo test --release`
+  (11 Rust unit tests) → `npm test` (the 7 JS suites) → `npm run smoke`
+  (78/78 chunked-engine accuracy) → `test:depgraph` → `test:engine` →
+  `test:slimming`. Each integration suite is its own step for clear failure
+  attribution.
+- Rust builds are cached with `Swatinem/rust-cache`; npm via `setup-node`'s
+  built-in cache. `concurrency` cancels superseded runs on the same ref;
+  `permissions: contents: read` keeps the token least-privilege.
+
+This unblocks the Polish→Publish track (a green CI badge is table stakes before
+npm publish) and makes every subsequent refactor safer by guarding the whole
+suite automatically.
 
 ## 2026-05-28 — Artifact slimming (Round 2, part 2)
 

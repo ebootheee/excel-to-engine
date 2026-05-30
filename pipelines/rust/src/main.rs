@@ -37,12 +37,18 @@ fn main() {
         eprintln!("  --emit-debug  Retain large debug artifacts that are otherwise skipped");
         eprintln!("             in --chunked mode (root model-map.json). The cell-level");
         eprintln!("             dependency-graph.json is always emitted (closures consume it).");
+        eprintln!("  --lazy-engine  Emit a chunked engine.js that imports sheet modules ON");
+        eprintln!("             DEMAND (async load()/runScoped() + output-cone scoping) instead");
+        eprintln!("             of eagerly at module-load time. run() stays synchronous: await");
+        eprintln!("             load() first. Avoids pulling all sheet modules into memory just");
+        eprintln!("             to import the engine. Per-sheet modules are emitted either way.");
         std::process::exit(1);
     }
 
     let compact_flag = args.iter().any(|a| a == "--compact");
     let chunked_flag = args.iter().any(|a| a == "--chunked");
     let emit_debug = args.iter().any(|a| a == "--emit-debug");
+    let lazy_engine = args.iter().any(|a| a == "--lazy-engine");
 
     // Filter out flags from positional args
     let positional: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with("--")).collect();
@@ -357,7 +363,7 @@ fn main() {
         let chunked_dir = output_dir.join("chunked");
         fs::create_dir_all(&chunked_dir).expect("Failed to create chunked/ directory");
 
-        match chunked_emitter::emit_chunked(&workbook, &chunked_dir) {
+        match chunked_emitter::emit_chunked(&workbook, &chunked_dir, lazy_engine) {
             Ok(summary) => {
                 println!(
                     "[rust-parser] Chunked output written in {}ms: {}",

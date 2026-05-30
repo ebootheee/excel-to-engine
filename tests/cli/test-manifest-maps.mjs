@@ -14,14 +14,14 @@
  */
 
 import XLSX from 'xlsx';
-import { readFileSync, existsSync, mkdtempSync, cpSync, rmSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, mkdtempSync, cpSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { resolveBaseCaseOutputs } from '../../lib/manifest.mjs';
 import {
   collectNamedOutputs, collectNamedInputs, collectCellTypes, enumerateOutputCells,
-  emitManifestMaps, attachDependencyClosures,
+  emitManifestMaps, attachDependencyClosures, loadDependencyEdges,
 } from '../../lib/manifest-maps.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -62,7 +62,7 @@ console.log('Testing: collectNamedOutputs shape + drift');
   assert(drift === 0, `no drift vs resolveBaseCaseOutputs (got ${drift})`);
 
   // enumerateOutputCells keys are a superset of what we emit (1:1 here).
-  assert(Object.keys(enumerateOutputCells(manifest)).length === Object.keys(no).length,
+  assert(Object.keys(enumerateOutputCells(manifest, gt)).length === Object.keys(no).length,
     'enumerateOutputCells matches emitted output count');
 }
 
@@ -86,6 +86,49 @@ console.log('Testing: defined-name enrichment and override');
   assert(override.grossMOIC.cell === 'Equity!Q5', 'defined-name overrides heuristic cell');
   assert(override.grossMOIC.baseCaseValue === 2.90, 'override resolves the defined cell value');
   assert(override.grossMOIC.manifestCell === 'Equity!Z9', 'override records the displaced manifest cell');
+}
+
+// ---------------------------------------------------------------------------
+// schedules: balance vs flow baseCaseValue aggregation
+// ---------------------------------------------------------------------------
+console.log('Testing: schedule baseCaseValue — balances use terminal, flows sum');
+{
+  // A debt-balance schedule (stock) and a distribution schedule (flow), each
+  // with three years of data. The scalar must NOT sum a balance across years.
+  const m = {
+    timeline: { columnMap: { E: 2024, F: 2025, G: 2026 } },
+    schedules: [
+      { type: 'debt_balance', sheet: 'S', row: 10, label: 'Outstanding Debt Balance' },
+      { type: 'distribution', sheet: 'S', row: 20, label: 'Distributions to Equity' },
+    ],
+  };
+  const g = {
+    'S!A10': 'Outstanding Debt Balance', 'S!E10': 300, 'S!F10': 250, 'S!G10': 200,
+    'S!A20': 'Distributions to Equity', 'S!E20': 10, 'S!F20': 20, 'S!G20': 30,
+  };
+  const no = collectNamedOutputs(m, g);
+
+  const debt = no.outstandingDebt;
+  assert(debt?.type === 'schedule', 'outstandingDebt is a schedule');
+  assert(debt?.perYear?.length === 3, 'outstandingDebt has 3 perYear points');
+  assert(debt?.aggregation === 'terminal', 'balance schedule aggregation is terminal');
+  assert(debt?.baseCaseValue === 200, `balance baseCaseValue is the terminal level (got ${debt?.baseCaseValue})`);
+  assert(debt?.baseCaseValue !== 750, 'balance baseCaseValue is NOT the cross-year sum (was the bug)');
+  assert(debt?.terminalYear === 2026, 'balance schedule records terminalYear');
+
+  const dist = no.distributionsToEquity;
+  assert(dist?.aggregation === 'sum', 'flow schedule aggregation is sum');
+  assert(dist?.baseCaseValue === 60, `flow baseCaseValue is the life-to-date sum (got ${dist?.baseCaseValue})`);
+  assert(dist?.terminalYear === undefined, 'flow schedule has no terminalYear');
+
+  // An empty series yields a null scalar (honest), not a spurious 0.
+  const m2 = {
+    timeline: { columnMap: { E: 2024, F: 2025, G: 2026 } },
+    schedules: [{ type: 'debt_balance', sheet: 'S', row: 99, label: 'Outstanding Debt Balance' }],
+  };
+  const no2 = collectNamedOutputs(m2, { 'S!A99': 'Outstanding Debt Balance' });
+  assert(no2.outstandingDebt?.perYear?.length === 0, 'empty-series schedule has no perYear points');
+  assert(no2.outstandingDebt?.baseCaseValue === null, 'empty-series schedule baseCaseValue is null');
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +177,7 @@ function buildWorkbook() {
   };
 }
 {
-  const inputs = collectNamedInputs(buildWorkbook());
+  const inputs = collectNamedInputs(buildWorkbook(), manifest, gt);
   assert(inputs.Exit_Year?.cell === 'Assumptions!B1', 'Exit_Year cell resolved');
   assert(inputs.Exit_Year?.default === 2029, 'Exit_Year default captured');
   assert(inputs.Exit_Year?.type === 'number', 'Exit_Year typed number');
@@ -142,6 +185,11 @@ function buildWorkbook() {
   assert(inputs.Exit_Year?.referencedBy >= 1, 'Exit_Year confirmed read by ≥1 formula');
   assert(!('Scratch' in inputs), 'named-but-unreferenced cell excluded (not a real input)');
   assert(inputs.Exit_Year?.affectsOutputs === undefined, 'affectsOutputs absent in Round 1');
+
+  // Test dynamic manifest-driver input resolution (Request C)
+  assert(inputs.exitMultiple?.cell === 'Valuation!K54', 'exitMultiple driver cell resolved from manifest');
+  assert(inputs.exitMultiple?.default === 18.5, 'exitMultiple default resolved from ground truth');
+  assert(inputs.exitMultiple?.source === 'manifest-driver', 'exitMultiple source is manifest-driver');
 }
 
 // ---------------------------------------------------------------------------
@@ -181,22 +229,104 @@ console.log('Testing: attachDependencyClosures');
 }
 
 // ---------------------------------------------------------------------------
+// loadDependencyEdges — streaming line-reader (the >512 MiB path) (#32)
+// ---------------------------------------------------------------------------
+console.log('Testing: loadDependencyEdges streams newline-delimited graphs');
+{
+  // Mirror the Rust emitter exactly: header line, one "key":[refs] per line
+  // (comma-separated across lines), footer line. Include a range token and a
+  // key needing JSON escaping.
+  const tmp = mkdtempSync(join(tmpdir(), 'depedges-'));
+  const p = join(tmp, 'dependency-graph.json');
+  const graph =
+    '{"format":"cell-dependency-edges-v2","note":"x","edges":{\n' +
+    '"S!B2":["S!A1:A3"],\n' +
+    '"S!B4":["S!B2"],\n' +
+    '"T!A1":["S!B2","Other!C1:C9"]\n' +
+    '},"edgeCount":3}\n';
+  writeFileSync(p, graph);
+
+  // Whole-file path (default threshold): valid JSON, parses fine.
+  const whole = loadDependencyEdges(p);
+  assert(JSON.stringify(whole['S!B2']) === '["S!A1:A3"]', 'whole-file path reads a range-token edge');
+
+  // Forced streaming path (threshold 0): must produce the identical edge map
+  // without ever building a single big string.
+  const streamed = loadDependencyEdges(p, 0);
+  assert(JSON.stringify(streamed['S!B2']) === '["S!A1:A3"]', 'streamed: range token preserved');
+  assert(JSON.stringify(streamed['S!B4']) === '["S!B2"]', 'streamed: single-cell edge');
+  assert(JSON.stringify(streamed['T!A1']) === '["S!B2","Other!C1:C9"]', 'streamed: multi-ref cross-sheet edge');
+  assert(Object.keys(streamed).length === 3, 'streamed: header/footer lines skipped, exactly 3 edges');
+  assert(JSON.stringify(streamed) === JSON.stringify(whole), 'streamed map === whole-file map');
+  rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
 // emitManifestMaps end-to-end (with and without .xlsx)
 // ---------------------------------------------------------------------------
-console.log('Testing: emitManifestMaps without .xlsx (graceful skip)');
+console.log('Testing: emitManifestMaps without .xlsx — drivers still emit, defined-names skip');
 {
   const tmp = mkdtempSync(join(tmpdir(), 'ete-maps-'));
   cpSync(FIXTURES, tmp, { recursive: true });
   const res = emitManifestMaps(tmp, {});
   assert(res.written.includes('named-outputs.json'), 'outputs written w/o xlsx');
   assert(res.written.includes('cell-types.json'), 'cell-types written w/o xlsx');
-  assert(!res.written.includes('named-inputs.json'), 'inputs skipped w/o xlsx');
-  assert(res.skipped.some(s => s.file === 'named-inputs.json'), 'skip reason recorded');
+
+  // The manifest-driver inputs derive from manifest + ground truth alone, so
+  // they emit even without the workbook (closes the --reuse-parse follow-up).
+  // Defined-name inputs (which need the .xlsx) are absent.
+  assert(res.written.includes('named-inputs.json'), 'named-inputs written w/o xlsx (drivers only)');
+  const ni = JSON.parse(readFileSync(join(tmp, 'named-inputs.json'), 'utf-8')).namedInputs;
+  assert(ni.exitMultiple?.source === 'manifest-driver', 'driver exitMultiple emitted w/o xlsx');
+  assert(ni.exitMultiple?.cell === 'Valuation!K54', 'driver exitMultiple cell resolved from manifest');
+  assert(!('Exit_Year' in ni), 'defined-name inputs absent without the .xlsx');
+  assert(Object.values(ni).every(i => i.source === 'manifest-driver'), 'only manifest-driver inputs without the workbook');
 
   const out = JSON.parse(readFileSync(join(tmp, 'named-outputs.json'), 'utf-8'));
   assert(typeof out.modelHash === 'string' && out.modelHash.startsWith('sha256:'), 'modelHash present');
   assert(out.namedOutputs && Object.keys(out.namedOutputs).length >= 10, 'namedOutputs populated');
   rmSync(tmp, { recursive: true, force: true });
+
+  // No workbook AND no resolvable drivers → empty map (named-inputs.json is
+  // then skipped by emitManifestMaps; the graceful-skip path stays intact).
+  const empty = collectNamedInputs(null, { timeline: {} }, {});
+  assert(Object.keys(empty).length === 0, 'no workbook + no drivers → empty named-inputs');
+}
+
+console.log('Testing: Correctness audit flags fallbacks WITHOUT aborting (Request D / #26)');
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'ete-maps-'));
+  cpSync(FIXTURES, tmp, { recursive: true });
+
+  const sheetsDir = join(tmp, 'sheets');
+  mkdirSync(sheetsDir, { recursive: true });
+
+  // The fixture pins carry.totalCell → "GP Promote!D88"; stub that cell so the
+  // totalCarry output's closure (trivially, itself) hits an unsupported fn.
+  writeFileSync(join(sheetsDir, 'Promote.mjs'), `// mock
+    ctx.set("GP Promote!D88", _fn('SOMETHING_UNSUPPORTED', []));
+  `);
+
+  // Must NOT throw — the maps still emit; the violation is reported, not fatal.
+  const res = emitManifestMaps(tmp, {});
+  assert(existsSync(join(tmp, '_fn-fallbacks.json')), 'audit emits _fn-fallbacks.json');
+  assert(existsSync(join(tmp, 'named-outputs.json')), 'named-outputs.json still emitted (no mid-emit abort)');
+  assert(existsSync(join(tmp, 'cell-types.json')), 'cell-types.json still emitted (no mid-emit abort)');
+  assert(Array.isArray(res.stats.fallbackViolations), 'stats.fallbackViolations is an array');
+  assert(res.stats.fallbackViolations.some(v => v.cell === 'GP Promote!D88' && v.output === 'totalCarry'),
+    'records the totalCarry → GP Promote!D88 violation');
+  const no = JSON.parse(readFileSync(join(tmp, 'named-outputs.json'), 'utf-8')).namedOutputs;
+  assert(no.totalCarry?.resolvesThroughFallback?.function === 'SOMETHING_UNSUPPORTED',
+    'affected output annotated with resolvesThroughFallback');
+
+  // No stubs on output paths → no violations (clean build stays clean).
+  const tmp2 = mkdtempSync(join(tmpdir(), 'ete-maps-'));
+  cpSync(FIXTURES, tmp2, { recursive: true });
+  const res2 = emitManifestMaps(tmp2, {});
+  assert(res2.stats.fallbackViolations.length === 0, 'no violations when no stubs on output paths');
+
+  rmSync(tmp, { recursive: true, force: true });
+  rmSync(tmp2, { recursive: true, force: true });
 }
 
 console.log('Testing: emitManifestMaps with .xlsx (full set)');

@@ -3,7 +3,7 @@
 /// Groups cells by worksheet, computes cross-sheet dependencies at the sheet level,
 /// and produces a topological ordering of sheets for evaluation.
 
-use crate::dependency::extract_refs;
+use crate::dependency::collect_sheet_deps;
 use crate::parser::{CellData, CellValue, WorkbookData};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,13 +14,20 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 // ---------------------------------------------------------------------------
 
 /// A single sheet's partition: its cells grouped for emission.
+///
+/// Holds **borrows** of the workbook's cells, not clones. The workbook is
+/// borrowed for the whole of `emit_chunked` (it outlives every partition), so
+/// copying ~6M `CellData` (addresses + values + formula strings) into a second
+/// owned structure is pure waste — it doubled peak memory at the partition step
+/// on the real 200 MB+ models. Borrowing keeps the partition at a few pointers
+/// per cell.
 #[derive(Debug, Clone)]
-pub struct SheetPartition {
+pub struct SheetPartition<'a> {
     pub name: String,
     /// Cells that are literals / inputs (no formula)
-    pub input_cells: Vec<CellData>,
+    pub input_cells: Vec<&'a CellData>,
     /// Cells that have formulas, in intra-sheet dependency order
-    pub formula_cells: Vec<CellData>,
+    pub formula_cells: Vec<&'a CellData>,
     /// Names of other sheets this sheet depends on (cross-sheet refs)
     pub sheet_dependencies: BTreeSet<String>,
 }
@@ -49,34 +56,31 @@ pub struct SheetGraphEntry {
 // ---------------------------------------------------------------------------
 
 /// Partition a workbook into per-sheet groups with cross-sheet dependency metadata.
-pub fn partition_sheets(workbook: &WorkbookData) -> Vec<SheetPartition> {
+pub fn partition_sheets<'a>(workbook: &'a WorkbookData) -> Vec<SheetPartition<'a>> {
     let sheet_names: HashSet<String> = workbook.sheet_names.iter().cloned().collect();
 
-    // Process each sheet in parallel — extract_refs is the bottleneck (3M cells)
-    let partitions: Vec<SheetPartition> = workbook
+    // Process each sheet in parallel. We only need sheet-level edges here, so we
+    // scan for referenced sheet *names* directly (collect_sheet_deps) instead of
+    // calling the range-expanding extract_refs: the latter exploded every range
+    // to ≤1000 cell strings per formula and then we discarded all the same-sheet
+    // ones — O(formula_cells × range_size) wasted work that hung this step on
+    // multi-million-formula sheets. The cell-level dependency-graph contract
+    // (write_dependency_graph) uses extract_refs_ranges — compact range tokens,
+    // also non-expanding (issue #32).
+    let partitions: Vec<SheetPartition<'a>> = workbook
         .sheets
         .par_iter()
         .map(|sheet| {
-            let mut input_cells = Vec::new();
-            let mut formula_cells = Vec::new();
+            let mut input_cells: Vec<&CellData> = Vec::new();
+            let mut formula_cells: Vec<&CellData> = Vec::new();
             let mut sheet_deps: BTreeSet<String> = BTreeSet::new();
 
             for cell in &sheet.cells {
                 if let Some(formula) = &cell.formula {
-                    formula_cells.push(cell.clone());
-
-                    // Extract cross-sheet references
-                    let refs = extract_refs(formula, &sheet.name);
-                    for r in &refs {
-                        if let Some(bang) = r.find('!') {
-                            let ref_sheet = &r[..bang];
-                            if ref_sheet != sheet.name && sheet_names.contains(ref_sheet) {
-                                sheet_deps.insert(ref_sheet.to_string());
-                            }
-                        }
-                    }
+                    formula_cells.push(cell);
+                    collect_sheet_deps(formula, &sheet.name, &sheet_names, &mut sheet_deps);
                 } else if cell.value.is_some() {
-                    input_cells.push(cell.clone());
+                    input_cells.push(cell);
                 }
             }
 

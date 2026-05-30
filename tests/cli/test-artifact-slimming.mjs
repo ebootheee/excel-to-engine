@@ -2,12 +2,12 @@
 /**
  * Integration tests for artifact slimming (Round 2, Mippy request #8).
  *
- * `ete init` should, by default, drop the large debug/intermediate artifacts
- * from chunked/ — the cell-level dependency-graph.json (ranges expand → the
- * biggest file on real models) and the sheet-level _graph.json — and never
- * materialize the 600+ MB root model-map.json, while keeping the high-value
- * dependency closures baked into the named maps. `--emit-debug` retains all of
- * them for offline analysis / closure recomputation.
+ * `ete init` should, by default, drop the large debug/intermediate artifact
+ * from chunked/ — the cell-level dependency-graph.json (the biggest file on real
+ * models, ~0.5 GB) — and never materialize the 600+ MB root model-map.json,
+ * while keeping the high-value dependency closures baked into the named maps.
+ * The 3 KB sheet-level _graph.json is KEPT (eval/per-sheet-eval reads it for
+ * cluster info). `--emit-debug` retains dependency-graph.json too.
  *
  * Needs the rust-parser binary. Skips (exit 0) if it isn't built.
  *
@@ -84,7 +84,7 @@ console.log('Testing: ete init (default) slims debug artifacts, keeps closures')
   assert(existsSync(join(chunked, 'named-inputs.json')), 'named-inputs.json emitted');
 
   assert(!existsSync(join(chunked, 'dependency-graph.json')), 'dependency-graph.json removed by default');
-  assert(!existsSync(join(chunked, '_graph.json')), '_graph.json removed by default');
+  assert(existsSync(join(chunked, '_graph.json')), '_graph.json KEPT by default (3 KB; eval/per-sheet-eval reads it for cluster info)');
   assert(!existsSync(join(out, 'model-map.json')), 'root model-map.json not written by default');
 
   // Closures must survive the deletion — they were baked into the named maps

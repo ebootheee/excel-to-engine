@@ -20,6 +20,35 @@
  */
 
 import { formatOutput } from './format.mjs';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import v8 from 'v8';
+
+/**
+ * `ete init` bakes the dependency-graph closures in-process, which means
+ * JSON.parsing the (compact, post-#32) dependency graph — several hundred MB on
+ * multi-million-cell models — plus the ground truth, the formula-cell index, and
+ * the per-output BFS state. Measured peak on the ~6M-cell Outpost models is
+ * ~7.4 GB, so Node's default old-space (~4 GB here) OOMs, and even 8 GB leaves no
+ * margin for a larger workbook. A downstream consumer shouldn't have to know to
+ * pass NODE_OPTIONS, so for `init` only, re-exec once with a generous 12 GB heap.
+ * Gated to `init` so every other command keeps its fast startup; `ETE_HEAP_BOOSTED`
+ * prevents infinite recursion. Opt out with `ETE_NO_REEXEC=1`; override the size
+ * with `ETE_INIT_HEAP_MB`.
+ */
+function ensureHeapForInit(argv) {
+  if (process.env.ETE_HEAP_BOOSTED === '1' || process.env.ETE_NO_REEXEC === '1') return;
+  if (argv.find(a => !a.startsWith('-')) !== 'init') return;
+  const TARGET_MB = Number(process.env.ETE_INIT_HEAP_MB) || 12288;
+  const limitMB = v8.getHeapStatistics().heap_size_limit / (1024 * 1024);
+  if (limitMB >= TARGET_MB - 256) return; // already roomy enough
+  const res = spawnSync(
+    process.execPath,
+    [`--max-old-space-size=${TARGET_MB}`, fileURLToPath(import.meta.url), ...argv],
+    { stdio: 'inherit', env: { ...process.env, ETE_HEAP_BOOSTED: '1' } },
+  );
+  process.exit(res.status == null ? 1 : res.status);
+}
 
 const COMMANDS = {
   init: { desc: 'Parse Excel + generate manifest', module: './commands/init.mjs' },
@@ -38,6 +67,7 @@ const COMMANDS = {
 };
 
 async function main() {
+  ensureHeapForInit(process.argv.slice(2));
   const args = parseArgs(process.argv.slice(2));
 
   // --compact is shorthand for --format compact (AI consumer mode)
@@ -213,8 +243,15 @@ Commands:
                              Flags: --output <dir>, --template <name>, --no-template,
                                     --strict (hard-fail on doctor errors),
                                     --reuse-parse (skip Rust parse if chunked/ exists),
+                                    --timeout <seconds> (parser wall-clock cap;
+                                    default 1800, 0 disables),
+                                    --assert-no-fallbacks (hard-fail if any named
+                                    output resolves through an _fn() stub),
                                     --emit-debug (retain dependency-graph.json,
-                                    _graph.json, model-map.json for offline analysis)
+                                    _graph.json, model-map.json for offline analysis),
+                                    --lazy-engine (engine.js loads sheet modules on
+                                    demand via async load()/runScoped() + output-cone
+                                    scoping; run() stays sync — await load() first)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   verify <modelDir>          Check the engine reproduces the model's base case
   query <modelDir> [args]    Query ground truth cells

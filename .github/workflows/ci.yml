@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref so a fast follow-up push doesn't
+# queue behind a stale one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Run every OS to completion even if one fails — a Windows-only path bug
+      # shouldn't hide a passing Linux run (and vice versa). This project is
+      # developed on Windows but ships cross-platform, so both are required.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      # The lone runtime dep (xlsx) is pinned to a SheetJS CDN tarball in
+      # package-lock.json; npm ci resolves it from the lock. eval/ has its own
+      # package.json but the test suite doesn't import it, so we skip it here.
+      - name: Install JS dependencies
+        run: npm ci
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: pipelines/rust
+
+      - name: Build Rust parser
+        run: cargo build --release --manifest-path pipelines/rust/Cargo.toml
+
+      - name: Rust unit tests
+        run: cargo test --release --manifest-path pipelines/rust/Cargo.toml
+
+      # Pure-JS suites (CLI, manifest, maps, AI interface, ship-ready,
+      # use-case) — no parser binary required.
+      - name: JS test suite
+        run: npm test
+
+      # These exercise the freshly built rust-parser end-to-end: chunked
+      # engine accuracy, the dependency-graph/closure pipeline, the engine
+      # runtime contract, and the default-output artifact slimming.
+      - name: Smoke (chunked engine accuracy)
+        run: npm run smoke
+
+      - name: Dependency-graph + closures
+        run: npm run test:depgraph
+
+      - name: Engine runtime contract
+        run: npm run test:engine
+
+      - name: Runnable engine + build manifest
+        run: npm run test:runnable
+
+      - name: Lazy engine (--lazy-engine load()/runScoped() + cone scoping)
+        run: npm run test:lazy-engine
+
+      - name: Artifact slimming
+        run: npm run test:slimming
+
+      # Golden-master gate: the #26 correctness gate (--assert-no-fallbacks) plus
+      # an exact-float baseCaseValue diff against canonical returns. Exercises the
+      # mechanism on a synthetic committed fixture; the real (proprietary) figures
+      # are gitignored and only diffed on a runner that sets ETE_GOLDEN_DIR.
+      - name: Golden-master gate
+        run: npm run test:golden

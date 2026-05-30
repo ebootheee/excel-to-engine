@@ -136,13 +136,17 @@ function runExport(modelDir, args) {
  * Generate a manifest from a chunked output directory.
  */
 function runGenerate(chunkedDir, args) {
-  // Find ground truth
-  const gtPath = join(chunkedDir, '_ground-truth.json');
-  if (!existsSync(gtPath)) {
-    return { error: `Ground truth not found: ${gtPath}. Run the Rust parser first.` };
+  // Reuse a pre-loaded ground truth when `init` shares one across the manifest
+  // pipeline (generate → refine → doctor → maps); otherwise read it from disk.
+  // The GT is read-only here, so a shared object is safe.
+  let gt = args._gt;
+  if (!gt) {
+    const gtPath = join(chunkedDir, '_ground-truth.json');
+    if (!existsSync(gtPath)) {
+      return { error: `Ground truth not found: ${gtPath}. Run the Rust parser first.` };
+    }
+    gt = JSON.parse(readFileSync(gtPath, 'utf-8'));
   }
-
-  const gt = JSON.parse(readFileSync(gtPath, 'utf-8'));
 
   const { manifest, confidence, reviewChecklist } = generateManifest(gt, {
     groundTruthPath: './_ground-truth.json',
@@ -255,7 +259,8 @@ const DOCTOR_FIELDS = [
 
 function runDoctor(modelDir, args) {
   const manifest = loadManifest(modelDir);
-  const gt = loadGroundTruth(manifest, modelDir);
+  // Reuse init's shared ground truth when provided (read-only here).
+  const gt = args._gt || loadGroundTruth(manifest, modelDir);
 
   const issues = [];
   const lines = [];
