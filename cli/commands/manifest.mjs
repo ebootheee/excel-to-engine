@@ -520,6 +520,24 @@ function runDoctor(modelDir, args) {
     }
   }
 
+  // Informational reconciliation: doctor only flags SUSPECT mappings, so it can
+  // say "All checks passed" while the summary still shows "—" for unmapped
+  // fields. List those here (absent in the model or not auto-detected) so the
+  // user isn't left wondering whether something broke.
+  const standardFields = [
+    ['Net IRR', 'equity.classes[0].netIRR'],
+    ['Net MOIC', 'equity.classes[0].netMOIC'],
+    ['Gross IRR', 'equity.classes[0].grossIRR'],
+    ['Gross MOIC', 'equity.classes[0].grossMOIC'],
+    ['Total Carry', 'carry.totalCell'],
+  ];
+  const unmapped = standardFields.filter(([, p]) => !getNested(manifest, p)).map(([l]) => l);
+  if (unmapped.length) {
+    lines.push('');
+    lines.push(`Note (informational, not errors): ${unmapped.join(', ')} not mapped — absent in this model or not auto-detected.`);
+    lines.push(`  If your model has one, map it: ete manifest set ${modelDir} <field> <cell>`);
+  }
+
   return {
     issues,
     valid: issues.filter(i => i.severity === 'error').length === 0,

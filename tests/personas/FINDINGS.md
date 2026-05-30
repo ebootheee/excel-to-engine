@@ -74,6 +74,28 @@ errors (A2/A4), and the headline metrics present in the contract (C3/C4/C5).
     has no scalar cell). → derive an exit-year scalar.
 17. **modelTitle = filename**, not workbook title; **exitDebt** only one facility.
 
+## Resolution status (Waves 2–3)
+
+Baseline 2/12 → Wave 2 **3/12** (avg woah 3.50→3.92, exactly 3.33→3.83). Wave 3
+targets the residual A5-trust cap + handoff gaps:
+
+- ✅ P0-1 fund metrics in contract + summary (Wave 2)
+- ✅ P0-2/3 fabricated EBITDA / segment over-grab (Wave 2 summary lens)
+- ✅ P0-4 doctor cap-rate false-quarantine (Wave 3)
+- ✅ P0-5 exit-multiple basis label (Wave 2)
+- ✅ P0-6 multi-class headline suppression (Wave 2)
+- ✅ **Coverage "2/8 / Missing…" PE-yardstick trust-killer** → family-aware (Wave 3)
+- ✅ P1-9 period off-by-one, P1-10 example tolerance, P1-11 humanize (Wave 2)
+- ✅ input min/max/step + format incl NRR>1 & LTV/leverage (Wave 2–3)
+- ✅ contract refresh catch-22 (`manifest set` self-refreshes, closures preserved) (Wave 3)
+- ✅ `outputs.*` promotion so `manifest set outputs.x` reaches the contract (Wave 3)
+- ✅ P2-13 delta-cascade: honesty warning when it can't reproduce base (Wave 3)
+- ⏳ P2-14 engine intra-sheet topo-sort (deep Rust; documented + verify catches)
+- ⏳ P2-15 model-type classification (lens compensates for display)
+- ⏳ static literal IRR/MOIC in some synthetic models (model-authoring + engine)
+- ⏳ per-year time-series outputs (credit/debt monitor) — new feature
+- ⏳ non-defined-name driver levers (corp budget) — new feature
+
 ## Process note
 Do NOT edit cli/ or lib/ while a journey/model workflow is running — live edits
 confound the agents' results (observed: "Platform EBITDA unstable across runs"

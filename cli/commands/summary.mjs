@@ -55,6 +55,14 @@ export function runSummary(modelDir, args) {
 
   const exitMultipleType = manifest.outputs?.exitMultiple?.type || null;
 
+  // The exit-value output is frequently an "Exit Equity Value" cell, which is
+  // wrong to print under a hardcoded "Terminal Value" heading (a buyout's
+  // terminal value is enterprise value). Use the cell's own label so the
+  // headline never misnames a $225M equity figure as terminal value.
+  let terminalValueLabel = null;
+  const tvCell = manifest.outputs?.terminalValue?.cell;
+  if (typeof tvCell === 'string') terminalValueLabel = rowLabelFor(gt, tvCell);
+
   // Build summary
   const summary = {
     model: {
@@ -71,6 +79,7 @@ export function runSummary(modelDir, args) {
     fundLevel,
     covenants,
     exitMultipleType,
+    terminalValueLabel,
     lens: detectLens(manifest, fundLevel, covenants, outputs),
     segments: [],
     outputs,
@@ -207,7 +216,10 @@ function formatSummaryTable(s, opts = {}) {
     lines.push(`${padRight(operatingLabel(s.lens), 28)}${fmtCur(s.ebitda.first)} → ${fmtCur(s.ebitda.last)}  (CAGR: ${cagrStr})`);
   }
   if (s.outputs.terminalValue) {
-    const tvLabel = s.lens === 'realestate' ? 'Exit Value' : s.lens === 'fund' ? 'Total Value' : 'Terminal Value';
+    const lensLabel = s.lens === 'realestate' ? 'Exit Value' : s.lens === 'fund' ? 'Total Value' : 'Terminal Value';
+    // Prefer the cell's actual label (e.g. "Exit Equity Value") over a generic
+    // heading so the headline can't misname equity as terminal/enterprise value.
+    const tvLabel = (s.terminalValueLabel && s.terminalValueLabel.length <= 28) ? s.terminalValueLabel : lensLabel;
     lines.push(`${padRight(tvLabel, 28)}${fmtCur(s.outputs.terminalValue)}`);
   }
   if (s.outputs.exitEquity) lines.push(`${padRight('Exit Equity', 28)}${fmtCur(s.outputs.exitEquity)}`);
@@ -238,6 +250,11 @@ function formatSummaryTable(s, opts = {}) {
     lines.push(padRight('Returns', 20) + padLeft('Gross', 12) + padLeft('Net', 12));
     lines.push(padRight('  MOIC', 20) + padLeft(fmtMult(hr.grossMOIC), 12) + padLeft(fmtMult(hr.netMOIC), 12));
     lines.push(padRight('  IRR', 20) + padLeft(hr.grossIRR != null ? fmtPct(hr.grossIRR) : '—', 12) + padLeft(hr.netIRR != null ? fmtPct(hr.netIRR) : '—', 12));
+    // Explain the Net dashes in plain English — a bare "—" reads as "broken",
+    // especially to an LP-facing analyst who cares most about net returns.
+    if ((hr.grossMOIC != null || hr.grossIRR != null) && hr.netMOIC == null && hr.netIRR == null) {
+      lines.push('  (Net of fees/carry not shown — this model has no net-return cell; derive from gross + carry, or add one in Excel.)');
+    }
     lines.push('');
   }
 
@@ -345,6 +362,27 @@ function headlineReturns(outputs) {
 }
 
 function fmtMult(v) { return v == null ? '—' : `${v.toFixed(2)}x`; }
+
+/** Leftmost string cell on the same row as cellRef — the cell's human label. */
+function rowLabelFor(gt, cellRef) {
+  const bang = cellRef.lastIndexOf('!');
+  if (bang < 0) return null;
+  const sheet = cellRef.slice(0, bang);
+  const m = cellRef.slice(bang + 1).match(/^[A-Z]+(\d+)$/);
+  if (!m) return null;
+  const row = m[1], prefix = sheet + '!';
+  let best = null;
+  for (const [addr, v] of Object.entries(gt)) {
+    if (typeof v !== 'string') continue;
+    if (!addr.startsWith(prefix)) continue;
+    const cm = addr.slice(prefix.length).match(/^([A-Z]+)(\d+)$/);
+    if (!cm || cm[2] !== row) continue;
+    if (!best || cm[1].length < best.col.length || (cm[1].length === best.col.length && cm[1] < best.col)) {
+      best = { col: cm[1], text: v.trim() };
+    }
+  }
+  return best ? best.text : null;
+}
 
 function fmtCur(val) {
   if (val === null || val === undefined) return '—';
