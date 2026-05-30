@@ -9,9 +9,41 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { loadManifest, loadGroundTruth } from '../../lib/manifest.mjs';
+import { loadManifest, loadGroundTruth, resolveBaseCaseOutputs } from '../../lib/manifest.mjs';
 import { computeScenario, computeAttribution } from './delta-cascade.mjs';
 import { fmtNum } from '../format.mjs';
+
+/**
+ * Detect when the delta-cascade approximation can't reproduce the model's own
+ * base case (it assumes a multiple-driven valuation chain that some structures —
+ * S&U equity plugs, revenue-multiple growth deals — don't follow). When it
+ * can't, scenario/sensitivity numbers are untrustworthy, so we say so loudly and
+ * point at the exact engine. Returns a warning string or null.
+ */
+export function cascadeBaseWarning(manifest, gt) {
+  const pick = (o, m) => {
+    if (!o) return undefined;
+    if (typeof o[m] === 'number') return o[m];
+    const k = Object.keys(o).find(x => x.endsWith('.' + m));
+    return k ? o[k] : undefined;
+  };
+  const off = (a, b) => typeof a === 'number' && typeof b === 'number' && b !== 0 && Math.abs(a - b) / Math.abs(b) > 0.05;
+  let noop;
+  try { noop = computeScenario(manifest, gt, {}); } catch { return null; }
+  const trueBase = resolveBaseCaseOutputs(manifest, gt);
+  for (const m of ['grossMOIC', 'grossIRR']) {
+    const b = pick(noop.base, m), s = pick(noop.scenario, m), t = pick(trueBase, m);
+    // A no-op scenario must be the identity; and the base must match the model.
+    if (off(s, b) || off(b, t)) {
+      const shown = (typeof s === 'number' ? s : b), ref = (typeof t === 'number' ? t : b);
+      return `⚠ Approximation warning: the fast scenario/sensitivity preview can't reproduce this model's `
+        + `base ${m} (preview ${Number(shown).toFixed(2)} vs model ${Number(ref).toFixed(2)}). This model's return `
+        + `math doesn't fit the delta-cascade's multiple-driven chain, so these preview figures are unreliable. `
+        + `For exact what-ifs use the engine: engine.run({ "<inputCell>": value }) or \`ete eval <cell> --inputs ...\`.`;
+    }
+  }
+  return null;
+}
 
 /**
  * Run a complete scenario analysis.
@@ -37,6 +69,9 @@ export function runScenario(modelDir, rawArgs = {}) {
   // Run delta cascade
   const result = computeScenario(manifest, gt, adjustments);
 
+  // Honesty guard: flag when the approximation can't reproduce the base case.
+  result._cascadeWarning = cascadeBaseWarning(manifest, gt);
+
   // Attribution if requested
   if (rawArgs.attribution) {
     result.attribution = computeAttribution(manifest, gt, adjustments);
@@ -54,8 +89,21 @@ export function runScenario(modelDir, rawArgs = {}) {
 
   // Format output
   result._formatted = formatScenarioResult(result, rawArgs);
+  if (result._cascadeWarning) result._formatted = result._cascadeWarning + '\n\n' + result._formatted;
 
   return result;
+}
+
+/**
+ * Base-case divergence warning for a model dir (used by the sensitivity command,
+ * which sweeps rather than producing a single base/scenario pair).
+ */
+export function baseCaseDivergenceWarning(modelDir) {
+  try {
+    const manifest = loadManifest(modelDir);
+    const gt = loadGroundTruth(manifest, modelDir);
+    return cascadeBaseWarning(manifest, gt);
+  } catch { return null; }
 }
 
 /**
