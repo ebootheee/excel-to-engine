@@ -350,8 +350,26 @@ export function runInit(excelPath, args) {
     }
   }
 
+  // Optional engine fidelity check (--verify). Run in a subprocess so a heavy
+  // engine.run() can't blow up the init process, and so init stays synchronous.
+  if (args.verify) {
+    lines.push('');
+    lines.push('Verifying engine reproduces the base case (--verify)...');
+    try {
+      const vr = spawnSync('node', [join(PACKAGE_ROOT, 'cli', 'index.mjs'), 'verify', chunkedDir],
+        { encoding: 'utf-8', timeout: 600000, maxBuffer: 16 * 1024 * 1024 });
+      const txt = (vr.stdout || vr.stderr || '').trim();
+      if (txt) lines.push(txt.split('\n').map(l => '  ' + l).join('\n'));
+    } catch (e) {
+      lines.push(`  (verify skipped: ${e.message})`);
+    }
+  }
+
   lines.push('');
-  lines.push(`Ready. Try: ete summary ${chunkedDir}`);
+  lines.push(`Ready. Next steps:`);
+  lines.push(`  Sanity-check the model:   ete summary ${chunkedDir}`);
+  lines.push(`  Confirm it matches Excel: ete verify ${chunkedDir}`);
+  lines.push(`  Hand off to a developer:  ${join(chunkedDir, 'INTEGRATION.md')}  (+ run: node ${join(chunkedDir, 'example.mjs')})`);
 
   // Machine-readable quiet output: skips all the narrative, returns a
   // compact JSON-ready summary for CI/agent contexts.

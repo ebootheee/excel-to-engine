@@ -115,6 +115,11 @@ ok('example.mjs reports base case matches', /match baseCaseValue/.test(exRes.std
 const v = await verifyEngine(chunked);
 ok('engine.run() reproduces base case (no drift)', v.ok, v.drifted?.map(d => d.name).join(','));
 
+// --- ete verify command ---
+const verRes = spawnSync('node', [CLI, 'verify', chunked], { encoding: 'utf-8', timeout: 60000 });
+ok('ete verify exits 0', verRes.status === 0, (verRes.stderr || '').slice(0, 200));
+ok('ete verify confirms base-case reproduction', /reproduces the model's base case/.test(verRes.stdout || ''));
+
 try { rmSync(OUT, { recursive: true, force: true }); } catch {}
 
 console.log(`\nResults: ${pass} passed, ${fail} failed, ${pass + fail} total\n`);
