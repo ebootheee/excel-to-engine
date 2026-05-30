@@ -387,6 +387,20 @@ function runDoctor(modelDir, args) {
         });
       }
     }
+    // A dollar carry total is never a fraction. A value in (0,1) is almost
+    // always the carry RATE assumption (e.g. "GP Carried Interest" = 0.20)
+    // mistaken for the dollar total.
+    const cv = resolveCell(gt, cell);
+    if (typeof cv === 'number' && cv > 0 && cv < 1) {
+      issues.push({
+        severity: 'error',
+        field: 'carry.totalCell',
+        cell,
+        value: cv,
+        message: `value ${cv} looks like a carry RATE (a fraction), not a dollar carry total`,
+        fix: `ete query ${modelDir} --search "Carried Interest|Total Promote|GP Carry"  →  ete manifest set ${modelDir} carry.totalCell <dollarCell>`,
+      });
+    }
     }
   }
 

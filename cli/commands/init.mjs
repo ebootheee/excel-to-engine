@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
 import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
+import { emitIntegrationDoc } from '../../lib/integration-doc.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEMPLATES_DIR = join(__dirname, '..', '..', 'templates');
@@ -277,6 +278,19 @@ export function runInit(excelPath, args) {
     }
   } catch (e) {
     lines.push(`  (Map emission skipped: ${e.message})`);
+  }
+
+  // Step 5c: Emit the coding-agent handoff bundle (INTEGRATION.md + example.mjs).
+  // This is the surface a PE analyst hands to their coding agent: a tailored,
+  // self-contained guide to wiring engine.run() into an app, plus a runnable
+  // demo. Best-effort — never blocks init.
+  try {
+    const ig = emitIntegrationDoc(chunkedDir, { modelTitle: manifestResult?.manifest?.model?.title });
+    if (ig.written?.length > 0) {
+      lines.push(`  Handoff bundle: ${ig.written.join(', ')} (run: node ${join(chunkedDir, 'example.mjs')})`);
+    }
+  } catch (e) {
+    lines.push(`  (Integration doc skipped: ${e.message})`);
   }
 
   // Step 5b: Slim the default chunked/ output. The cell-level
