@@ -44,23 +44,38 @@ pub struct ConvergenceCluster {
 // Dependency extraction from raw formula strings
 // ---------------------------------------------------------------------------
 
+/// How [`extract_refs_impl`] renders a range reference (`A1:B10`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RangeMode {
+    /// Enumerate every interior cell (capped at 1000): `A1:A3` → A1,A2,A3.
+    /// Complete but O(range size) strings — the source of the 37 GB graph.
+    Expand,
+    /// Top-left endpoint only: `A1:B10` → A1. Cheap *shape* (cycle detection).
+    TopLeft,
+    /// Keep the range as a single token: `A1:B10` → "A1:B10". Lossless and
+    /// compact (one string per range, regardless of size); the consumer
+    /// expands lazily against its cells of interest. This is what the
+    /// dependency-graph contract uses so reachability stays complete without
+    /// materializing billions of edges.
+    Keep,
+}
+
 /// Very lightweight cell-reference extractor.  We only need the *shape* of the
 /// dependency graph here — the full AST parse happens in formula_ast.rs.
 /// We look for patterns:
 ///   • Simple refs: A1, B12, AA100 (col letters + row digits)
 ///   • Cross-sheet: Sheet1!A1  or  'Sheet Name'!B3
-///   • Ranges: A1:B10 — **expanded to every interior cell** (capped at 1000),
-///     so the cell-level dependency-graph contract is complete for transitive
-///     reachability.
+///   • Ranges: A1:B10 — **expanded to every interior cell** (capped at 1000).
 ///
 /// Range expansion is the expensive part: a single `SUM(A1:A1000)` yields 1000
 /// strings. Callers that only need dependency *shape* (which sheets, or which
 /// cells form a cycle) — not every interior cell — must use
 /// [`extract_refs_shallow`] or [`collect_sheet_deps`] instead; expanding here and
 /// discarding the result is what hung the chunked build on multi-million-formula
-/// models (see those functions).
+/// models (see those functions). The dependency-graph emitter uses
+/// [`extract_refs_ranges`] (compact range tokens) for the same reason.
 pub fn extract_refs(formula: &str, current_sheet: &str) -> Vec<String> {
-    extract_refs_impl(formula, current_sheet, true)
+    extract_refs_impl(formula, current_sheet, RangeMode::Expand)
 }
 
 /// Like [`extract_refs`] but **does not expand ranges**: `A1:B10` contributes
@@ -71,10 +86,22 @@ pub fn extract_refs(formula: &str, current_sheet: &str) -> Vec<String> {
 /// known-good engines were built with; self-including ranges (`B10=SUM(B1:B10)`)
 /// stay benign because single-node SCCs aren't treated as cycles.
 pub fn extract_refs_shallow(formula: &str, current_sheet: &str) -> Vec<String> {
-    extract_refs_impl(formula, current_sheet, false)
+    extract_refs_impl(formula, current_sheet, RangeMode::TopLeft)
 }
 
-fn extract_refs_impl(formula: &str, current_sheet: &str, expand: bool) -> Vec<String> {
+/// Like [`extract_refs`] but **keeps ranges as single tokens**: `A1:B10`
+/// contributes the one string `"A1:B10"` instead of every interior cell. This is
+/// the cell-level dependency-graph emitter's extractor: it preserves complete
+/// reachability information (the full range, not a truncated endpoint) while
+/// emitting O(refs-per-formula) strings instead of O(cells-covered). A consumer
+/// reconstructs interior membership by expanding the token against the (small)
+/// sets of cells it actually cares about. Eliminates the 37 GB / 7 min
+/// dependency-graph blowup on multi-million-formula models (issue #32).
+pub fn extract_refs_ranges(formula: &str, current_sheet: &str) -> Vec<String> {
+    extract_refs_impl(formula, current_sheet, RangeMode::Keep)
+}
+
+fn extract_refs_impl(formula: &str, current_sheet: &str, mode: RangeMode) -> Vec<String> {
     let mut refs = Vec::new();
     let bytes = formula.as_bytes();
     let len = bytes.len();
@@ -109,7 +136,7 @@ fn extract_refs_impl(formula: &str, current_sheet: &str, expand: bool) -> Vec<St
             if i < len && bytes[i] == b'!' {
                 i += 1;
                 // Now read cell reference
-                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..], expand) {
+                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..], mode) {
                     for a in addr {
                         refs.push(format!("{}!{}", sheet_name, a));
                     }
@@ -132,7 +159,7 @@ fn extract_refs_impl(formula: &str, current_sheet: &str, expand: bool) -> Vec<St
                 // It's a cross-sheet ref
                 let sheet_name = &formula[start..j];
                 i = j + 1;
-                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..], expand) {
+                if let Some((addr, consumed)) = read_cell_or_range(&formula[i..], mode) {
                     for a in addr {
                         refs.push(format!("{}!{}", sheet_name, a));
                     }
@@ -142,7 +169,7 @@ fn extract_refs_impl(formula: &str, current_sheet: &str, expand: bool) -> Vec<St
                 continue;
             }
             // Not a sheet ref — might be a function name or just letters; read as potential cell ref
-            if let Some((addr, consumed)) = read_cell_or_range(&formula[start..], expand) {
+            if let Some((addr, consumed)) = read_cell_or_range(&formula[start..], mode) {
                 // Only if we consumed more than zero and it looks like a cell address
                 // (We need to check it's not just a function name like SUM)
                 // A cell ref must start with letters then have digits
@@ -172,10 +199,10 @@ fn extract_refs_impl(formula: &str, current_sheet: &str, expand: bool) -> Vec<St
 }
 
 /// Read a cell reference or range starting at `s`.
-/// Returns (list of cell addresses, chars consumed). When `expand` is false a
-/// range yields only its top-left endpoint (the interior is not enumerated);
-/// `consumed` is identical either way, so scanning is unaffected.
-fn read_cell_or_range(s: &str, expand: bool) -> Option<(Vec<String>, usize)> {
+/// Returns (list of cell addresses, chars consumed). The [`RangeMode`] controls
+/// how a range is rendered (expand to interior cells / top-left only / keep as
+/// one token); `consumed` is identical across modes, so scanning is unaffected.
+fn read_cell_or_range(s: &str, mode: RangeMode) -> Option<(Vec<String>, usize)> {
     let bytes = s.as_bytes();
     let len = bytes.len();
     if len == 0 {
@@ -224,14 +251,27 @@ fn read_cell_or_range(s: &str, expand: bool) -> Option<(Vec<String>, usize)> {
     // Check if it's a range A1:B10
     if i + 1 < len && bytes[i] == b':' {
         let rest = &s[i + 1..];
-        if let Some((second, consumed2)) = read_cell_or_range(rest, expand) {
-            if expand {
-                // Expand range to individual cells
-                let cells = expand_range(&first_addr, &second[0]);
-                return Some((cells, i + 1 + consumed2));
+        if let Some((second, consumed2)) = read_cell_or_range(rest, mode) {
+            match mode {
+                RangeMode::Expand => {
+                    // Expand range to individual cells.
+                    let cells = expand_range(&first_addr, &second[0]);
+                    return Some((cells, i + 1 + consumed2));
+                }
+                RangeMode::TopLeft => {
+                    // Top-left endpoint only — never enumerate the interior.
+                    return Some((vec![first_addr], i + 1 + consumed2));
+                }
+                RangeMode::Keep => {
+                    // Keep the whole range as one token (e.g. "A1:B10"); the
+                    // consumer expands it lazily. `second[0]` is the bottom-right
+                    // endpoint (inner read is a single cell, mode-independent).
+                    return Some((
+                        vec![format!("{}:{}", first_addr, second[0])],
+                        i + 1 + consumed2,
+                    ));
+                }
             }
-            // Shallow: top-left endpoint only — never enumerate the interior.
-            return Some((vec![first_addr], i + 1 + consumed2));
         }
     }
 
@@ -806,6 +846,31 @@ mod tests {
         // Cross-sheet ranges are also not enumerated.
         let refs = extract_refs_shallow("Other!C1:C500", "S");
         assert_eq!(refs, vec!["Other!C1".to_string()]);
+    }
+
+    #[test]
+    fn extract_refs_ranges_keeps_range_tokens() {
+        // The dependency-graph emitter uses this: one compact token per range,
+        // not 1000 cells (issue #32) and not a lossy top-left endpoint.
+        let refs = extract_refs_ranges("SUM(A1:A1000)", "PP&E");
+        assert_eq!(refs, vec!["PP&E!A1:A1000".to_string()]);
+
+        // Single cells are unchanged (no colon → no range token).
+        assert_eq!(
+            extract_refs_ranges("A1+B2", "S"),
+            vec!["S!A1".to_string(), "S!B2".to_string()]
+        );
+
+        // Cross-sheet ranges keep the qualified token.
+        assert_eq!(
+            extract_refs_ranges("Other!C1:C500", "S"),
+            vec!["Other!C1:C500".to_string()]
+        );
+
+        // Mixed: a multi-column range token + a single cross-sheet cell.
+        let refs = extract_refs_ranges("SUM(A1:C10)+Debt!B7", "Cash Flow");
+        assert!(refs.contains(&"Cash Flow!A1:C10".to_string()));
+        assert!(refs.contains(&"Debt!B7".to_string()));
     }
 
     #[test]

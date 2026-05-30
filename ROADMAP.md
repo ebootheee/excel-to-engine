@@ -1,5 +1,36 @@
 # excel-to-engine — Roadmap
 
+## Now — Real-model `ete init` completes end-to-end (#32 done, #33 partial, 2026-05-29)
+
+Regenerating the gitignored Outpost A-1/A-2 engines (after the #22 walls) surfaced
+the last two blockers to a clean **full `ete init`** (parser + JS manifest pipeline)
+on the real models. Both addressed:
+
+- **[#32] dependency-graph 37 GB → ~0.5 GB. ✅ DONE.** The cell-level graph
+  expanded every range to interior cells (`SUM(A1:A1000)` → 1000 edges) → 37 GB /
+  ~7 min on A-1, and `ete init` then `JSON.parse`d it → OOM. Now emits **compact
+  range tokens** (`extract_refs_ranges` / `RangeMode::Keep`, schema v2); 504 MB
+  (A-1) / 532 MB (A-2). The JS closure BFS (`computeOutputClosures`) expands tokens
+  lazily via column-indexed binary-search interval queries — identical closures,
+  no materialization; graph read once; both consumers share one pass. `ete init`
+  re-execs with a 12 GB heap for the ~7.4 GB closure-bake peak.
+- **[#33] streamed module writer. ✅ DONE (emit half).** `write_sheet_module<W>`
+  streams each sheet module straight to its file instead of `Vec<String>` + join
+  (~2× a 190 MB monster transiently). Emit peak ~2.4 GB.
+- **[#33] returns-cone shrinking — OPEN (deferred, needs cluster-breaking).** The
+  other #33 direction can't be done by row-chunking alone: the returns live in a
+  **17-of-20-sheet circular cluster** that loads atomically (incl. all 3 monster
+  modules), so `--lazy-engine` cone scoping can't shrink the returns load until the
+  cluster is broken/scoped. That's correctness-sensitive and coupled to
+  **cluster-once eval** — tracked there, not rushed (the eager engine Mippy
+  consumes must stay stable).
+- New `scripts/verify-contract.mjs` — machine-checks a build against the Mippy
+  consumer contract (layout, `contentHash`, runnable engine, value cells + closures,
+  fallback audit) without running the full engine.
+
+[#32]: https://github.com/ebootheee/excel-to-engine/issues/32
+[#33]: https://github.com/ebootheee/excel-to-engine/issues/33
+
 ## Now — Engine-integration contract (Mippy request, 2026-05-27)
 
 Surfaced by a production consumer wiring the chunked engine into a Tier-1
@@ -259,11 +290,19 @@ when we next touch the monitor server or auth surface.
 ## Ongoing — Accuracy Improvement + Production Learnings
 
 ### Transpiler Coverage
-- **Measured (Mippy regen, 2026-05-28): 11,813 `_fn()` unsupported-function
-  fallbacks per the PE model engine** — that many formula cells transpile to a generic
-  stub instead of real logic, a prime accuracy suspect. First step: inventory
-  which Excel functions hit the fallback and rank by frequency, then implement
-  the top offenders. (Was unchanged old→new, so it predates our work.)
+- **Concrete return-path targets (golden-master `--assert-no-fallbacks`, 2026-05-29):**
+  on the regenerated A-1/A-2 the returns (`grossMOIC`/`IRR`, `netMOIC`/`IRR`,
+  `equityBasis`, `totalCarry`) resolve through `_fn` stubs for exactly **four**
+  unsupported functions — **`XNPV`, `FILTER` (`_XLFN._XLWS.FILTER`), `MINIFS`,
+  `MAXIFS`**. Implementing these four is what makes `golden-master
+  --assert-no-fallbacks` pass on the real models (the highest-leverage transpiler
+  work — it directly unblocks the value cells Mippy calibrates against). `ete init
+  --assert-no-fallbacks` / `eval/golden-master.mjs --assert-no-fallbacks` print the
+  exact offending cell + function per output.
+- **Measured (2026-05-29 regen): ~11,782 (A-1) / 11,785 (A-2) `_fn()`
+  fallbacks per engine** — that many formula cells transpile to a generic stub.
+  The four above are the subset on the *return* paths; the rest are the long tail.
+  Inventory by frequency, implement top offenders.
 - Implement INDIRECT function (dynamic cell references)
 - Fix 2D range handling edge cases for very large sheets
 - Handle array formulas / CSE (Ctrl+Shift+Enter) patterns

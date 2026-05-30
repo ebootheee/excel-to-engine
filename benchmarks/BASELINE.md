@@ -9,16 +9,16 @@ values or full sheet inventory. Regenerate:
 `node benchmarks/bench.mjs --root <engines>`. Full per-sheet detail
 lands in the gitignored `benchmarks/results/`.
 
-_Last run: baseline-2026-05-28_
+_Last run: 2026-05-29T20-23-15-471Z_
 
 | Model | Accuracy | Cells matched | Sheets ≥95% | Skipped | Eval time | GT |
 |-------|---------:|------:|:-----------:|:-------:|----------:|---:|
-| Model A | 84.33% | 1491/1768 | 1/3 | 17 | 41s | 201.5 MB |
-| Model B | 85.54% | 1686/1971 | 2/4 | 17 | 45s | 211 MB |
+| Model A | 98.02% | 1733/1768 | 2/3 | 17 | 31s | 177 MB |
+| Model B | 97.82% | 1928/1971 | 3/4 | 17 | 42s | 185.4 MB |
 
 ## Known blocker categories
 
 Tracked by name because PLAN.md already calls them out; values are accuracy %, not financials.
 
-- **Model A**: 1/3 sheets clean; blockers: Owned Asset PP&E (skipped: module too large (190MB > 150MB limit)); Headcount (skipped: circular cluster (--skip-clusters; needs single-pass orchestrator eval))
-- **Model B**: 2/4 sheets clean; blockers: Owned Asset PP&E (skipped: module too large (190MB > 150MB limit)); Headcount (skipped: circular cluster (--skip-clusters; needs single-pass orchestrator eval))
+- **Model A**: 2/3 sheets clean; blockers: Owned Asset PP&E (skipped: module too large (190MB > 150MB limit)); Headcount (skipped: circular cluster (--skip-clusters; needs single-pass orchestrator eval))
+- **Model B**: 3/4 sheets clean; blockers: Owned Asset PP&E (skipped: module too large (190MB > 150MB limit)); Headcount (skipped: circular cluster (--skip-clusters; needs single-pass orchestrator eval))

@@ -65,7 +65,8 @@ pub fn partition_sheets<'a>(workbook: &'a WorkbookData) -> Vec<SheetPartition<'a
     // to ≤1000 cell strings per formula and then we discarded all the same-sheet
     // ones — O(formula_cells × range_size) wasted work that hung this step on
     // multi-million-formula sheets. The cell-level dependency-graph contract
-    // (write_dependency_graph) still uses the expanding extract_refs.
+    // (write_dependency_graph) uses extract_refs_ranges — compact range tokens,
+    // also non-expanding (issue #32).
     let partitions: Vec<SheetPartition<'a>> = workbook
         .sheets
         .par_iter()

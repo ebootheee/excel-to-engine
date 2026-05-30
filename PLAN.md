@@ -1,15 +1,37 @@
 # excel-to-engine — Plan
 
-> **Next session:** the three chunked-build scaling walls are closed (#22) — the
-> emit streams module-by-module (was: hold all ~800 MB before writing), partitions
-> borrow cells instead of cloning (was: peak-memory doubling), and `ete init
-> --lazy-engine` emits an on-demand engine so a consumer can run the oracle without
-> importing ~800 MB up front. **Next: a full clean regen on the real A1/A2 models
-> to confirm the emit now completes within memory** (couldn't be measured here —
-> the models are gitignored), then the deeper residual: **row-chunk the 3 monster
-> sheets** (Owned_Asset_PP_E, Future_Owned_Acquisitions, Technology) so even one is
-> small to generate + import. Also still open: deeper transpiler coverage (the
-> 11,813 `_fn` offenders behind #26) and cluster-once eval.
+> **Next session:** a clean **full `ete init`** now completes end-to-end on the
+> real Outpost A-1/A-2 models — the last two regen blockers are fixed. **#32**: the
+> cell-level dependency graph no longer expands ranges (37 GB / 7 min → ~0.5 GB
+> compact tokens), so the JS closure-baking step parses it without OOM; closures
+> are computed by a range-aware indexed BFS and `ete init` re-execs with a 12 GB
+> heap. **#33**: `generate_sheet_module` streams to the file instead of building a
+> `Vec<String>` + join. Both A-1 and A-2 regenerated; see `benchmarks/BASELINE.md`.
+> **Still open:** the #33 returns-cone shrink needs **cluster-breaking** (the
+> returns sit in a 17-of-20-sheet atomic cluster) — coupled to **cluster-once
+> eval**; the manifest pipeline's full-GT O(N) passes (generate/refine/doctor) are
+> the remaining build-time cost; deeper transpiler coverage (11,813 `_fn`).
+
+## Status: `ete init` completes on the real models + A-1/A-2 regenerated + benchmarked (#32, #33) — landed 2026-05-29
+
+A clean **full `ete init`** now runs end-to-end on both Outpost models and emits a
+complete, Mippy-consumable contract. **#32** (three layered fixes): compact range
+tokens (37 GB → ~0.5 GB), newline-delimited graph + a chunked streaming loader
+(~0.5 GB still exceeds Node's 512 MiB string cap — `readFileSync` was silently
+dropping the closures), and per-output range-token dedup (closure bake ~15 min →
+~2.6 min); plus a 12 GB `init` heap re-exec guard. **#33**: streamed sheet-module
+writer (no `Vec<String>`+join). Also fixed a slimming bug that dropped the 3 KB
+`_graph.json` the benchmark needs; added `scripts/verify-contract.mjs`.
+
+**Regenerated A-1 + A-2 (~21 min each):** both pass `verify-contract` —
+**closures baked 17/17 and 18/18** (A-2's 539 MB graph was the exact prior failure
+case). **Accuracy 98.0% / 97.8%** standalone, live recompute (up from 84.3% /
+85.5% on the older build; cluster + 190 MB PP&E still skipped). Build mem: emit
+~2.4 GB, closure-bake ~7.4 GB. `golden-master --assert-no-fallbacks` shows the
+returns resolve through 4 untranspiled functions (`XNPV`, `FILTER`, `MINIFS`,
+`MAXIFS`) — the concrete next transpiler-coverage target. **Remaining build cost:**
+the manifest pipeline's full-GT O(N) passes (generate/refine/doctor) +
+`collectFileFallbacks` reading the monster modules now dominate `ete init`.
 
 ## Status: Chunked-build scaling walls closed (streamed emit + borrowed partitions + opt-in lazy engine) — landed 2026-05-29
 

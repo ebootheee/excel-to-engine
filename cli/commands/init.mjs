@@ -380,25 +380,27 @@ export function runInit(excelPath, args) {
   }
 
   // Step 5b: Slim the default chunked/ output. The cell-level
-  // dependency-graph.json (ranges expanded → the largest artifact on big
-  // models) and the sheet-level _graph.json are intermediate/debug: the
-  // high-value derivative — the dependsOnNamedInputs / affectsOutputs closures —
-  // was just baked into the named maps by Step 5, and nothing in the toolkit
-  // reads _graph.json. Remove them unless --emit-debug (request #8: keep the
-  // default output small; the contract lives in the named maps).
+  // dependency-graph.json is the largest intermediate artifact on big models
+  // (~0.5 GB even with compact range tokens); its high-value derivative — the
+  // dependsOnNamedInputs / affectsOutputs closures — was just baked into the
+  // named maps by Step 5, so it's removed unless --emit-debug (request #8: keep
+  // the default output small; the contract lives in the named maps).
+  //
+  // The sheet-level _graph.json (topo order + circular clusters) is KEPT: it's
+  // ~3 KB and `eval/per-sheet-eval.mjs` reads it to know which sheets converge
+  // as a cluster (so the benchmark scores standalone sheets correctly). Slimming
+  // a 3 KB file saved nothing and silently broke cluster-aware eval.
   if (!args.emitDebug) {
     let freed = 0;
-    for (const f of ['dependency-graph.json', '_graph.json']) {
-      const p = join(chunkedDir, f);
-      if (existsSync(p)) {
-        try { freed += statSync(p).size; unlinkSync(p); } catch { /* ignore */ }
-      }
+    const p = join(chunkedDir, 'dependency-graph.json');
+    if (existsSync(p)) {
+      try { freed += statSync(p).size; unlinkSync(p); } catch { /* ignore */ }
     }
     if (freed > 1e6) {
-      lines.push(`  Slimmed debug artifacts: ${(freed / 1e6).toFixed(0)} MB freed (--emit-debug to retain)`);
+      lines.push(`  Slimmed dependency-graph.json: ${(freed / 1e6).toFixed(0)} MB freed (--emit-debug to retain)`);
     }
   } else {
-    lines.push('  --emit-debug: retained dependency-graph.json + _graph.json');
+    lines.push('  --emit-debug: retained dependency-graph.json');
   }
 
   // Step 5c: Finalize — lock the artifact layout + emit a content hash so a

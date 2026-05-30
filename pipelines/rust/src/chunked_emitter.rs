@@ -3,7 +3,7 @@
 ///
 /// This implements **Option C: Chunked Compilation** from PLAN-rust-pipeline.md.
 
-use crate::dependency::{extract_refs, extract_refs_shallow};
+use crate::dependency::{extract_refs_ranges, extract_refs_shallow};
 use crate::formula_ast::parse_formula;
 use crate::parser::{CellValue, WorkbookData};
 use crate::sheet_partition::{
@@ -65,16 +65,15 @@ pub fn emit_chunked(
         .map_err(|e| format!("Failed to write _helpers.mjs: {}", e))?;
     eprintln!("[chunked] _helpers.mjs written ({})", human_size(helpers_code.len()));
 
-    // 1. Emit per-sheet modules — STREAMED: generate each module, write it to
-    //    disk immediately, then DROP the string. The previous version did
-    //    par_iter().map(generate_sheet_module).collect() and wrote in a SECOND
-    //    pass — so it held ALL ~800 MB of generated JS (dominated by a few
-    //    monster sheets) in memory at once, on top of the multi-million-cell
-    //    workbook, and wrote nothing to sheets/ until every module finished. On
-    //    the real models that drove the parser past 18 GB with sheets/ empty for
-    //    the whole run. Streaming caps live module strings at what's being
-    //    generated right now; files land incrementally (progress + partial
-    //    durability). A write failure is still fatal (Err -> exit 1).
+    // 1. Emit per-sheet modules — STREAMED twice over: (a) each module is
+    //    written to disk as it's generated rather than collected (an earlier
+    //    version held ALL ~800 MB of generated JS at once → 18 GB peak with an
+    //    empty sheets/ until the very end), and (b) write_sheet_module now
+    //    streams each module straight to the file's buffered writer instead of
+    //    building a Vec<String> + join (issue #33: a monster sheet was held ~2×
+    //    transiently). Live memory is now one transpiled cell expression plus the
+    //    writer buffer, regardless of module size; files land incrementally
+    //    (progress + partial durability). A write failure is still fatal.
     let total_sheets = partitions.len();
     eprintln!("[chunked] Emitting {} sheet modules (streamed)...", total_sheets);
     let t_emit = Instant::now();
@@ -85,13 +84,19 @@ pub fn emit_chunked(
     // sequential (heavy) passes below. All captures are Sync, so this is usable
     // as a rayon map operator.
     let emit_one = |partition: &SheetPartition| -> Result<(String, usize, usize), String> {
-        let code = generate_sheet_module(partition, workbook);
         let file_name = format!("{}.mjs", sanitize_sheet_name(&partition.name));
-        let code_len = code.len();
+        let path = sheets_dir.join(&file_name);
         let n_formulas = partition.formula_cells.len();
-        fs::write(sheets_dir.join(&file_name), &code)
+        // Stream the module straight to the file — no full-module String ever
+        // materializes (the #33 fix; a monster sheet was held twice via Vec+join).
+        let file = fs::File::create(&path)
+            .map_err(|e| format!("Failed to create {}: {}", file_name, e))?;
+        let mut bw = std::io::BufWriter::with_capacity(1 << 20, file);
+        write_sheet_module(partition, &mut bw)
             .map_err(|e| format!("Failed to write {}: {}", file_name, e))?;
-        drop(code); // free the (possibly hundreds-of-MB) module string now
+        bw.flush().map_err(|e| format!("Failed to flush {}: {}", file_name, e))?;
+        drop(bw);
+        let code_len = fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
         let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
         if done % 5 == 0 || done == total_sheets {
             eprint!("\r[chunked]   [{}/{}] modules written...", done, total_sheets);
@@ -255,59 +260,56 @@ pub fn emit_chunked(
 // Per-sheet module generation
 // ---------------------------------------------------------------------------
 
-/// Generate the JavaScript module code for a single sheet.
-fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookData) -> String {
-    let mut lines: Vec<String> = Vec::new();
+/// Stream the JavaScript module code for a single sheet directly to `w`.
+///
+/// Previously this built a `Vec<String>` of every line and `.join("\n")`d it
+/// into one String — for a monster sheet (PP&E ~190 MB of generated JS) that's
+/// the line Vec *and* the joined String live at once, ~2× transiently (issue
+/// #33). Writing each line straight to the file's buffered writer caps live
+/// memory at one line plus the writer's buffer, regardless of module size; the
+/// per-cell transpiled expression is the only sizeable transient.
+///
+/// Output is line-for-line identical to the old `join("\n")` form (trailing
+/// newline after the closing brace).
+fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> std::io::Result<()> {
     let sheet_name = &partition.name;
 
     // Header
-    lines.push(format!(
-        "// sheets/{}.mjs — AUTO-GENERATED by rust-parser (chunked mode)",
-        sanitize_sheet_name(sheet_name)
-    ));
-    lines.push("// Do not edit manually — re-run the pipeline to regenerate.".to_string());
-    lines.push(String::new());
+    writeln!(w, "// sheets/{}.mjs — AUTO-GENERATED by rust-parser (chunked mode)", sanitize_sheet_name(sheet_name))?;
+    writeln!(w, "// Do not edit manually — re-run the pipeline to regenerate.")?;
+    writeln!(w)?;
 
     // Exports: SHEET_NAME, SHEET_DEPENDENCIES
-    lines.push(format!(
-        "export const SHEET_NAME = \"{}\";",
-        escape_js_string(sheet_name)
-    ));
+    writeln!(w, "export const SHEET_NAME = \"{}\";", escape_js_string(sheet_name))?;
 
     let deps_arr: Vec<String> = partition
         .sheet_dependencies
         .iter()
         .map(|d| format!("\"{}\"", escape_js_string(d)))
         .collect();
-    lines.push(format!(
-        "export const SHEET_DEPENDENCIES = [{}];",
-        deps_arr.join(", ")
-    ));
-    lines.push(String::new());
+    writeln!(w, "export const SHEET_DEPENDENCIES = [{}];", deps_arr.join(", "))?;
+    writeln!(w)?;
 
     // Runtime helpers for Excel functions — import from shared module
-    lines.push("import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER } from './_helpers.mjs';".to_string());
-    lines.push(String::new());
+    writeln!(w, "{}", "import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER } from './_helpers.mjs';")?;
+    writeln!(w)?;
 
     // compute(ctx) function
-    lines.push("/**".to_string());
-    lines.push(format!(
-        " * Compute all cells for sheet \"{}\".",
-        escape_js_string(sheet_name)
-    ));
-    lines.push(" * @param {{Object}} ctx - Context with get(addr), set(addr, val), values map".to_string());
-    lines.push(" */".to_string());
-    lines.push("export function compute(ctx) {".to_string());
+    writeln!(w, "/**")?;
+    writeln!(w, " * Compute all cells for sheet \"{}\".", escape_js_string(sheet_name))?;
+    writeln!(w, "{}", " * @param {{Object}} ctx - Context with get(addr), set(addr, val), values map")?;
+    writeln!(w, " */")?;
+    writeln!(w, "{}", "export function compute(ctx) {")?;
 
     // Phase 1: input/literal cells
     if !partition.input_cells.is_empty() {
-        lines.push("  // ── Literal / input cells ──".to_string());
+        writeln!(w, "  // ── Literal / input cells ──")?;
         for cell in &partition.input_cells {
             let qualified = format!("{}!{}", sheet_name, cell.address);
             let val_js = cell_value_to_js(&cell.value);
-            lines.push(format!("  ctx.set(\"{}\", {});", qualified, val_js));
+            writeln!(w, "  ctx.set(\"{}\", {});", qualified, val_js)?;
         }
-        lines.push(String::new());
+        writeln!(w)?;
     }
 
     // Phase 2: formula cells — detect intra-sheet cycles and wrap in convergence loops
@@ -338,9 +340,9 @@ fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookDat
 
         if circular_cells.is_empty() {
             // No cycles — emit linearly
-            lines.push("  // ── Formula cells ──".to_string());
+            writeln!(w, "  // ── Formula cells ──")?;
             for (addr, expr) in &cell_exprs {
-                lines.push(format!("  ctx.set(\"{}\", {});", addr, expr));
+                writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
             }
         } else {
             // Split into: pre-cycle, cycle (convergence loop), post-cycle
@@ -370,38 +372,36 @@ fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookDat
                 .collect();
 
             if !pre.is_empty() {
-                lines.push("  // ── Formula cells (pre-cycle) ──".to_string());
+                writeln!(w, "  // ── Formula cells (pre-cycle) ──")?;
                 for (addr, expr) in &pre {
-                    lines.push(format!("  ctx.set(\"{}\", {});", addr, expr));
+                    writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
                 }
-                lines.push(String::new());
+                writeln!(w)?;
             }
 
             // Convergence loop for circular cells
-            lines.push(format!(
-                "  // ── Convergence loop ({} circular cells) ──",
-                cycle.len()
-            ));
-            lines.push("  const _maxIter = 200;".to_string());
-            lines.push("  const _tol = 1e-6;".to_string());
-            lines.push("  let _staleCount = 0;".to_string());
-            lines.push("  let _prevDelta = Infinity;".to_string());
-            lines.push("  for (let _ci = 0; _ci < _maxIter; _ci++) {".to_string());
+            writeln!(w, "  // ── Convergence loop ({} circular cells) ──", cycle.len())?;
+            writeln!(w, "  const _maxIter = 200;")?;
+            writeln!(w, "  const _tol = 1e-6;")?;
+            writeln!(w, "  let _staleCount = 0;")?;
+            writeln!(w, "  let _prevDelta = Infinity;")?;
+            writeln!(w, "{}", "  for (let _ci = 0; _ci < _maxIter; _ci++) {")?;
 
             // Save previous values of cycle cells
             let cycle_addrs: Vec<String> = cycle.iter().map(|(a, _)| a.clone()).collect();
-            lines.push(format!(
+            writeln!(
+                w,
                 "    const _prev = [{}];",
                 cycle_addrs
                     .iter()
                     .map(|a| format!("ctx.get(\"{}\")", a))
                     .collect::<Vec<_>>()
                     .join(", ")
-            ));
+            )?;
 
             // Re-evaluate all cycle cells
             for (addr, expr) in &cycle {
-                lines.push(format!("    ctx.set(\"{}\", {});", addr, expr));
+                writeln!(w, "    ctx.set(\"{}\", {});", addr, expr)?;
             }
 
             // Also re-evaluate non-cycle cells between the cycle cells that depend on cycle outputs
@@ -412,45 +412,38 @@ fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookDat
                 .filter(|(addr, _)| !cycle_set.contains(addr))
                 .collect();
             for (addr, expr) in &non_cycle_in_range {
-                lines.push(format!("    ctx.set(\"{}\", {});", addr, expr));
+                writeln!(w, "    ctx.set(\"{}\", {});", addr, expr)?;
             }
 
             // Convergence check
-            lines.push(format!(
+            writeln!(
+                w,
                 "    const _curr = [{}];",
                 cycle_addrs
                     .iter()
                     .map(|a| format!("ctx.get(\"{}\")", a))
                     .collect::<Vec<_>>()
                     .join(", ")
-            ));
-            lines.push(
-                "    const _delta = _prev.reduce((mx, v, i) => Math.max(mx, Math.abs(v - (_curr[i] || 0))), 0);"
-                    .to_string(),
-            );
-            lines.push("    if (_delta < _tol) break;".to_string());
-            lines.push(
-                "    _staleCount = (Math.abs(_delta - _prevDelta) < _tol * 0.01) ? _staleCount + 1 : 0;"
-                    .to_string(),
-            );
-            lines.push("    if (_staleCount >= 5) break; // stale — values stopped improving".to_string());
-            lines.push("    _prevDelta = _delta;".to_string());
-            lines.push("  }".to_string());
+            )?;
+            writeln!(w, "{}", "    const _delta = _prev.reduce((mx, v, i) => Math.max(mx, Math.abs(v - (_curr[i] || 0))), 0);")?;
+            writeln!(w, "    if (_delta < _tol) break;")?;
+            writeln!(w, "{}", "    _staleCount = (Math.abs(_delta - _prevDelta) < _tol * 0.01) ? _staleCount + 1 : 0;")?;
+            writeln!(w, "    if (_staleCount >= 5) break; // stale — values stopped improving")?;
+            writeln!(w, "    _prevDelta = _delta;")?;
+            writeln!(w, "  }}")?;
 
             if !post.is_empty() {
-                lines.push(String::new());
-                lines.push("  // ── Formula cells (post-cycle) ──".to_string());
+                writeln!(w)?;
+                writeln!(w, "  // ── Formula cells (post-cycle) ──")?;
                 for (addr, expr) in &post {
-                    lines.push(format!("  ctx.set(\"{}\", {});", addr, expr));
+                    writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
                 }
             }
         }
     }
 
-    lines.push("}".to_string());
-    lines.push(String::new());
-
-    lines.join("\n")
+    writeln!(w, "}}")?;
+    Ok(())
 }
 
 /// Convert flat variable references (s_SheetName_A1) to ctx.get("SheetName!A1") calls.
@@ -1037,35 +1030,51 @@ function numToCol(n) {
 
 /// Stream the cell-level forward dependency edge map (cell → cells it reads) to
 /// `path` as `dependency-graph.json`, writing one entry at a time so the full
-/// map is never materialized in memory (the OOM fix — see the call site).
-/// `extract_refs` expands ranges to individual cells, so the graph is complete
-/// for transitive reachability. Only formula cells with ≥1 detected ref appear
-/// as keys; literal/input cells and ref-less formulas (e.g. `=TODAY()`) are
-/// omitted, matching the previous behaviour. Iteration follows partition order
-/// then cell order — stable for a given workbook, so the output is
-/// deterministic across builds of the same model. Returns the entry count.
+/// map is never materialized in memory.
+///
+/// Refs use [`extract_refs_ranges`]: ranges are kept as **compact tokens**
+/// (`Sheet!A1:B10`), not expanded to every interior cell. Full expansion
+/// produced a 37 GB / 7 min graph on the real models and OOM-killed the Node
+/// closure-baking step that reads it back (issue #32); a single `SUM(A1:A1000)`
+/// went from 1000 edge strings to 1. Reachability stays complete — the consumer
+/// expands a range token lazily against the (small) sets of cells it cares about
+/// (named inputs, fallback cells) plus the formula-cell keys, via indexed
+/// interval queries. Schema bumped to `cell-dependency-edges-v2`.
+///
+/// Only formula cells with ≥1 detected ref appear as keys; literal/input cells
+/// and ref-less formulas (e.g. `=TODAY()`) are omitted. Iteration follows
+/// partition order then cell order — stable for a given workbook, so the output
+/// is deterministic across builds of the same model. Returns the entry count.
 fn write_dependency_graph(partitions: &[SheetPartition<'_>], path: &Path) -> Result<usize, String> {
     let file = fs::File::create(path)
         .map_err(|e| format!("Failed to create {}: {}", path.display(), e))?;
     let mut w = std::io::BufWriter::new(file);
     let werr = |e: std::io::Error| format!("Failed to write dependency-graph.json: {}", e);
 
-    // Header up to (and including) the opening brace of the "edges" object.
+    // Header up to (and including) the opening brace of the "edges" object,
+    // then a newline so EVERY edge entry lands on its own line. The file stays
+    // valid JSON (small consumers / tests can still `JSON.parse` the whole
+    // thing), but a large-model consumer can read it line-by-line and never
+    // build the >0.5 GB single string that `JSON.parse`/`readFileSync(utf8)`
+    // chokes on (Node caps a string at ~512 MiB; a 532 MB graph threw "Cannot
+    // create a string longer than 0x1fffffe8 characters" and the closures were
+    // silently dropped). See `loadDependencyEdges` in lib/manifest-maps.mjs.
     w.write_all(
-        br#"{"format":"cell-dependency-edges-v1","note":"Forward edges: cell -> [cells it reads]. Ranges expanded to individual cells. Only formula cells appear as keys.","edges":{"#,
+        br#"{"format":"cell-dependency-edges-v2","note":"Forward edges: cell -> [cells/ranges it reads]. Ranges are kept as compact tokens (Sheet!A1:B10), not expanded; consumers expand lazily against cells of interest. Only formula cells appear as keys. One edge per line (newline-delimited) so the file is readable without materializing a >512 MiB string.","edges":{
+"#,
     )
     .map_err(werr)?;
 
-    // This is the heaviest sequential step on big models — it expands every
-    // range for every formula cell. It's bounded-memory (streamed) and makes
-    // forward progress, but with no output it's indistinguishable from a hang,
-    // so emit per-sheet progress.
+    // Still the heaviest sequential step on big models (one pass over every
+    // formula cell), though compact range tokens make it far lighter than the
+    // old full expansion. Bounded-memory (streamed); emit per-sheet progress so
+    // it's not mistaken for a hang.
     let total_sheets = partitions.len();
     let mut count: usize = 0;
     for (si, partition) in partitions.iter().enumerate() {
         for cell in &partition.formula_cells {
             if let Some(formula) = &cell.formula {
-                let refs = extract_refs(formula, &partition.name);
+                let refs = extract_refs_ranges(formula, &partition.name);
                 if refs.is_empty() {
                     continue;
                 }
@@ -1077,7 +1086,7 @@ fn write_dependency_graph(partitions: &[SheetPartition<'_>], path: &Path) -> Res
                 let refs_json = serde_json::to_string(&refs)
                     .map_err(|e| format!("Failed to encode dependency refs: {}", e))?;
                 if count > 0 {
-                    w.write_all(b",").map_err(werr)?;
+                    w.write_all(b",\n").map_err(werr)?; // comma + newline: one entry per line
                 }
                 w.write_all(key_json.as_bytes()).map_err(werr)?;
                 w.write_all(b":").map_err(werr)?;
@@ -1095,9 +1104,11 @@ fn write_dependency_graph(partitions: &[SheetPartition<'_>], path: &Path) -> Res
     }
     eprintln!(); // newline after progress
 
-    // Close the "edges" object, then append edgeCount last (we only know it
-    // after streaming). Consumers read `.edges`; edgeCount is informational.
-    write!(w, "}},\"edgeCount\":{}}}", count).map_err(werr)?;
+    // Newline, then close the "edges" object and append edgeCount last (we only
+    // know it after streaming). The leading "\n" keeps the closing `}` on its own
+    // line so the line-reader never sees it merged with the last entry. Consumers
+    // read `.edges`; edgeCount is informational.
+    write!(w, "\n}},\"edgeCount\":{}}}", count).map_err(werr)?;
     w.flush().map_err(werr)?;
     Ok(count)
 }
@@ -1668,6 +1679,15 @@ mod tests {
             total_cells: 6,
             total_formula_cells: 3,
         }
+    }
+
+    /// Test convenience: capture `write_sheet_module`'s streamed output as a
+    /// String. Production code streams straight to the file (issue #33) — this
+    /// just lets the assertions inspect the generated module in memory.
+    fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookData) -> String {
+        let mut buf: Vec<u8> = Vec::new();
+        write_sheet_module(partition, &mut buf).expect("writing to a Vec never fails");
+        String::from_utf8(buf).expect("generated module must be valid UTF-8")
     }
 
     #[test]
