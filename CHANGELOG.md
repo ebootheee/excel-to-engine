@@ -1,5 +1,48 @@
 # excel-to-engine — Changelog
 
+## 2026-05-30 — Phase 0 fix #1: schedule outputs carry a scalar cell (kills false "contract may be stale")
+
+The full 12-persona re-baseline (see BENCHMARKS.md) showed trust ROSE (avg A5 4.42)
+but the gate cratered to 1/12 on **A6/A7 (handoff readiness + confidence)**. The #1
+binder: schedule-type named outputs (`outstandingDebt`, `equityBase`, …) carried
+`cellRange` + `perYear` + `baseCaseValue` but **no scalar `cell`**, so the generated
+`example.mjs` read `values[undefined]` and printed the false **"N output(s) drifted —
+contract may be stale"** — the exact trust signal the docs tell users to require before
+handoff. Meanwhile `ete verify` *skipped* schedules entirely, so the two trust checks
+disagreed.
+
+Fix (3 coordinated edits, additive to the contract):
+- `lib/manifest-maps.mjs`: a **balance** schedule now also emits `cell` = the last
+  populated cell of its range (the terminal level it already reports as `baseCaseValue`).
+  Flows (aggregation `sum`) keep no scalar cell. Closure-baking expands `cellRange` AND
+  `cell` so the dependency closure still spans every year.
+- `lib/verify-engine.mjs` + generated `example.mjs`: a shared `resolveOutput()` helper
+  resolves any output to one number — scalar cell, balance terminal cell, or summed flow
+  range — so `verify` and `example.mjs` finally agree and schedules are checked, not skipped.
+- `INTEGRATION.md`: outputs table renders `cell || cellRange` (+ `(terminal)`/`(sum)` tag)
+  instead of `undefined`; the 30-second snippet picks a scalar-cell output.
+
+Result: `ete verify` on pe-buyout now checks **10 (was 8), 0 drift**; `example.mjs` prints
+"(all outputs match baseCaseValue ✓)" with schedules showing real values, and the what-if
+shows `outstandingDebt $63.0M → $66.0M` *moving* (lifts A6 too). All 12 personas re-verify
+0-drift; full `npm test` green (lib 43, cli 34, manifest-maps 78, ship-ready 102, use-case
+132, onboarding 13, + the rest). Contract change is additive — safe for Mippy.
+
+## 2026-05-30 — Hard-wave kickoff: training-dataset capture + benchmark prep runner
+
+Start of the "hard wave" (harder synthetic models + lock-grade engine). Two durable
+pieces landed first, both regenerable (tooling committed, output gitignored):
+
+- **Training-dataset capture** (`tools/capture-dataset.mjs`): snapshots every
+  conversion as a verified `(input.xlsx → surface.json → target/manifest+contract →
+  engine/)` triple with provenance + drift verdict, appending to `dataset/index.jsonl`.
+  Makes assembling a fine-tune dataset a free side-effect of conversion — the model is
+  a commodity; the verified spreadsheet→mapping dataset is the durable asset.
+- **Persona benchmark prep runner** (`tests/personas/run-prep.mjs`): generates all 12
+  synthetic models, runs `ete init` + `ete verify`, captures each into the dataset —
+  the deterministic (non-LLM) half of a benchmark round. Emits
+  `tests/personas/prep-report.json`. Current status: **12/12 clean conversions, 0 drift.**
+
 ## 2026-05-29 — Analyst usability Waves 3–4 + capstone
 
 Wave 3 (family-aware coverage, doctor-by-type, self-refreshing `manifest set`,

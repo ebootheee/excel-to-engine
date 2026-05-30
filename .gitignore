@@ -9,6 +9,13 @@ pipelines/rust/target/
 engines/
 tests/personas/_tmp/
 
+# Training-dataset capture + benchmark prep report (regenerable: tools/capture-dataset.mjs
+# + tests/personas/run-prep.mjs are committed; their OUTPUT is not — rebuilds deterministically,
+# and dataset/ may later hold real-model captures so it stays out of the public repo by default)
+dataset/
+tests/personas/prep-report.json
+tests/personas/**/_handoff-probe/
+
 # Eval outputs and config
 eval/output/
 eval/output-win/

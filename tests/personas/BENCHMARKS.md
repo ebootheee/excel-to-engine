@@ -24,12 +24,23 @@ The headline scalars we track each round:
 | 2026-05-29 | Wave 2 (model-family summary + contract) | **3/12** | 3.92 | 3.83 | ~3.1 | handoff C-scores jump to mostly 5s |
 | 2026-05-29 | Wave 3 (family coverage + cascade guard) | **3/12** | 4.00 | 3.75 | 3.50 | A5 climbs; most fails now single-dimension |
 | 2026-05-29 | Wave 4 (TV label, Net note, doctor reconcile) | capstone only* | — | — | — | **capstone PASSED 5/5 both sides** |
+| 2026-05-30 | Phase 0 re-baseline (full 12, hardened harness†) | **1/12** | 3.00 | 4.00 | **4.42** | re-baseline shock, not a backslide — see below |
 
 \* Wave 4 targeted the exact residual A5=3 causes but was only validated via the
-single-persona capstone (`pe-buyout-associate`, 5/5). **First action for the next
-agent: re-run the full 12-persona journey to quantify the Wave-4 lift and append
-a real row.** Expectation: the "only A5=3" personas (searchfund, corp, saas,
-credit) should flip to pass.
+single-persona capstone (`pe-buyout-associate`, 5/5).
+
+† **Phase 0 (2026-05-30) re-ran the full 12-persona journey with a hardened harness**
+(separate grounded trust-auditor for A5 that checks every headline number against
+`_ground-truth.json`; empirical coding-agent that actually writes+runs an integration;
+gate computed deterministically in code, not by an LLM). Result: **A5 trust ROSE to
+4.42** (W3 3.50 → 4.42 — Wave 4's labeling/doctor fixes worked) and C5 held at 4.00,
+but **pass/12 fell to 1/12** because the gate is `AND`-ed and the harder full panel
+exposed **shared handoff debt** in A6/A7. This is a measurement of the real surface,
+not a regression of prior work. The expected flips (searchfund/corp/saas/credit) did
+NOT happen — same systemic defects, not persona-specific.
+
+**Binding-dimension frequency across the 11 fails:** `A6` 11 · `A7` 9 · `A4` 4 ·
+`A5` 3 · `C4` 1 · `C5` 1. Only `growth-equity-vp` cleared the gate.
 
 > Scoring is stochastic (LLM judges), so a ±1 swing on a single dimension is
 > noise. Track the **aggregate** (avg A5/A7/C5) and the **set of binding
@@ -38,14 +49,33 @@ credit) should flip to pass.
 
 ## Per-round binding constraints (what to fix next)
 
-- **Wave 3 → 4:** every non-passing persona failed on `A5=3` and/or a C-side gap.
-  Recurring A5 causes (now fixed in Wave 4, pending re-measure): `terminalValue`
-  mislabeled as equity value; Net-return "—" read as broken; doctor "All checks
-  passed" contradicting the summary.
-- **Still C-side bound (need engine/feature work, see HANDOFF backlog):**
-  `vc-fund-partner`, `infra-fund-director`, `familyoffice-fof-ir` cap on C4/C5
-  because headline IRR/MOIC are **static literal cells** (multi-sheet IRR can't be
-  one transpiled formula) and there are no per-year time-series outputs.
+- **Phase 0 (2026-05-30) — A6/A7 are now the gate, driven by three shared defects
+  (ROI order; full detail in `FINDINGS.md` + the run synthesis):**
+  1. **Schedule-output `cell: undefined` (the #1 A7 binder).** Schedule outputs
+     (`outstandingDebt`, `freeCashFlow`, `equityBase`, `distributionsToEquity`,
+     per-class `distributions`) carry `cellRange`+`perYear` but **no scalar `.cell`**.
+     `example.mjs` and INTEGRATION.md read `values[o.cell]` = `values[undefined]` →
+     prints the false **"N output(s) drifted — contract may be stale"** — the exact
+     trust signal the docs tell users to require. False-fails on every model with a
+     schedule output. Pure metadata + codegen/doc fix, no engine math. **Fix first.**
+  2. **Static-literal headline returns (the #1 A6 binder).** `grossIRR/netIRR/tvpi/
+     dpi/MOIC` are hardcoded literal cells, so no lever moves them (`— static`) —
+     the "what-if explorer" has no working dial on the numbers that matter. Crushes
+     FoF/VC/infra. (Backlog: multi-sheet IRR de-literalization.)
+  3. **Inert / duplicate levers.** The headline driver (`ExitCapRate`, `ExitYield`,
+     `ExitMultiple`) ships with `affectsOutputs: []` while a twin on the same cell
+     holds the real closure → the named slider looks dead. Hits re-valueadd (the
+     cap-rate slider IS the project), searchfund, RE-debt.
+  - **Secondary:** model-type misclassification (credit/search/RE-debt/FoF → `saas`/
+    `unknown`) leaks SaaS/equity labels onto non-equity headlines — the root of the
+    5 `accuracyVerified=false` personas (the most serious class: right number, wrong
+    label, e.g. RE-debt "13.2% cap rate" is a debt yield). Degrades A4 + A5.
+  - **CLI papercut:** `summary <dir>` (and other dir-commands) require `<dir>/chunked/`
+    and error otherwise, while `verify` auto-resolves it and GETTING_STARTED's examples
+    point at the parent — the first documented command dead-ends a non-coder.
+
+- **Carried from Wave 3→4 (still relevant):** `vc-fund-partner`, `infra-fund-director`,
+  `familyoffice-fof-ir` cap because headline IRR/MOIC are static literals (overlaps #2);
   `corp-fpa-manager` needs non-defined-name driver levers.
 
 ## How to measure (the simulation loop)
