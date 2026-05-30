@@ -208,14 +208,22 @@ export function runInit(excelPath, args) {
       hints: templateApplied ? templateApplied.hints : null,
     });
     if (refineResult._formatted) {
-      // Show just the found/not-found summary, not the full report
+      // Show the family-aware coverage: only count fields EXPECTED for this
+      // model's family, so a fund/credit/budget model isn't graded against a
+      // PE-deal yardstick (which read as "the conversion failed").
       const foundCount = Object.keys(refineResult.found || {}).length;
       const existingCount = Object.keys(refineResult.existing || {}).length;
-      const totalFields = foundCount + existingCount + (refineResult.notFound || []).length;
-      lines.push(`  Coverage: ${foundCount + existingCount}/${totalFields} key fields mapped`);
+      const mapped = foundCount + existingCount;
+      const relevant = mapped + (refineResult.notFound || []).length;
+      lines.push(`  Coverage: ${mapped}/${relevant} expected fields mapped` +
+        (refineResult.family ? ` (detected: ${refineResult.family})` : ''));
       if (foundCount > 0) lines.push(`  Refined: ${foundCount} new fields found and patched`);
       if (refineResult.notFound?.length > 0) {
-        lines.push(`  Missing: ${refineResult.notFound.join(', ')}`);
+        lines.push(`  Needs mapping (expected, not found): ${refineResult.notFound.join(', ')}`);
+        lines.push(`    → fix with: ete manifest set ${chunkedDir} <field> <cell>`);
+      }
+      if ((refineResult.notApplicable || []).length > 0) {
+        lines.push(`  Not applicable to this model — no action needed: ${refineResult.notApplicable.join(', ')}`);
       }
     }
   } catch (e) {

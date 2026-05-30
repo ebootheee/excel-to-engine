@@ -200,6 +200,27 @@ export function runManifestRefine(modelDir, args) {
     }
   }
 
+  // Model-family awareness for the coverage report. The REQUIRED_FIELDS list is
+  // PE-deal-centric (Gross/Net IRR, MOIC, Equity Basis, Carry, Exit Multiple).
+  // For a VC fund, credit deal, or corporate budget those are mostly absent by
+  // design — reporting them as a scary "Missing: ... (2/8)" reads as "the
+  // conversion failed" to a non-PE user. Split not-found into genuine gaps
+  // (expected for this family) vs not-applicable (informational, no action).
+  {
+    const foundLabels = new Set([...Object.keys(report.found), ...Object.keys(report.existing)]);
+    const exp = expectedConcepts(manifest, foundLabels);
+    const stillExpected = [];
+    report.notApplicable = [];
+    for (const label of report.notFound) {
+      const field = REQUIRED_FIELDS.find(f => f.label === label);
+      const concept = CONCEPT_BY_KEY[field?.key];
+      if (exp.has(concept)) stillExpected.push(label);
+      else report.notApplicable.push(label);
+    }
+    report.notFound = stillExpected;
+    report.family = exp.familyLabel;
+  }
+
   // Apply patches if --apply flag
   if (args.apply && Object.keys(report.found).length > 0) {
     const patched = applyPatches(manifest, report.found);
@@ -214,24 +235,70 @@ export function runManifestRefine(modelDir, args) {
     lines.push(`Run with --apply to patch ${Object.keys(report.found).length} found fields into manifest`);
   }
 
-  // Suggest manual search for not-found fields
+  // Suggest manual search only for fields that are GENUINELY expected but missing.
   if (report.notFound.length > 0) {
     lines.push('');
-    lines.push('Fields not found automatically. Try searching manually:');
+    lines.push('Expected fields not found automatically — map them with `ete manifest set`:');
     for (const label of report.notFound) {
       const field = REQUIRED_FIELDS.find(f => f.label === label);
       const searchTerm = field.patterns[0].source.split('|')[0].replace(/\\/g, '').replace(/\.\*/g, ' ');
       lines.push(`  node cli/index.mjs query <modelDir> --search "${searchTerm}"`);
     }
   }
+  if ((report.notApplicable || []).length > 0) {
+    lines.push('');
+    lines.push(`Not applicable to this model (${report.family || 'detected type'}) — no action needed: ${report.notApplicable.join(', ')}`);
+  }
 
-  // Summary
-  const total = REQUIRED_FIELDS.length;
+  // Summary — coverage counts only fields expected for this model family.
   const mapped = Object.keys(report.existing).length + Object.keys(report.found).length;
+  const relevant = mapped + report.notFound.length;
   lines.push('');
-  lines.push(`Coverage: ${mapped}/${total} fields mapped (${Object.keys(report.existing).length} existing + ${Object.keys(report.found).length} new)`);
+  lines.push(`Coverage: ${mapped}/${relevant} expected fields mapped (${Object.keys(report.existing).length} existing + ${Object.keys(report.found).length} new)`);
 
   return { ...report, _formatted: lines.join('\n') };
+}
+
+// Concept tag per required field, used to apply model-family expectations.
+const CONCEPT_BY_KEY = {
+  'equity.classes[0].grossIRR': 'returns',
+  'equity.classes[0].netIRR': 'netReturns',
+  'equity.classes[0].grossMOIC': 'returns',
+  'equity.classes[0].netMOIC': 'netReturns',
+  'equity.classes[0].basisCell': 'equityBasis',
+  'carry.totalCell': 'carry',
+  'outputs.terminalValue.cell': 'terminalValue',
+  'outputs.exitMultiple.cell': 'exitMultiple',
+};
+
+/**
+ * Which PE-deal concepts are genuinely expected for this model's family.
+ * Net IRR/MOIC are always optional (net-of-fee refinements many models omit).
+ * Returns a Set of concepts + a familyLabel for messaging.
+ */
+function expectedConcepts(manifest, foundLabels) {
+  const type = (manifest.model?.type || '').toLowerCase();
+  const hasFund = !!(manifest.fundLevel && (manifest.fundLevel.tvpi != null || manifest.fundLevel.dpi != null || manifest.fundLevel.rvpi != null));
+  const hasCovenants = (manifest.covenants || []).length > 0;
+  const foundReturns = foundLabels.has('Gross IRR') || foundLabels.has('Gross MOIC');
+  const hasCarry = !!manifest.carry?.totalCell;
+  const hasReturns = hasFund || foundReturns || hasCarry;
+  const exp = new Set();
+  let familyLabel;
+  if (hasFund) {
+    familyLabel = 'fund / LP vehicle';                  // headline is TVPI/DPI, already detected
+  } else if (hasCovenants && !foundReturns && !hasCarry) {
+    familyLabel = 'credit / debt';                      // headline is covenants
+  } else if (!hasReturns && !hasCovenants) {
+    familyLabel = 'operating / budget';                 // 3-statement / DCF
+    exp.add('terminalValue');                           // a DCF still has an EV/TV
+  } else {
+    familyLabel = 'equity deal';                        // PE/RE/growth — the full set
+    exp.add('returns'); exp.add('equityBasis'); exp.add('terminalValue'); exp.add('exitMultiple');
+    if (hasCarry) exp.add('carry');                     // only if the model actually carries it
+  }
+  exp.familyLabel = familyLabel;
+  return exp;
 }
 
 // ---------------------------------------------------------------------------
