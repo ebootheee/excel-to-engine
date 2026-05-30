@@ -39,6 +39,11 @@ confirm before moving on.
    laid out differently. If a number is wrong, it's almost always a cell-mapping
    miss — run `ete manifest doctor <dir>`, then `ete manifest set <dir> <path>
    <cell>` (find the right cell with `ete query <dir> --search "<label>"`).
+   `ete manifest set` auto-refreshes the contract + handoff bundle
+   (named-outputs/cell-types + INTEGRATION.md + example.mjs) and preserves the
+   dependency closures, so the fix reaches the developer bundle immediately — do
+   NOT re-run `init` to "save" a fix (it regenerates the manifest and discards
+   it). Pass `--excel <model.xlsx>` to the `set` to also refresh named-inputs.json.
    Re-run summary to confirm. **A wrong base case here makes everything
    downstream wrong** — this checkpoint is what earns the user's trust.
 4. **Verify engine fidelity.** Run `node <dir>/chunked/example.mjs` (or import
