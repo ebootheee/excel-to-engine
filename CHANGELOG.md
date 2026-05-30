@@ -1,5 +1,86 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Compact dependency graph + streamed module writer: `ete init` completes on the real models (#32, #33)
+
+With the #22 scaling walls closed, the **Rust parser** finished on the real
+models — but a full `ete init` (parser + JS manifest pipeline) still could not.
+Two follow-ups surfaced by regenerating the gitignored Outpost A-1/A-2 engines,
+now fixed; a clean `ete init` runs end-to-end and the contract maps land.
+
+- **#32 — compact dependency graph (was 37 GB / 7 min → ~0.5 GB).** The
+  cell-level `dependency-graph.json` expanded every range to its interior cells:
+  `SUM(A1:A1000)` became 1000 edge strings. On A-1 that was **37 GB / ~7 min**,
+  and `ete init`'s closure-baking step then `JSON.parse`d it back into Node →
+  guaranteed OOM. The emitter now keeps ranges as **compact tokens**
+  (`Sheet!A1:B10`) via a new `extract_refs_ranges` / `RangeMode::Keep`
+  (`dependency.rs`, `chunked_emitter.rs`); the graph is **504 MB (A-1) / 532 MB
+  (A-2)** — ~70× smaller — and parses without OOM. Schema bumped to
+  `cell-dependency-edges-v2`.
+- **#32 — newline-delimited graph + streaming loader (the >512 MiB string cap).**
+  Even at ~0.5 GB the graph still broke `readFileSync(path,'utf-8')`: Node caps a
+  *string* at ~512 MiB, so the 532 MB A-2 graph threw "Cannot create a string
+  longer than 0x1fffffe8 characters" — caught and silently skipped, so the
+  closures never baked. The emitter now writes **one edge per line** (still valid
+  JSON), and `loadDependencyEdges` (`lib/manifest-maps.mjs`) reads it in 64 MB
+  chunks with a `StringDecoder`, `JSON.parse`-ing each small line — no >512 MiB
+  string ever exists. Tested on both the whole-file and forced-streaming paths.
+- **#32 — range-aware closure BFS + range-token dedup (`lib/manifest-maps.mjs`).**
+  The two consumers (`dependsOnNamedInputs`/`affectsOutputs` closures + the `_fn`
+  fallback audit) expand a range token **lazily** against three column-indexed
+  structures (formula-cell keys, named-input cells, fallback cells) with
+  binary-search interval queries — identical closures, no materialization, graph
+  read once, both consumers in one pass (`computeOutputClosures`). Crucially, each
+  output's BFS expands a given range token **once** (`seenRanges`): on A-1 the
+  3.7M range refs collapse to ~1M distinct tokens, and expanding with repeats
+  touches **2.8 billion** cells vs **34 million** distinct — the ~84× blowup that
+  made the per-output closure pass take ~15 min; it's now ~2.6 min. New
+  `extract_refs_ranges` Rust test + closure-through-a-range + streaming-loader
+  tests.
+- **#32 — `ete init` heap guard (`cli/index.mjs`).** Baking closures on a
+  ~6M-cell model peaks at ~7.4 GB (graph + ground truth + indexes + BFS), over
+  Node's ~4 GB default — and 8 GB left no margin. `init` now re-execs itself once
+  with a **12 GB** old-space (`--max-old-space-size`, gated to `init`, opt out
+  `ETE_NO_REEXEC=1`, size `ETE_INIT_HEAP_MB`) so a consumer never has to know to
+  pass `NODE_OPTIONS`.
+- **Slimming keeps `_graph.json` (`cli/commands/init.mjs`).** The default slim
+  dropped the 3 KB sheet-level `_graph.json` claiming nothing read it — but
+  `eval/per-sheet-eval.mjs` reads it for circular-cluster membership, so the
+  benchmark was silently mis-scoring cluster sheets. Only the ~0.5 GB
+  `dependency-graph.json` is slimmed now.
+- **#33 — streamed sheet-module writer (`chunked_emitter.rs`).**
+  `generate_sheet_module` built a `Vec<String>` of every line then `.join("\n")`
+  — for a monster sheet (PP&E ~190 MB of JS) that held the line vector *and* the
+  joined string at once (~2× transiently). `write_sheet_module<W: Write>` now
+  streams each line straight to the file's buffered writer; live memory is one
+  transpiled cell expression plus the writer buffer, regardless of module size.
+  Emit peak on the real build stays ~2.4 GB. Output is byte-identical.
+- **#33 — cone-shrinking deferred (documented).** The other #33 direction —
+  shrinking the `--lazy-engine` returns cone — needs **cluster-breaking**: the
+  returns sit in a 17-of-20-sheet circular cluster that loads atomically (incl.
+  all 3 monster modules), so row-chunking alone can't shrink it (the issue's own
+  analysis). That's correctness-sensitive and coupled to cluster-once eval; left
+  as a tracked follow-up rather than risk the eager engine Mippy consumes.
+- New `scripts/verify-contract.mjs` — asserts a built `chunked/` satisfies the
+  Mippy consumer contract (layout complete + `contentHash`, `engine.js` parses +
+  exports `run`, value cells pinned with real base-case values, closures baked,
+  fallback audit ran) without running the full engine.
+- **Regenerated A-1 + A-2 (clean full `ete init`, ~21 min each).** Both pass
+  `verify-contract` — **closures baked 17/17 (A-1) and 18/18 (A-2)** (the A-2
+  539 MB graph was the exact case that previously dropped all closures via the
+  string cap). Live-recompute accuracy on the standalone sheets is **98.0% (A-1)
+  / 97.8% (A-2)** — up from the 84.3% / 85.5% baseline (the prior baseline was
+  measured on an older build; same sheets, more cells match). The 17-sheet
+  cluster + 190 MB PP&E sheet remain skipped (cluster-once / large-sheet eval).
+  `golden-master --assert-no-fallbacks` pinpoints the returns' transpiler debt to
+  **4 functions** — `XNPV`, `FILTER`, `MINIFS`, `MAXIFS` — a concrete coverage
+  target list (replaces the vague "11,813 fallbacks" for the return path).
+- Validated: `cargo test` 18/18, `smoke` 78/78, `test-manifest-maps` 78/78 (incl.
+  the streaming-loader path), `test:engine`/`test:runnable`/`test:depgraph`/
+  `test:lazy-engine`/`test:slimming`/`test:golden` 21/20/14/19/13/20, full
+  `npm test`, and a clean full `ete init` on real A-1 + A-2 (build perf + accuracy
+  in `benchmarks/BASELINE.md`; Mippy contract checked by
+  `scripts/verify-contract.mjs`).
+
 ## 2026-05-29 — Chunked-build scaling walls: streamed emit, borrowed partitions, opt-in lazy engine (#22)
 
 With the partition-hang fixed, a clean `ete init` on the real models got *past*

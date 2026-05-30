@@ -354,7 +354,7 @@ bug you get from guessing the wrong cell):
 | **`named-inputs.json`** | `name → { cell, type, default, referencedBy, affectsOutputs }` | Drive `engine.run({ [cell]: value })` for what-ifs. `affectsOutputs` says which outputs to invalidate (don't regenerate the whole grid). Lists Excel **defined-name** cells **read by ≥1 formula** plus the model drivers `exitMultiple` / `exitYearSelector` / `hurdleRate` (`source:"manifest-driver"`, derived from the manifest + ground truth, so they emit even without the `.xlsx`). |
 | **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label string from a numeric output, and a real `0` (present, `"number"`) from a never-computed cell (absent from this map). |
 | **`build-manifest.json`** | `{ layoutVersion, engine:{ entry, export }, contentHash, complete, artifacts[] }` | The locked artifact layout + a stable `contentHash` over the identity artifacts (engine.js, sheets/, _ground-truth.json, manifest.json). Pin a build by its `contentHash`; it's stable across rebuilds of the same workbook and changes on drift, so you reconcile deliberately, not per version. `complete:false` / `missingRequired` flag an unrunnable build. |
-| **`dependency-graph.json`** *(debug)* | `{ edges: cell → [cells it reads] }` | Cell-level forward edges (ranges expanded) — the raw material for the `dependsOnNamedInputs` / `affectsOutputs` closures above. **Removed from the default output** once those closures are baked into the named maps; it's the largest artifact on big models (ranges expand). Re-run `ete init --emit-debug` to keep it (plus `_graph.json` and the root `model-map.json`) for offline analysis or closure recomputation. |
+| **`dependency-graph.json`** *(debug)* | `{ format:"cell-dependency-edges-v2", edges: cell → [cells/ranges it reads] }` | Cell-level forward edges — the raw material for the `dependsOnNamedInputs` / `affectsOutputs` closures above. Ranges are kept as **compact tokens** (`Sheet!A1:B10`), not expanded to interior cells: full expansion was 37 GB / ~7 min on the real models and OOM-killed the closure-baking step (#32); the compact form is ~0.5 GB. Written **one edge per line** (still valid JSON) so a >512 MiB graph can be read line-by-line without exceeding Node's max string length. Consumers expand a token lazily against the cells they care about. **Removed from the default output** once the closures are baked into the named maps; re-run `ete init --emit-debug` to keep it (plus the root `model-map.json`) for offline analysis or closure recomputation. |
 
 **Names come from the workbook's defined-name table** (the model owner's
 curated named cells) when present — these are authoritative and override
@@ -369,12 +369,13 @@ heuristic detection. Regenerate without a re-parse:
 
 **Default output stays small.** `ete init` keeps only what consumers and the
 CLI actually read: the engine modules, `_ground-truth.json` (compact),
-`_labels.json`, the contract maps, the manifest, and `build-manifest.json`. The large
-intermediate/debug artifacts — the cell-level `dependency-graph.json`, the
-sheet-level `_graph.json`, and the root `model-map.json` (600+ MB on the
+`_labels.json`, the sheet-level `_graph.json` (3 KB — topo order + clusters, read
+by the per-sheet eval), the contract maps, the manifest, and
+`build-manifest.json`. The large intermediate/debug artifacts — the cell-level
+`dependency-graph.json` (~0.5 GB) and the root `model-map.json` (600+ MB on the
 biggest models) — are dropped after the closures are computed. The high-value
 data survives as the closures inside the named maps. Pass `--emit-debug` to
-retain everything.
+retain `dependency-graph.json`.
 
 **Golden-master gate.** `eval/golden-master.mjs` (run via `npm run golden <chunkedDir>`)
 is the post-build assert for these artifacts: with `--assert-no-fallbacks` it

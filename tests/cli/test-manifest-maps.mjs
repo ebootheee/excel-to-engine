@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { resolveBaseCaseOutputs } from '../../lib/manifest.mjs';
 import {
   collectNamedOutputs, collectNamedInputs, collectCellTypes, enumerateOutputCells,
-  emitManifestMaps, attachDependencyClosures,
+  emitManifestMaps, attachDependencyClosures, loadDependencyEdges,
 } from '../../lib/manifest-maps.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -226,6 +226,39 @@ console.log('Testing: attachDependencyClosures');
     for (const dep of o.dependsOnNamedInputs) if (!inputNames.has(dep)) consistent = false;
   }
   assert(consistent, 'every dependsOnNamedInputs entry exists in namedInputs');
+}
+
+// ---------------------------------------------------------------------------
+// loadDependencyEdges — streaming line-reader (the >512 MiB path) (#32)
+// ---------------------------------------------------------------------------
+console.log('Testing: loadDependencyEdges streams newline-delimited graphs');
+{
+  // Mirror the Rust emitter exactly: header line, one "key":[refs] per line
+  // (comma-separated across lines), footer line. Include a range token and a
+  // key needing JSON escaping.
+  const tmp = mkdtempSync(join(tmpdir(), 'depedges-'));
+  const p = join(tmp, 'dependency-graph.json');
+  const graph =
+    '{"format":"cell-dependency-edges-v2","note":"x","edges":{\n' +
+    '"S!B2":["S!A1:A3"],\n' +
+    '"S!B4":["S!B2"],\n' +
+    '"T!A1":["S!B2","Other!C1:C9"]\n' +
+    '},"edgeCount":3}\n';
+  writeFileSync(p, graph);
+
+  // Whole-file path (default threshold): valid JSON, parses fine.
+  const whole = loadDependencyEdges(p);
+  assert(JSON.stringify(whole['S!B2']) === '["S!A1:A3"]', 'whole-file path reads a range-token edge');
+
+  // Forced streaming path (threshold 0): must produce the identical edge map
+  // without ever building a single big string.
+  const streamed = loadDependencyEdges(p, 0);
+  assert(JSON.stringify(streamed['S!B2']) === '["S!A1:A3"]', 'streamed: range token preserved');
+  assert(JSON.stringify(streamed['S!B4']) === '["S!B2"]', 'streamed: single-cell edge');
+  assert(JSON.stringify(streamed['T!A1']) === '["S!B2","Other!C1:C9"]', 'streamed: multi-ref cross-sheet edge');
+  assert(Object.keys(streamed).length === 3, 'streamed: header/footer lines skipped, exactly 3 edges');
+  assert(JSON.stringify(streamed) === JSON.stringify(whole), 'streamed map === whole-file map');
+  rmSync(tmp, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------

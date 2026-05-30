@@ -16,6 +16,32 @@ sample-able engine + contract.
 
 ## Where things stand
 
+**Latest session (#32 + #33, 2026-05-29):** a clean **full `ete init`** now
+completes on the real Outpost A-1/A-2 models — previously the Rust parse finished
+(post-#22) but the JS closure-baking step OOM'd. Both A-1 and A-2 regenerated;
+benchmark in `benchmarks/BASELINE.md`.
+- **#32 — done (three layered fixes).** (1) Cell-level `dependency-graph.json`
+  no longer expands ranges (37 GB / 7 min → ~0.5 GB compact `Sheet!A1:B10`
+  tokens, schema v2, `extract_refs_ranges`). (2) ~0.5 GB still > Node's ~512 MiB
+  max string, so the graph is **newline-delimited** and read by a chunked
+  `StringDecoder` streamer (`loadDependencyEdges`) — `readFileSync(utf8)` threw
+  and silently dropped the closures before this. (3) The closure BFS
+  (`computeOutputClosures`) expands each range token once per output
+  (`seenRanges`): repeats touched 2.8 B cells vs 34 M distinct → ~15 min became
+  ~2.6 min; tokens expand lazily via column-indexed binary search (identical
+  closures, parsed once, both consumers one pass). `ete init` re-execs with a
+  12 GB heap (closure-bake peaks ~7.4 GB).
+- **#33 — streamed module writer done; cone-shrink deferred.**
+  `write_sheet_module<W: Write>` streams to the file (no `Vec<String>`+join);
+  emit peak ~2.4 GB. The returns-cone shrink needs **cluster-breaking** (returns
+  are in a 17-of-20-sheet atomic cluster) → coupled to cluster-once eval, not
+  rushed.
+- New `scripts/verify-contract.mjs` machine-checks the Mippy contract.
+- **Remaining build-time cost:** the manifest pipeline's full-GT O(N) passes
+  (generate/refine/doctor) are now the dominant `ete init` step on these models —
+  the clear next perf target (tracked in `project_outpost_models_shape` memory).
+
+
 **Merged to `main` this session:** artifact slimming (#17), GitHub Actions CI
 (#18, ubuntu+windows), `refine` consumes `_labels.json` + lazy numerics (#19),
 single-GT-parse per `init` (#20).
@@ -81,8 +107,12 @@ contract-only consumers; guided `ete create` skill), **deeper transpiler coverag
 (the 11,813 `_fn` offenders behind #26), and **cluster-once eval**. The Mippy
 contract + its trust gates are complete.
 
-**Baseline (real models, `npm run bench`):** Model A **84.3%**,
-Model B **85.5%** — standalone sheets only (cluster + 190 MB PP&E skipped).
+**Baseline (real models, `npm run bench`, regenerated 2026-05-29):** Model A
+**98.0%** (1733/1768), Model B **97.8%** (1928/1971) — standalone sheets only,
+live recompute (cluster + 190 MB PP&E skipped). Up from the prior 84.3% / 85.5%
+(older build). Full `ete init` ~21 min/model. `golden-master
+--assert-no-fallbacks` shows the returns still resolve through 4 untranspiled
+functions — `XNPV`, `FILTER`, `MINIFS`, `MAXIFS` (the concrete coverage target).
 
 ## How to run
 
