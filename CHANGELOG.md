@@ -1,5 +1,49 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Analyst usability Wave 2 (model-family awareness)
+
+Driven by a 12-persona simulation (synthetic models across PE/VC/RE/infra/credit/
+corp/SaaS/FoF/search × skill × seniority, each run through the full
+journey + coding-agent handoff and scored on `tests/personas/lib/rubric.md`).
+Wave-1 baseline was **2/12** personas passing the benchmark gate; the tool was
+PE-buyout-centric and lost trust (summary A5 mostly 2-3) and contract
+completeness (C3/C4/C5 low) for every other asset class. Wave 2 makes it
+family-aware.
+
+### Contract (`lib/manifest-maps.mjs`, `lib/integration-doc.mjs`)
+- `named-outputs.json` now emits `manifest.fundLevel` (TVPI/DPI/RVPI/netIRR/
+  distributed/paidIn/...) + `covenants[]` (DSCR/LTV/ICR/...) + debt details — the
+  headline numbers for VC/FoF/credit/debt finally cross into the contract.
+- `named-inputs.json` gains `format` + suggested `min`/`max`/`step` per lever
+  (the universal handoff ask). Value-aware format inference (a bare value in
+  (-1,1) is a rate). `inferFormat` learns tvpi/dpi/rvpi/dscr/leverage→multiple,
+  ltv/yield/growth/margin→fraction, arr/fund/nav→currency.
+- **Closures preserved across re-emits** — `manifest set`/`maps`/`--reuse-parse`
+  no longer silently drop `dependsOnNamedInputs`/`affectsOutputs` once the
+  dependency graph is slimmed away.
+- `example.mjs` uses the same tolerance as `ete verify` (no false DRIFT on
+  rounded base values). INTEGRATION.md tables add labels, input format/range,
+  static-output + override-by-cell notes. `humanize` handles acronym runs.
+
+### Summary (`cli/commands/summary.mjs`)
+- Model-family **lens** (fund / credit / realestate / saas / equity): renders a
+  Fund (LP) metrics block, a Covenants block, cap-rate + Exit Value, or ARR
+  basis — instead of forcing a PE frame. Exit line shows the real basis
+  (`@ 12.0x EBITDA` / `Revenue` / `NOI` / `5.25% cap rate`). No more fabricated
+  "Platform EBITDA" on non-PE models. Returns block resolves class-prefixed keys.
+  Segments table drops ratio rows. Hold period = period count (consistent with
+  the year range).
+
+### Doctor / refresh / checklist (`cli/commands/manifest.mjs`, `lib/manifest.mjs`)
+- Doctor validates `outputs.exitMultiple` by **type**: a cap-rate / exit-yield is
+  checked against [1%,30%], not [1,50] — no more false error + quarantine on
+  clean RE/infra models.
+- `ete manifest set` propagates a fix into the full contract + handoff bundle
+  (closures preserved), so the developer artifacts never lag a correction —
+  resolves the "fix never reaches the bundle / re-init wipes it" catch-22.
+- Review checklist is model-family aware (no "add EBITDA/equity" nag for
+  funds/SaaS/credit/RE).
+
 ## 2026-05-29 — Analyst onboarding + coding-agent handoff (Wave 1)
 
 Reframes the toolkit around a non-technical finance user who wants to convert
