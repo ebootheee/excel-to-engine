@@ -34,6 +34,27 @@ export function runSummary(modelDir, args) {
   // Resolve equity classes
   const equityClasses = (manifest.equity?.classes || []).map(ec => resolveEquityClass(gt, ec));
 
+  // Fund-level LP metrics (resolved) — TVPI/DPI/RVPI/netIRR/called/distributed/NAV.
+  const fundLevel = {};
+  if (manifest.fundLevel) {
+    for (const [k, v] of Object.entries(manifest.fundLevel)) {
+      const val = (typeof v === 'string' && v.includes('!')) ? resolveCell(gt, v) : (typeof v === 'number' ? v : null);
+      if (val != null) fundLevel[k] = val;
+    }
+  }
+  // Covenants (resolved) — DSCR/LTV/ICR/leverage/occupancy.
+  const covenants = (manifest.covenants || []).map(c => ({
+    id: c.id, label: c.label,
+    value: (typeof c.cell === 'string') ? resolveCell(gt, c.cell) : c.value,
+  })).filter(c => typeof c.value === 'number');
+
+  // Hold period from the number of periods (column count), not exitYear-investYear
+  // (an N-year forecast spans N columns = N-1 deltas; analysts read "N-year").
+  const colCount = manifest.timeline?.columnMap ? Object.keys(manifest.timeline.columnMap).length : 0;
+  const span = (manifest.timeline?.exitYear || 0) - (manifest.timeline?.investmentYear || 0);
+
+  const exitMultipleType = manifest.outputs?.exitMultiple?.type || null;
+
   // Build summary
   const summary = {
     model: {
@@ -44,9 +65,13 @@ export function runSummary(modelDir, args) {
     timeline: {
       investmentYear: manifest.timeline?.investmentYear,
       exitYear: manifest.timeline?.exitYear,
-      holdPeriod: (manifest.timeline?.exitYear || 0) - (manifest.timeline?.investmentYear || 0),
+      holdPeriod: colCount > 1 ? colCount : (span || null),
       periodicity: manifest.timeline?.periodicity,
     },
+    fundLevel,
+    covenants,
+    exitMultipleType,
+    lens: detectLens(manifest, fundLevel, covenants, outputs),
     segments: [],
     outputs,
     equityClasses,
@@ -128,14 +153,26 @@ function formatSummaryTable(s, opts = {}) {
   lines.push(`Model: ${s.model.name} (${s.model.type})`);
   lines.push(`Source: ${s.model.source || '—'}`);
 
-  const exitMultiple = s.outputs.exitMultiple;
-  const multStr = exitMultiple ? ` @ ${exitMultiple.toFixed(1)}x EBITDA` : '';
+  const em = s.outputs.exitMultiple;
+  let multStr = '';
+  if (em != null) {
+    multStr = s.exitMultipleType === 'cap_rate_inverse'
+      ? ` @ ${fmtPct(em)} cap rate`
+      : ` @ ${em.toFixed(1)}x ${exitBasis(s.lens, s.exitMultipleType)}`;
+  }
   lines.push(`Period: ${s.timeline.investmentYear}–${s.timeline.exitYear} (${s.timeline.holdPeriod}yr, ${s.timeline.periodicity}) | Exit: ${s.timeline.exitYear}${multStr}`);
   lines.push('');
 
-  // Segments — terse mode filters suspect (constant-value) rows
-  const visibleSegments = terse ? s.segments.filter(seg => !seg.suspect) : s.segments;
-  const suspectCount = s.segments.filter(seg => seg.suspect).length;
+  // Segments — drop ratio/percent rows (DSCR, LTV, leverage, growth %, margin,
+  // NRR, multiples): those are KPIs, not revenue/cost segments, and rendering
+  // them as "$2" with bogus CAGRs is a top trust-killer. terse also hides
+  // constant-value (scalar-assumption) rows.
+  const RATIO_RX = /\bdscr\b|\bltv\b|coverage|leverage|\bratio\b|debt\s*yield|occupancy|per\s*share|growth|margin|\bnrr\b|retention|churn|\birr\b|\bmoic\b|multiple|cap\s*rate|magic|rule\s*of\s*40|\byield\b/i;
+  const isRatio = (seg) => RATIO_RX.test(seg.label || '');
+  const ratioCount = s.segments.filter(isRatio).length;
+  const nonRatio = s.segments.filter(seg => !isRatio(seg));
+  const visibleSegments = terse ? nonRatio.filter(seg => !seg.suspect) : nonRatio;
+  const suspectCount = nonRatio.filter(seg => seg.suspect).length;
 
   if (visibleSegments.length > 0) {
     const colW = 12;
@@ -160,28 +197,49 @@ function formatSummaryTable(s, opts = {}) {
     lines.push('');
   }
 
-  // EBITDA
-  if (s.ebitda) {
+  // Operating line — labeled by lens; suppressed for funds (no operating P&L)
+  // and only shown when there's a real, non-zero series (no fabricated EBITDA).
+  // Only for lenses where the segment-derived EBITDA/revenue total is reliable.
+  // Funds have no operating P&L; credit/RE headlines are covenants / exit value,
+  // and their segment tables already show NOI/borrower-EBITDA rows directly.
+  if (s.ebitda && (s.lens === 'equity' || s.lens === 'saas') && Math.abs(s.ebitda.last || 0) > 0) {
     const cagrStr = s.ebitda.cagr !== null ? fmtPct(s.ebitda.cagr) : '—';
-    lines.push(`Platform EBITDA             ${fmtCur(s.ebitda.first)} → ${fmtCur(s.ebitda.last)}  (CAGR: ${cagrStr})`);
+    lines.push(`${padRight(operatingLabel(s.lens), 28)}${fmtCur(s.ebitda.first)} → ${fmtCur(s.ebitda.last)}  (CAGR: ${cagrStr})`);
   }
-  if (s.outputs.terminalValue) lines.push(`Terminal Value              ${fmtCur(s.outputs.terminalValue)}`);
-  if (s.outputs.exitEquity) lines.push(`Exit Equity                 ${fmtCur(s.outputs.exitEquity)}`);
+  if (s.outputs.terminalValue) {
+    const tvLabel = s.lens === 'realestate' ? 'Exit Value' : s.lens === 'fund' ? 'Total Value' : 'Terminal Value';
+    lines.push(`${padRight(tvLabel, 28)}${fmtCur(s.outputs.terminalValue)}`);
+  }
+  if (s.outputs.exitEquity) lines.push(`${padRight('Exit Equity', 28)}${fmtCur(s.outputs.exitEquity)}`);
   lines.push('');
 
-  // Returns
-  lines.push(padRight('Returns', 20) + padLeft('Gross', 12) + padLeft('Net', 12));
-  lines.push(
-    padRight('  MOIC', 20) +
-    padLeft(s.outputs.grossMOIC ? `${s.outputs.grossMOIC.toFixed(2)}x` : '—', 12) +
-    padLeft(s.outputs.netMOIC ? `${s.outputs.netMOIC.toFixed(2)}x` : '—', 12)
-  );
-  lines.push(
-    padRight('  IRR', 20) +
-    padLeft(s.outputs.grossIRR ? fmtPct(s.outputs.grossIRR) : '—', 12) +
-    padLeft(s.outputs.netIRR ? fmtPct(s.outputs.netIRR) : '—', 12)
-  );
-  lines.push('');
+  // Fund (LP) metrics block — the headline for VC funds / FoF.
+  const fl = s.fundLevel || {};
+  if (fl.tvpi != null || fl.dpi != null || fl.rvpi != null) {
+    lines.push('Fund (LP) metrics');
+    const r1 = [];
+    if (fl.tvpi != null) r1.push(`TVPI ${fmtMult(fl.tvpi)}`);
+    if (fl.dpi != null) r1.push(`DPI ${fmtMult(fl.dpi)}`);
+    if (fl.rvpi != null) r1.push(`RVPI ${fmtMult(fl.rvpi)}`);
+    if (fl.netIRR != null) r1.push(`Net IRR ${fmtPct(fl.netIRR)}`);
+    if (r1.length) lines.push('  ' + r1.join('  |  '));
+    const r2 = [];
+    if (fl.fundSize != null) r2.push(`Committed ${fmtCur(fl.fundSize)}`);
+    if (fl.paidIn != null) r2.push(`Called ${fmtCur(fl.paidIn)}`);
+    if (fl.distributed != null) r2.push(`Distributed ${fmtCur(fl.distributed)}`);
+    if (fl.residualValue != null) r2.push(`NAV ${fmtCur(fl.residualValue)}`);
+    if (r2.length) lines.push('  ' + r2.join('  |  '));
+    lines.push('');
+  }
+
+  // Returns — handle class-prefixed keys so a single-class model still shows them.
+  const hr = headlineReturns(s.outputs);
+  if (hr.grossMOIC != null || hr.grossIRR != null || hr.netMOIC != null || hr.netIRR != null) {
+    lines.push(padRight('Returns', 20) + padLeft('Gross', 12) + padLeft('Net', 12));
+    lines.push(padRight('  MOIC', 20) + padLeft(fmtMult(hr.grossMOIC), 12) + padLeft(fmtMult(hr.netMOIC), 12));
+    lines.push(padRight('  IRR', 20) + padLeft(hr.grossIRR != null ? fmtPct(hr.grossIRR) : '—', 12) + padLeft(hr.netIRR != null ? fmtPct(hr.netIRR) : '—', 12));
+    lines.push('');
+  }
 
   // Carry
   if (s.carry) {
@@ -190,18 +248,34 @@ function formatSummaryTable(s, opts = {}) {
     lines.push(`Carry: ${fmtCur(s.carry.total)}${tierInfo}${prefStr}`);
   }
 
-  // Equity classes
-  if (s.equityClasses.length > 0) {
-    const labels = s.equityClasses.map(ec => ec.label).join(', ');
-    const basis = s.equityClasses[0]?.basisCell;
-    const basisVal = s.outputs.equityBasis;
-    lines.push(`Equity: ${s.equityClasses.length} class(es) (${labels})${basisVal ? `, basis ${fmtCur(basisVal)}` : ''}`);
+  // Equity classes (skip the nag for fund/credit lenses where it's not a concept)
+  if (s.equityClasses.length > 0 && s.lens !== 'fund' && s.lens !== 'credit') {
+    const labels = s.equityClasses.map(ec => ec.label).filter(Boolean).join(', ');
+    const basisVal = hr.equityBasis;
+    lines.push(`Equity: ${s.equityClasses.length} class(es)${labels ? ` (${labels})` : ''}${basisVal ? `, basis ${fmtCur(basisVal)}` : ''}`);
   }
 
   // Debt
   if (s.debt) {
     const cashStr = s.debt.exitCash ? ` | Cash: ${fmtCur(s.debt.exitCash)}` : '';
     lines.push(`Debt at exit: ${fmtCur(s.debt.exitBalance)}${cashStr}`);
+  }
+
+  // Covenants block — DSCR/LTV/ICR/leverage. The headline for credit/debt models.
+  // Dedup by label and cap so a model with many ratio rows stays readable.
+  if ((s.covenants || []).length > 0) {
+    const seen = new Set();
+    const parts = [];
+    for (const c of s.covenants) {
+      const key = c.label.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const isPct = /ltv|occupancy|yield/i.test(c.label) || (Math.abs(c.value) < 1);
+      const v = isPct ? fmtPct(c.value) : fmtMult(c.value);
+      parts.push(`${c.label.replace(/\s*\(.*\)\s*$/, '')} ${v}`);
+      if (parts.length >= 6) break;
+    }
+    lines.push(`Covenants: ${parts.join('  |  ')}`);
   }
 
   // Custom
@@ -226,6 +300,51 @@ function formatSummaryTable(s, opts = {}) {
 
   return lines.join('\n');
 }
+
+/**
+ * Pick the right "lens" for the headline so the summary reads correctly for the
+ * model family — not just PE buyout. Drives labels + which blocks to show.
+ */
+function detectLens(manifest, fundLevel, covenants, outputs) {
+  const t = (manifest.model?.type || '').toLowerCase();
+  const hasFund = fundLevel && (fundLevel.tvpi != null || fundLevel.dpi != null || fundLevel.rvpi != null);
+  const hasReturns = outputs.grossMOIC != null || outputs.grossIRR != null
+    || Object.keys(outputs).some(k => /\.gross(MOIC|IRR)$/.test(k));
+  const hasCovenants = (covenants || []).length > 0;
+  const capRate = manifest.outputs?.exitMultiple?.type === 'cap_rate_inverse';
+  if (hasFund) return 'fund';                          // VC fund / FoF → TVPI/DPI
+  if (hasCovenants && !hasReturns) return 'credit';    // debt monitor → DSCR/LTV
+  if (capRate || /re[_-]|real.?estate/.test(t)) return 'realestate'; // NOI + cap rate
+  if (t === 'saas' || t === 'growth_equity') return 'saas';          // ARR
+  return 'equity';                                     // PE / operating (default)
+}
+
+/** Label + basis for the operating line, by lens. */
+function operatingLabel(lens) {
+  return lens === 'realestate' ? 'Net Operating Income'
+    : lens === 'saas' ? 'Revenue / ARR'
+    : lens === 'credit' ? 'Borrower EBITDA'
+    : 'Platform EBITDA';
+}
+
+/** Human basis for an exit multiple, by lens + detected type. */
+function exitBasis(lens, exitMultipleType) {
+  if (exitMultipleType === 'cap_rate_inverse') return 'cap rate';
+  return lens === 'saas' ? 'Revenue' : lens === 'realestate' ? 'NOI' : 'EBITDA';
+}
+
+/** Headline returns, handling the class-prefixed keys when there's one class. */
+function headlineReturns(outputs) {
+  const out = {};
+  for (const m of ['grossMOIC', 'grossIRR', 'netMOIC', 'netIRR', 'equityBasis']) {
+    if (outputs[m] != null) { out[m] = outputs[m]; continue; }
+    const hits = Object.keys(outputs).filter(k => k.endsWith('.' + m));
+    if (hits.length === 1) out[m] = outputs[hits[0]];
+  }
+  return out;
+}
+
+function fmtMult(v) { return v == null ? '—' : `${v.toFixed(2)}x`; }
 
 function fmtCur(val) {
   if (val === null || val === undefined) return '—';
