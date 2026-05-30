@@ -18,7 +18,9 @@ import {
   resolveCell, FIELD_RANGES, inFieldRange,
 } from '../../lib/manifest.mjs';
 import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
+import { emitIntegrationDoc } from '../../lib/integration-doc.mjs';
 import { runManifestRefine } from './manifest-refine.mjs';
+import { dirname } from 'path';
 
 /**
  * Execute the manifest command.
@@ -70,6 +72,13 @@ function runMaps(chunkedDir, args) {
   if (result.written.length === 0 && result.skipped.some(s => s.file === '*')) {
     return { error: result.skipped[0].reason };
   }
+
+  // Also refresh the human/agent handoff bundle so the guide can't go stale
+  // relative to the JSON contract.
+  try {
+    const ig = emitIntegrationDoc(chunkedDir);
+    if (ig.written?.length) lines.push(`  Handoff: ${ig.written.join(', ')}`);
+  } catch { /* best-effort */ }
 
   return { ...result, _formatted: lines.join('\n') };
 }
@@ -262,6 +271,14 @@ function runDoctor(modelDir, args) {
   for (const spec of DOCTOR_FIELDS) {
     const cellRef = getNested(manifest, spec.path);
     if (!cellRef) continue;
+    // The exit "multiple" may actually be a cap rate (RE) or a yield (infra):
+    // validate against the right band so a clean 5.25% cap rate isn't flagged
+    // as "outside [1,50]" and quarantined.
+    let field = spec.field;
+    if (spec.path === 'outputs.exitMultiple.cell'
+        && manifest.outputs?.exitMultiple?.type === 'cap_rate_inverse') {
+      field = 'capRate';
+    }
     const val = resolveCell(gt, cellRef);
     if (val === undefined) {
       issues.push({
@@ -284,8 +301,8 @@ function runDoctor(modelDir, args) {
       });
       continue;
     }
-    if (!inFieldRange(spec.field, val)) {
-      const range = FIELD_RANGES[spec.field];
+    if (!inFieldRange(field, val)) {
+      const range = FIELD_RANGES[field];
       issues.push({
         severity: 'error',
         field: spec.path,
@@ -392,6 +409,20 @@ function runDoctor(modelDir, args) {
         });
       }
     }
+    // A dollar carry total is never a fraction. A value in (0,1) is almost
+    // always the carry RATE assumption (e.g. "GP Carried Interest" = 0.20)
+    // mistaken for the dollar total.
+    const cv = resolveCell(gt, cell);
+    if (typeof cv === 'number' && cv > 0 && cv < 1) {
+      issues.push({
+        severity: 'error',
+        field: 'carry.totalCell',
+        cell,
+        value: cv,
+        message: `value ${cv} looks like a carry RATE (a fraction), not a dollar carry total`,
+        fix: `ete query ${modelDir} --search "Carried Interest|Total Promote|GP Carry"  →  ete manifest set ${modelDir} carry.totalCell <dollarCell>`,
+      });
+    }
     }
   }
 
@@ -494,6 +525,24 @@ function runDoctor(modelDir, args) {
     }
   }
 
+  // Informational reconciliation: doctor only flags SUSPECT mappings, so it can
+  // say "All checks passed" while the summary still shows "—" for unmapped
+  // fields. List those here (absent in the model or not auto-detected) so the
+  // user isn't left wondering whether something broke.
+  const standardFields = [
+    ['Net IRR', 'equity.classes[0].netIRR'],
+    ['Net MOIC', 'equity.classes[0].netMOIC'],
+    ['Gross IRR', 'equity.classes[0].grossIRR'],
+    ['Gross MOIC', 'equity.classes[0].grossMOIC'],
+    ['Total Carry', 'carry.totalCell'],
+  ];
+  const unmapped = standardFields.filter(([, p]) => !getNested(manifest, p)).map(([l]) => l);
+  if (unmapped.length) {
+    lines.push('');
+    lines.push(`Note (informational, not errors): ${unmapped.join(', ')} not mapped — absent in this model or not auto-detected.`);
+    lines.push(`  If your model has one, map it: ete manifest set ${modelDir} <field> <cell>`);
+  }
+
   return {
     issues,
     valid: issues.filter(i => i.severity === 'error').length === 0,
@@ -548,6 +597,24 @@ function runSet(modelDir, fieldPath, cellRef, args) {
   lines.push(`  ${fieldPath}`);
   if (oldRef) lines.push(`  before: ${oldRef}`);
   lines.push(`  after:  ${cellRef} = ${formatVal(val)}`);
+
+  // Propagate the fix into the downstream contract + handoff bundle so the
+  // developer artifacts never lag a manual correction. (Closures are preserved
+  // across this re-emit; pass --excel to also refresh defined-name inputs.)
+  const chunkedDir = dirname(manifestPath);
+  // Only refresh when a contract was already emitted for this model (a real
+  // converted dir). Don't conjure contract files into a bare manifest/fixture.
+  if (existsSync(join(chunkedDir, 'named-outputs.json'))) {
+    try {
+      const maps = emitManifestMaps(chunkedDir, { excelPath: args.excel });
+      if (maps.written?.length) lines.push(`  Contract refreshed: ${maps.written.join(', ')}`);
+      const ig = emitIntegrationDoc(chunkedDir);
+      if (ig.written?.length) lines.push(`  Handoff refreshed: ${ig.written.join(', ')}`);
+      if (!args.excel) lines.push('  (note: pass --excel <model.xlsx> to also refresh named-inputs.json)');
+    } catch (e) {
+      lines.push(`  (contract refresh skipped: ${e.message})`);
+    }
+  }
 
   return { field: fieldPath, oldRef, newRef: cellRef, value: val, _formatted: lines.join('\n') };
 }

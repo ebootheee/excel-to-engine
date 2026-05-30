@@ -62,6 +62,7 @@ const COMMANDS = {
   extract: { desc: 'Pull time-series schedules from the model', module: './commands/extract.mjs' },
   explain: { desc: 'Audit trail for a manifest name or cell', module: './commands/explain.mjs' },
   eval: { desc: 'Evaluate a cell via the chunked engine', module: './commands/eval.mjs' },
+  verify: { desc: 'Check the engine reproduces the model base case', module: './commands/verify.mjs' },
   manifest: { desc: 'Generate or validate manifest', module: './commands/manifest.mjs' },
 };
 
@@ -144,6 +145,11 @@ async function main() {
       case 'eval': {
         const { runEval } = mod;
         result = await runEval(args._[1], { ...args, cells: args._.slice(2) });
+        break;
+      }
+      case 'verify': {
+        const { runVerify } = mod;
+        result = await runVerify(args._[1], args);
         break;
       }
       case 'manifest': {
@@ -247,6 +253,7 @@ Commands:
                                     demand via async load()/runScoped() + output-cone
                                     scoping; run() stays sync — await load() first)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
+  verify <modelDir>          Check the engine reproduces the model's base case
   query <modelDir> [args]    Query ground truth cells
   pnl <modelDir>             Extract annual P&L by segment
   scenario <modelDir>        Run scenario analysis

@@ -9,6 +9,74 @@ Use the compact output mode (`--compact` or `--format compact`) whenever you're
 consuming output yourself rather than presenting to the user — it cuts tokens
 ~60% compared to `--format json`.
 
+## Audience: you may be helping a non-technical analyst
+
+A common entry point is a finance person (PE/VC/RE/IB/corp-dev analyst, VP, or
+partner) who is **not a programmer** and wants to convert their Excel model —
+often to "build a web app for my LPs." When that's the situation, follow the
+guided onboarding below. Default to plain language: say "the spreadsheet's
+key numbers," not "ground-truth cells"; say "the input/output contract," not
+"named-outputs.json." Do the typing for them. Surface trade-offs, but don't make
+them learn the CLI.
+
+## Guided onboarding — "turn my Excel model into an engine / web app"
+
+Run this play when a user points you at this repo with a model and a goal like
+"walk me through it" or "turn this into an app." Each step is a checkpoint —
+confirm before moving on.
+
+1. **Environment (once).** `npm run check-env`. If the Rust parser is missing,
+   `npm run build:parser` (install Rust from https://rustup.rs/ first if
+   `cargo` is absent). Don't ask the user to do this — run it and report. The
+   eval harness / `ANTHROPIC_API_KEY` are NOT needed for conversion; never block
+   on them.
+2. **Convert.** `node cli/index.mjs init <model>.xlsx --output ./<name>/`. One
+   step → engine + manifest + contract + handoff bundle. (`--reuse-parse` to
+   iterate without re-parsing a big model.)
+3. **Sanity-check WITH the user — do not skip.** Show the `summary`. Ask them to
+   confirm the headline numbers against their spreadsheet: exit year/multiple,
+   base IRR/MOIC, carry magnitude. The auto-detector is good but every model is
+   laid out differently. If a number is wrong, it's almost always a cell-mapping
+   miss — run `ete manifest doctor <dir>`, then `ete manifest set <dir> <path>
+   <cell>` (find the right cell with `ete query <dir> --search "<label>"`).
+   `ete manifest set` auto-refreshes the contract + handoff bundle
+   (named-outputs/cell-types + INTEGRATION.md + example.mjs) and preserves the
+   dependency closures, so the fix reaches the developer bundle immediately — do
+   NOT re-run `init` to "save" a fix (it regenerates the manifest and discards
+   it). Pass `--excel <model.xlsx>` to the `set` to also refresh named-inputs.json.
+   Re-run summary to confirm. **A wrong base case here makes everything
+   downstream wrong** — this checkpoint is what earns the user's trust.
+4. **Verify engine fidelity.** Run `node <dir>/chunked/example.mjs` (or import
+   `lib/verify-engine.mjs` → `verifyEngine(chunkedDir)`). You want "all outputs
+   match baseCaseValue ✓" — proof that `engine.run()` reproduces the spreadsheet.
+   If outputs drift, the model likely has an intra-sheet **staircase**
+   (a cell referencing a *later row* on the same sheet, e.g. opening balance =
+   prior row's closing); see "Engine fidelity" below.
+5. **Hand off.** Point the user (and their coding agent) at
+   `<dir>/chunked/INTEGRATION.md` + `example.mjs`. Summarize what's in the
+   bundle: `engine.js` (call `run()`), `named-inputs.json` (the levers),
+   `named-outputs.json` (the answers, with base-case values to spot-check). Offer
+   a starter prompt they can give their developer/agent (see GETTING_STARTED.md).
+
+### Engine fidelity & the run() contract (for the coding-agent handoff)
+
+- `engine.run(inputs?, { strict? })` → `{ values, kpis, meta, unknownOverrides }`.
+  Inputs/outputs are **cell-addressed** (`"Sheet!A1"`). Override a lever:
+  `run({ "Assumptions!B4": 14 })`. A missing cell reads as `0` in formulas.
+- `engine.run()` is **exact** (actual transpiled formulas) — the right path for
+  an app. The CLI's `scenario`/`sensitivity` use a faster first-order delta
+  cascade — great for instant analyst what-ifs, not for penny-exact app math.
+- **Spot-check on import:** `run().values[cell]` should equal each output's
+  `baseCaseValue` in `named-outputs.json`. `example.mjs` does this automatically.
+- **Known limitation — intra-sheet staircases:** sheet modules compute roughly
+  row-major without an intra-sheet topological sort, so a formula that reads a
+  *later row on the same sheet* (classic "opening balance = last year's closing"
+  laid out as separate rows) can read `0`. The fix in a model is the standard
+  layout: time across columns, each metric one row, roll-forwards referencing the
+  **prior column, same row** — which is evaluation-safe. If you hit drift in
+  step 4, this is the first thing to check. (Genuine circular references across
+  sheets are handled by the convergence loop.)
+
 ## Core rules — read before you run anything
 
 These are the non-negotiables. Ignoring them is how sessions stall.

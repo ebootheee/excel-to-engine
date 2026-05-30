@@ -1,5 +1,116 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Analyst usability Waves 3–4 + capstone
+
+Wave 3 (family-aware coverage, doctor-by-type, self-refreshing `manifest set`,
+input-metadata fixes, `outputs.*` promotion, delta-cascade honesty guard) and
+Wave 4 (exit-value labeled by its real cell, Net-dash explainer, doctor
+reconciliation) closed the residual A5-trust cap. Across the simulation rounds:
+benchmark 2/12 → 3/12 passing, avg "woah" 3.50→4.00, avg trust 3.1→3.5, and
+coding-agent handoff mostly perfect.
+
+**Capstone (the exact acceptance scenario) PASSED, all 5/5 both sides:** a
+non-technical PE associate's assistant converted the LBO ("…every headline ties
+out exactly… ready to hand your developer"), and a fresh coding agent built a
+real, dependency-free LP what-if web app from the bundle alone, with a headless
+smoke test that ties out ("…a live LP what-if explorer wired straight to the
+contract in minutes… every lever pushes the outputs the right way"). See
+`ANALYST_UX_REPORT.md`. Follow-ups: INTEGRATION.md documents the browser-serve +
+Node `file://` import caveats; README lists `ete verify`.
+
+## 2026-05-29 — Analyst usability Wave 2 (model-family awareness)
+
+Driven by a 12-persona simulation (synthetic models across PE/VC/RE/infra/credit/
+corp/SaaS/FoF/search × skill × seniority, each run through the full
+journey + coding-agent handoff and scored on `tests/personas/lib/rubric.md`).
+Wave-1 baseline was **2/12** personas passing the benchmark gate; the tool was
+PE-buyout-centric and lost trust (summary A5 mostly 2-3) and contract
+completeness (C3/C4/C5 low) for every other asset class. Wave 2 makes it
+family-aware.
+
+### Contract (`lib/manifest-maps.mjs`, `lib/integration-doc.mjs`)
+- `named-outputs.json` now emits `manifest.fundLevel` (TVPI/DPI/RVPI/netIRR/
+  distributed/paidIn/...) + `covenants[]` (DSCR/LTV/ICR/...) + debt details — the
+  headline numbers for VC/FoF/credit/debt finally cross into the contract.
+- `named-inputs.json` gains `format` + suggested `min`/`max`/`step` per lever
+  (the universal handoff ask). Value-aware format inference (a bare value in
+  (-1,1) is a rate). `inferFormat` learns tvpi/dpi/rvpi/dscr/leverage→multiple,
+  ltv/yield/growth/margin→fraction, arr/fund/nav→currency.
+- **Closures preserved across re-emits** — `manifest set`/`maps`/`--reuse-parse`
+  no longer silently drop `dependsOnNamedInputs`/`affectsOutputs` once the
+  dependency graph is slimmed away.
+- `example.mjs` uses the same tolerance as `ete verify` (no false DRIFT on
+  rounded base values). INTEGRATION.md tables add labels, input format/range,
+  static-output + override-by-cell notes. `humanize` handles acronym runs.
+
+### Summary (`cli/commands/summary.mjs`)
+- Model-family **lens** (fund / credit / realestate / saas / equity): renders a
+  Fund (LP) metrics block, a Covenants block, cap-rate + Exit Value, or ARR
+  basis — instead of forcing a PE frame. Exit line shows the real basis
+  (`@ 12.0x EBITDA` / `Revenue` / `NOI` / `5.25% cap rate`). No more fabricated
+  "Platform EBITDA" on non-PE models. Returns block resolves class-prefixed keys.
+  Segments table drops ratio rows. Hold period = period count (consistent with
+  the year range).
+
+### Doctor / refresh / checklist (`cli/commands/manifest.mjs`, `lib/manifest.mjs`)
+- Doctor validates `outputs.exitMultiple` by **type**: a cap-rate / exit-yield is
+  checked against [1%,30%], not [1,50] — no more false error + quarantine on
+  clean RE/infra models.
+- `ete manifest set` propagates a fix into the full contract + handoff bundle
+  (closures preserved), so the developer artifacts never lag a correction —
+  resolves the "fix never reaches the bundle / re-init wipes it" catch-22.
+- Review checklist is model-family aware (no "add EBITDA/equity" nag for
+  funds/SaaS/credit/RE).
+
+## 2026-05-29 — Analyst onboarding + coding-agent handoff (Wave 1)
+
+Reframes the toolkit around a non-technical finance user who wants to convert
+their Excel model — often to "build a web app for my LPs" — working through an AI
+assistant. Two halves: make the human on-ramp obvious, and make the developer
+handoff bundle so clear a coding agent can build from it immediately. Driven by
+running realistic synthetic models through the full pipeline and watching where
+trust breaks.
+
+### Coding-agent handoff bundle (emitted by `ete init`)
+- New `lib/integration-doc.mjs` → `chunked/INTEGRATION.md` (a guide tailored to
+  the specific model: `run()` API, input/output tables with base-case values,
+  a web-app wiring sketch) + a runnable `chunked/example.mjs` (base case + a real
+  what-if, with an automatic base-case drift check).
+- New `lib/verify-engine.mjs` (`verifyEngine`) — confirms `engine.run()`
+  reproduces the spreadsheet's base case for every named output.
+
+### Detector accuracy (trust at first glance)
+- **Periodicity** no longer mislabels a normal 5–7-year model as "monthly" (the
+  year-header detector only ever sees integer years → annual by construction).
+- **Exit multiple** prefers an *Exit*-labeled cell over the *Entry* one (was
+  first-match, usually grabbing entry); EBITDA-row detection skips
+  "… EBITDA Multiple / per share / margin" labels.
+- **Carry total** prefers a dollar-magnitude cell over the carry-*rate* fraction
+  (a "GP Carried Interest" = 0.20 assumption no longer masquerades as the total).
+  `ete manifest doctor` now flags a carry total that resolves to a fraction.
+
+### Onboarding (human + agent)
+- `README.md` rewritten to lead with the analyst + AI-assistant journey; Rust /
+  `cargo` moved to a one-time "manual setup" section behind `npm run build:parser`.
+- New `GETTING_STARTED.md` — the guided "walk me through it" companion with
+  copy-paste prompts and a "build a web app" handoff section.
+- `skill/SKILL.md` gains a **Guided onboarding** play (setup → convert →
+  sanity-check WITH the user → verify fidelity → hand off) + an engine-fidelity /
+  `run()` contract note documenting the intra-sheet *staircase* limitation and
+  the standard column=time, row=metric layout that avoids it. `CLAUDE.md` points
+  to it.
+- `scripts/check-env.mjs` rewritten: cross-platform (Windows `where` + `.exe`),
+  separates REQUIRED (Node, parser, deps) from OPTIONAL (eval, API key), prints
+  exact next-step commands. New `npm run build:parser`. Friendlier
+  "parser not found" error in `ete init`.
+
+### Tests / harness
+- `tests/personas/lib/model-builder.mjs` — synthetic `.xlsx` factory (bakes in
+  the SheetJS-ESM buffer-write gotcha and formula↔cached-value consistency) +
+  a realistic PE-buyout reference generator. The basis for persona usability
+  testing.
+- `tests/cli/test-onboarding.mjs` (11 assertions) wired into `npm test`: detector
+  fixes + bundle emission + `node example.mjs` + engine base-case fidelity.
 ## 2026-05-29 — Compact dependency graph + streamed module writer: `ete init` completes on the real models (#32, #33)
 
 With the #22 scaling walls closed, the **Rust parser** finished on the real

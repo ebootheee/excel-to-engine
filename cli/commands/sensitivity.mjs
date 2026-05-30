@@ -4,7 +4,7 @@
  * @license MIT
  */
 
-import { runSensitivity1D, runSensitivity2D, parseCliAdjustments } from '../solvers/scenario-engine.mjs';
+import { runSensitivity1D, runSensitivity2D, parseCliAdjustments, baseCaseDivergenceWarning } from '../solvers/scenario-engine.mjs';
 import { fmtNum } from '../format.mjs';
 
 /**
@@ -24,11 +24,13 @@ export function runSensitivityCommand(modelDir, args) {
   delete baseArgs.format;
 
   const metrics = args.metric ? args.metric.split(',').map(m => m.trim()) : undefined;
+  const warn = args.format === 'json' ? null : baseCaseDivergenceWarning(modelDir);
+  const withWarn = (s) => warn ? `${warn}\n\n${s}` : s;
 
   if (varySpecs.length === 1) {
     // 1D sweep
     const result = runSensitivity1D(modelDir, varySpecs[0], baseArgs, { metrics });
-    result._formatted = format1D(result, args.format);
+    result._formatted = withWarn(format1D(result, args.format));
     return result;
   }
 
@@ -36,7 +38,7 @@ export function runSensitivityCommand(modelDir, args) {
     // 2D surface
     const metric = metrics?.[0] || 'grossIRR';
     const result = runSensitivity2D(modelDir, varySpecs[0], varySpecs[1], baseArgs, { metric });
-    result._formatted = format2D(result, args.format);
+    result._formatted = withWarn(format2D(result, args.format));
     return result;
   }
 

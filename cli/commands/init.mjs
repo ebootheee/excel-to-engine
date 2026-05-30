@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
 import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
+import { emitIntegrationDoc } from '../../lib/integration-doc.mjs';
 import { emitBuildManifest } from '../../lib/build-manifest.mjs';
 import { loadLabelIndex } from '../../lib/manifest.mjs';
 
@@ -90,9 +91,21 @@ export function runInit(excelPath, args) {
     const parserBin = parserPaths.find(p => existsSync(p));
 
     if (!parserBin) {
+      const hasCargo = (() => {
+        try { spawnSync('cargo', ['--version'], { stdio: 'ignore' }); return true; } catch { return false; }
+      })();
+      const buildHint = hasCargo
+        ? '  npm run build:parser'
+        : (process.platform === 'win32'
+            ? '  1) Install Rust: https://rustup.rs/  (or: winget install Rustlang.Rustup)\n  2) npm run build:parser'
+            : "  1) Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n  2) npm run build:parser");
       return {
-        error: 'Rust parser not found. Build it first:\n  cd pipelines/rust && cargo build --release',
-        _formatted: 'Error: Rust parser not found.\n\nBuild it:\n  cd pipelines/rust && cargo build --release\n\nThen re-run:\n  ete init ' + excelPath,
+        error: 'Rust parser not found. Build it first: npm run build:parser',
+        _formatted:
+          'Error: the one-time Rust parser build is missing.\n\n' +
+          'This is the only build step. Run:\n' + buildHint + '\n\n' +
+          'Then re-run:\n  node cli/index.mjs init ' + excelPath + ' --output <dir>\n\n' +
+          '(Check your environment any time with:  npm run check-env)',
       };
     }
 
@@ -271,14 +284,22 @@ export function runInit(excelPath, args) {
       ...shared,
     });
     if (refineResult._formatted) {
-      // Show just the found/not-found summary, not the full report
+      // Show the family-aware coverage: only count fields EXPECTED for this
+      // model's family, so a fund/credit/budget model isn't graded against a
+      // PE-deal yardstick (which read as "the conversion failed").
       const foundCount = Object.keys(refineResult.found || {}).length;
       const existingCount = Object.keys(refineResult.existing || {}).length;
-      const totalFields = foundCount + existingCount + (refineResult.notFound || []).length;
-      lines.push(`  Coverage: ${foundCount + existingCount}/${totalFields} key fields mapped`);
+      const mapped = foundCount + existingCount;
+      const relevant = mapped + (refineResult.notFound || []).length;
+      lines.push(`  Coverage: ${mapped}/${relevant} expected fields mapped` +
+        (refineResult.family ? ` (detected: ${refineResult.family})` : ''));
       if (foundCount > 0) lines.push(`  Refined: ${foundCount} new fields found and patched`);
       if (refineResult.notFound?.length > 0) {
-        lines.push(`  Missing: ${refineResult.notFound.join(', ')}`);
+        lines.push(`  Needs mapping (expected, not found): ${refineResult.notFound.join(', ')}`);
+        lines.push(`    → fix with: ete manifest set ${chunkedDir} <field> <cell>`);
+      }
+      if ((refineResult.notApplicable || []).length > 0) {
+        lines.push(`  Not applicable to this model — no action needed: ${refineResult.notApplicable.join(', ')}`);
       }
     }
   } catch (e) {
@@ -379,6 +400,19 @@ export function runInit(excelPath, args) {
     lines.push(`  (Map emission skipped: ${e.message})`);
   }
 
+  // Step 5c: Emit the coding-agent handoff bundle (INTEGRATION.md + example.mjs).
+  // This is the surface a PE analyst hands to their coding agent: a tailored,
+  // self-contained guide to wiring engine.run() into an app, plus a runnable
+  // demo. Best-effort — never blocks init.
+  try {
+    const ig = emitIntegrationDoc(chunkedDir, { modelTitle: manifestResult?.manifest?.model?.title });
+    if (ig.written?.length > 0) {
+      lines.push(`  Handoff bundle: ${ig.written.join(', ')} (run: node ${join(chunkedDir, 'example.mjs')})`);
+    }
+  } catch (e) {
+    lines.push(`  (Integration doc skipped: ${e.message})`);
+  }
+
   // Step 5b: Slim the default chunked/ output. The cell-level
   // dependency-graph.json is the largest intermediate artifact on big models
   // (~0.5 GB even with compact range tokens); its high-value derivative — the
@@ -463,8 +497,26 @@ export function runInit(excelPath, args) {
     }
   }
 
+  // Optional engine fidelity check (--verify). Run in a subprocess so a heavy
+  // engine.run() can't blow up the init process, and so init stays synchronous.
+  if (args.verify) {
+    lines.push('');
+    lines.push('Verifying engine reproduces the base case (--verify)...');
+    try {
+      const vr = spawnSync('node', [join(PACKAGE_ROOT, 'cli', 'index.mjs'), 'verify', chunkedDir],
+        { encoding: 'utf-8', timeout: 600000, maxBuffer: 16 * 1024 * 1024 });
+      const txt = (vr.stdout || vr.stderr || '').trim();
+      if (txt) lines.push(txt.split('\n').map(l => '  ' + l).join('\n'));
+    } catch (e) {
+      lines.push(`  (verify skipped: ${e.message})`);
+    }
+  }
+
   lines.push('');
-  lines.push(`Ready. Try: ete summary ${chunkedDir}`);
+  lines.push(`Ready. Next steps:`);
+  lines.push(`  Sanity-check the model:   ete summary ${chunkedDir}`);
+  lines.push(`  Confirm it matches Excel: ete verify ${chunkedDir}`);
+  lines.push(`  Hand off to a developer:  ${join(chunkedDir, 'INTEGRATION.md')}  (+ run: node ${join(chunkedDir, 'example.mjs')})`);
 
   // Machine-readable quiet output: skips all the narrative, returns a
   // compact JSON-ready summary for CI/agent contexts.

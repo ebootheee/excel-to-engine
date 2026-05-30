@@ -8,6 +8,16 @@ A toolkit for converting complex financial Excel models (.xlsx) into JavaScript 
 2. **CLI (`ete`)** — Scenario analysis, sensitivity, P&L extraction, and queries against any converted model
 3. **Eval** — Blind evaluation and accuracy testing
 
+### Helping a non-technical analyst (common entry point)
+
+Many users are finance people (PE/VC/RE/IB/corp-dev) who are **not programmers**
+and want to convert their Excel model — often to "build a web app for my LPs."
+When you see that, follow the **Guided onboarding** play at the top of
+`skill/SKILL.md` (setup → convert → sanity-check WITH the user → verify engine
+fidelity → hand off the `chunked/INTEGRATION.md` + `example.mjs` bundle). The
+human-facing companion is `GETTING_STARTED.md`. Do the typing for them; default
+to plain language over internal terms (manifest, ground truth, delta cascade).
+
 ## Repository Structure
 
 ```

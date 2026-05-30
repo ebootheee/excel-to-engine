@@ -151,6 +151,8 @@ export function aggregateSegmentPnL(gt, segments, dateResult, options = {}) {
   const result = { segments: {} };
   const revByYear = {};
   const expByYear = {};
+  const profitByYear = {};   // explicit EBITDA/NOI/operating-income rows (type 'profit')
+  let hasProfitRow = false;
 
   for (const seg of segments) {
     const mode = seg.aggregation === 'annual_last' ? 'last'
@@ -164,23 +166,28 @@ export function aggregateSegmentPnL(gt, segments, dateResult, options = {}) {
 
     result.segments[seg.id] = { ...seg, annual, growth };
 
-    // Accumulate totals
+    // Accumulate totals by segment TYPE. Keep the three streams separate —
+    // folding 'profit' (an explicit EBITDA row) into revenue double-counts it.
     for (const [year, val] of Object.entries(annual)) {
       const y = parseInt(year, 10);
-      if (seg.type === 'revenue' || seg.type === 'profit') {
-        revByYear[y] = (revByYear[y] || 0) + val;
-      }
-      if (seg.type === 'expense') {
-        expByYear[y] = (expByYear[y] || 0) + val;
-      }
+      if (seg.type === 'revenue') revByYear[y] = (revByYear[y] || 0) + val;
+      else if (seg.type === 'expense') expByYear[y] = (expByYear[y] || 0) + val;
+      else if (seg.type === 'profit') { profitByYear[y] = (profitByYear[y] || 0) + val; hasProfitRow = true; }
     }
   }
 
-  // Compute EBITDA = revenue - |expense| (expense values may already be negative)
+  // EBITDA: prefer the model's own EBITDA/NOI row(s) when present (the right
+  // answer — costs may be stored positive OR negative, and revenue rows may
+  // not net to EBITDA). Only when there's no explicit profit row do we derive
+  // it as revenue minus the absolute value of expenses (sign-robust).
   const ebitdaByYear = {};
-  const allYears = new Set([...Object.keys(revByYear), ...Object.keys(expByYear)].map(Number));
+  const allYears = new Set([
+    ...Object.keys(revByYear), ...Object.keys(expByYear), ...Object.keys(profitByYear),
+  ].map(Number));
   for (const y of allYears) {
-    ebitdaByYear[y] = (revByYear[y] || 0) + (expByYear[y] || 0); // expense usually negative
+    ebitdaByYear[y] = hasProfitRow
+      ? (profitByYear[y] || 0)
+      : (revByYear[y] || 0) - Math.abs(expByYear[y] || 0);
   }
 
   result.totals = {

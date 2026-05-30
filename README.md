@@ -1,46 +1,133 @@
 # excel-to-engine
 
-> Turn any Excel financial model into a queryable scenario engine. Three commands from `.xlsx` to IRR sensitivity tables.
+> Turn your Excel financial model into a live, queryable engine — and a clean
+> JavaScript bundle your developer (or AI coding agent) can drop into a web app.
+> **You don't have to be a programmer to use it.**
 
 [![CI](https://github.com/ebootheee/excel-to-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/ebootheee/excel-to-engine/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## From Excel to Scenario Analysis in 60 Seconds
+---
 
-```bash
-# 1. Build the parser (one-time)
-cd pipelines/rust && cargo build --release && cd ../..
+## Who this is for
 
-# 2. Parse your model — handles everything: parse, manifest, auto-detect metrics
-node cli/index.mjs init model.xlsx --output ./my-model/
+You built (or inherited) a financial model in Excel — an LBO, a fund waterfall,
+a real-estate pro forma, a 3-statement model, a venture portfolio. You want to:
 
-# 3. Ask questions
-node cli/index.mjs summary ./my-model/chunked/
-node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 16 --revenue-adj techGP:-20%
-node cli/index.mjs sensitivity ./my-model/chunked/ --vary exit-multiple:14-22:2 --vary exit-year:2028-2034:1 --metric grossIRR
-```
+- **explore scenarios** without breaking the spreadsheet ("what's IRR if we exit at 12×?"), or
+- **turn it into an interactive web app** — e.g. a what-if explorer you can share with LPs or an IC.
 
-**That's it.** The CLI auto-generates a model manifest (maps EBITDA, IRR, carry, equity to the right cells), runs a smart refinement pass, and is ready for scenarios immediately.
+This toolkit does both. It reads your `.xlsx`, reproduces every formula in
+JavaScript, and hands you (a) a question-answering CLI and (b) a self-contained
+JS **engine** with a documented input/output contract a developer can wire into
+an app in an afternoon.
 
-## What You Get
+> **The easiest way to use this is with an AI coding assistant** (Claude Code,
+> Cursor, Copilot, etc.). You talk; it runs the commands. See **[GETTING_STARTED.md](GETTING_STARTED.md)**
+> for the copy-paste prompts. If you'd rather drive it yourself, the manual
+> steps are below.
+
+---
+
+## The 3-minute path (with an AI assistant)
+
+1. **Open this repo in your AI coding assistant** and put your model file next to it.
+2. Say:
+
+   > *"I'm not a programmer. I have a financial model at `my-model.xlsx`. Set this
+   > repo up and convert my model into an engine, then walk me through what it found."*
+
+3. The assistant runs the one-time setup, runs `init`, and shows you a plain-English
+   summary. **Sanity-check the numbers against your spreadsheet.** If something
+   looks off, just say so — there are built-in tools to correct it.
+4. When you're happy, say:
+
+   > *"Great. Now give me the engine bundle and a guide so my developer can build
+   > a web app from it."*
+
+   You'll get a folder containing the engine plus an **`INTEGRATION.md`** and a
+   runnable **`example.mjs`** — everything a coding agent needs.
+
+That's the whole journey: **Excel → verified engine → web app**, with the
+assistant doing the typing.
+
+---
+
+## What you get
 
 | Input | Output |
 |-------|--------|
-| A `.xlsx` file (PE fund, RE waterfall, DCF, 3-statement, venture portfolio) | Every cell value as queryable JSON, a semantic manifest mapping financial concepts to cells, and a CLI for scenario analysis |
+| One `.xlsx` file | A JS **engine** (`engine.js` with a `run()` function), a machine-readable **input/output contract** (`named-inputs.json` / `named-outputs.json`), a **scenario CLI** (`ete`), and a tailored **integration guide** for developers. |
 
-Works on models from 3KB to 84MB (2–82 sheets, up to 6M cells). Tested across 9 financial models with 99.3% blind eval accuracy (149/150 questions across 15.5M cells).
+- **The engine reproduces your spreadsheet's math.** `run()` executes the actual
+  transpiled formulas, so the numbers match Excel. A built-in check confirms it
+  reproduces your base case.
+- **A documented contract.** Every lever (input) and answer (output) has a human
+  name, a cell address, a base-case value, and a "what does this affect" map — so
+  a developer never has to reverse-engineer your spreadsheet.
+- Works on models from 3 KB to 84 MB (2–82 sheets, up to 6M cells). Validated at
+  **99.3%** blind-eval accuracy across a suite of real models (149/150 questions,
+  15.5M cells).
 
-## Prerequisites
+---
 
-- **Node.js 18+**
-- **Rust toolchain:** `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+## For the developer / coding agent
+
+If an analyst handed you a converted model folder, **open `chunked/INTEGRATION.md`
+and run `node chunked/example.mjs`.** That's the fast path. In short:
+
+```js
+import { run } from './engine.js';
+
+const base = run();                                   // base case (matches Excel)
+const alt  = run({ "Assumptions!B4": 14 });           // override a lever, recompute everything
+console.log(alt.values["IC Summary!B13"]);            // read an output by cell
+```
+
+- `named-outputs.json` maps friendly names → cells (+ base-case values to spot-check against).
+- `named-inputs.json` lists the levers (+ which outputs each one affects).
+- It's plain ES modules, zero dependencies — runs in Node and the browser.
+
+See **[GETTING_STARTED.md](GETTING_STARTED.md)** → *"Build a web app"* for a full wiring sketch.
+
+---
+
+## Manual setup (if you're not using an assistant)
+
+**Prerequisites:** Node.js 18+ and (one-time) the Rust toolchain to build the parser.
 
 ```bash
 git clone https://github.com/ebootheee/excel-to-engine.git
 cd excel-to-engine
 npm install
-cd pipelines/rust && cargo build --release && cd ../..
+
+# One-time: build the Excel parser (this is the only build step)
+npm run build:parser          # = cargo build --release in pipelines/rust
+#   No Rust? Install it from https://rustup.rs/ first.
+
+# Check everything is ready (tells you exactly what's missing, if anything):
+npm run check-env
 ```
+
+Then convert a model and ask questions:
+
+```bash
+# Parse your model → engine + manifest + contract + integration guide, in one step
+node cli/index.mjs init my-model.xlsx --output ./my-model/
+
+# Look at what it found
+node cli/index.mjs summary ./my-model/chunked/
+
+# Explore scenarios
+node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 16
+node cli/index.mjs sensitivity ./my-model/chunked/ --vary exit-multiple:14-22:2 --metric grossIRR
+```
+
+> Tip: `npm link` (or `npx ete`) lets you type `ete …` instead of
+> `node cli/index.mjs …`. The examples below use the long form so they work
+> without linking.
+
+---
 
 ## CLI Commands
 
@@ -67,60 +154,32 @@ Carry: $50.3M (3 tiers), 8% pref
 Equity: 1 class (Series A), basis $270.0M
 ```
 
-### `ete pnl` — Revenue Breakdown
+### `ete verify` — Confirm the engine matches your spreadsheet
 
 ```bash
-node cli/index.mjs pnl ./my-model/chunked/ --growth
-
-# Drill into a specific segment
-node cli/index.mjs pnl ./my-model/chunked/ --segment technology --detail --growth
+node cli/index.mjs verify ./my-model/chunked/
+# → "✓ engine.run() reproduces the model's base case exactly. Safe to hand off."
 ```
 
-Shows annual P&L by segment with YoY growth rates and CAGR. `--detail` drills into subsegment revenue and expense line items.
+Runs the generated engine with no overrides and checks every named output against
+its base-case value. The trust signal to run before handing the bundle to a
+developer (also available as `ete init --verify`).
 
 ### `ete query` — Find Anything
 
 ```bash
-# Search by financial term (find cells by label, not by address)
-node cli/index.mjs query ./my-model/chunked/ --search "headcount"
-node cli/index.mjs query ./my-model/chunked/ --search "Total Revenue"
-
-# Look up a specific cell
-node cli/index.mjs query ./my-model/chunked/ "Valuation!K54"
-
-# Look up by manifest name
-node cli/index.mjs query ./my-model/chunked/ --name grossIRR
+node cli/index.mjs query ./my-model/chunked/ --search "headcount"     # search by label
+node cli/index.mjs query ./my-model/chunked/ "Valuation!K54"          # look up a cell
+node cli/index.mjs query ./my-model/chunked/ --name grossIRR          # look up by name
 ```
 
 ### `ete scenario` — What-If Analysis
 
 ```bash
-# Simple: change exit multiple
 node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 16
-
-# Complex: multiple adjustments
 node cli/index.mjs scenario ./my-model/chunked/ \
-  --exit-multiple 14 \
-  --exit-year 2033 \
-  --revenue-adj techGP:-20% \
-  --cost-adj technology:+10%
-
-# Save and reload scenarios
+  --exit-multiple 14 --exit-year 2033 --revenue-adj techGP:-20% --cost-adj technology:+10%
 node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 14 --save "bear"
-node cli/index.mjs scenario ./my-model/chunked/ --load "bear"
-```
-
-**Output:**
-```
-Scenario: exit-multiple=16
-
-                        Base      Scenario         Delta
-────────────────────────────────────────────────────
-Exit EBITDA           $59.0M        $59.0M       $0 (0%)
-Terminal Value         $1.1B       $944.0M    -$148M (-14%)
-Gross MOIC             2.77x         2.24x      -0.53x
-Gross IRR              18.5%         14.4%      -4.1pp
-Total Carry          $140.6M        $88.6M     -$52M (-37%)
 ```
 
 **Full parameter set:**
@@ -139,207 +198,48 @@ Total Carry          $140.6M        $88.6M     -$52M (-37%)
 ### `ete sensitivity` — IRR/MOIC Surfaces
 
 ```bash
-# 1D sweep: IRR across exit multiples
-node cli/index.mjs sensitivity ./my-model/chunked/ \
-  --vary exit-multiple:14-22:2 --metric grossIRR,grossMOIC
-
-# 2D surface: IRR matrix across multiples and exit years
-node cli/index.mjs sensitivity ./my-model/chunked/ \
-  --vary exit-multiple:14-22:2 \
-  --vary exit-year:2028-2034:1 \
-  --metric grossIRR
+node cli/index.mjs sensitivity ./my-model/chunked/ --vary exit-multiple:14-22:2 --metric grossIRR,grossMOIC
+node cli/index.mjs sensitivity ./my-model/chunked/ --vary exit-multiple:14-22:2 --vary exit-year:2028-2034:1 --metric grossIRR
 ```
 
-**Output (2D):**
-```
-Gross IRR: exitMultiple (rows) x exitYear (columns)
-
-                2028      2029      2030      2031
-14.0x          12.3%     11.3%     10.4%      9.7%
-16.0x          18.7%     16.2%     14.4%     13.0%
-18.0x          24.3%     20.4%     17.8%     15.9%
-20.0x          29.1%     24.1%     20.7%     18.3%
-22.0x          33.5%     27.4%     23.4%     20.5%
-```
-
-### `ete carry` — Waterfall GP Carry Calculation
+### `ete carry` — Waterfall GP Carry
 
 ```bash
-# Uses manifest's peak equity, pref, carry%, MoC
-node cli/index.mjs carry ./my-model/chunked/
-
-# Fully parametric (no manifest needed)
+node cli/index.mjs carry ./my-model/chunked/                              # from the manifest
 node cli/index.mjs carry --peak 500e6 --moc 2.8 --life 4.7 --pref 0.08 --carry 0.20 --ownership 0.06
-
-# Solve hold period from IRR when cash flows are irregular
-node cli/index.mjs carry --peak 500e6 --moc 2.8 --irr 0.165 --ownership 0.06
 ```
 
-**Output:**
-```
-Carry estimate (American waterfall)
-──────────────────────────────────────────────────
-Inputs:
-  Peak equity:    $500.0M
-  MoC (gross):    2.80×
-  Hold period:    4.70yr
-  Pref return:    8.0%
-  GP carry:       20.0%
-  Ownership:      6.00%
+### `ete compare`, `ete extract`, `ete explain`, `ete eval`, `ete manifest`
 
-Waterfall:
-  Return of Capital                    dist $500.0M   LP $500.0M   GP       $0
-  Preferred Return (8.0%)              dist $217.9M   LP $217.9M   GP       $0
-  GP Catch-Up                          dist $180.0M   LP       $0   GP $180.0M
-  Residual 80/20                       dist $502.1M   LP $401.7M   GP $100.4M
+Side-by-side scenarios with attribution; time-series schedules (capital calls,
+distributions, debt); audit trails; exact formula evaluation; and manifest
+configuration. Run `node cli/index.mjs --help` for the full list, or see
+[skill/SKILL.md](skill/SKILL.md).
 
-Totals:
-  GP carry:       $280.4M   (31.2% of profit)
-  Your share:     $16.8M   (at 6.00% of GP carry)
-```
-
-Pass `--no-catchup` for pure 80/20-above-pref (no catch-up tier). Pass `--structure european` for aggregate-fund European waterfall.
-
-### `ete compare` — Side-by-Side Analysis
-
-```bash
-# Base vs scenario with attribution (shows what drove the change)
-node cli/index.mjs compare ./my-model/chunked/ \
-  --base "" --alt "exit-multiple=14,revenue-adj=techGP:-20%" --attribution
-
-# Bear / base / bull comparison
-node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 14 --save "bear"
-node cli/index.mjs scenario ./my-model/chunked/ --save "base"
-node cli/index.mjs scenario ./my-model/chunked/ --exit-multiple 22 --save "bull"
-node cli/index.mjs compare ./my-model/chunked/ --scenarios "bear,base,bull"
-
-# Cross-model comparison
-node cli/index.mjs compare --models ./fund-a/chunked/ ./fund-b/chunked/ --metric grossIRR,grossMOIC
-```
-
-### `ete manifest` — Model Configuration
-
-The manifest maps financial concepts (EBITDA, IRR, carry tiers) to specific cells in each model. It's auto-generated and auto-refined — you rarely need to touch it.
-
-```bash
-# Auto-generate (done automatically by `ete init`)
-node cli/index.mjs manifest generate ./my-model/chunked/
-
-# Smart refinement — searches for IRR, MOIC, carry, equity across all cells
-node cli/index.mjs manifest refine ./my-model/chunked/ --apply
-
-# Diagnose suspect cell mappings (out-of-range values, constant time-series)
-node cli/index.mjs manifest doctor ./my-model/chunked/
-
-# Override a single field (replaces the old "hand-patch JSON" workflow)
-node cli/index.mjs manifest set ./my-model/chunked/ equity.classes[0].grossIRR "Cheat Sheet!F15"
-
-# Validate all cell references resolve correctly
-node cli/index.mjs manifest validate ./my-model/chunked/manifest.json
-```
-
-**Manifest robustness.** Auto-generation enforces value ranges on first-pass
-detection (e.g. `basisCell` must be between $1M and $50B, so a stray `5` never
-gets written), dedupes equity classes by `(sheet, row)`, and rejects segment
-rows whose values are constant across the timeline (scalar assumptions rather
-than P&L streams). When something still looks wrong, `ete manifest doctor`
-flags the specific field and suggests the fix command.
-
-## What AI agents can ask this tool
-
-The CLI is an **AI-navigable index over complex Excel models**. An agent can
-answer questions across the PE stakeholder chain without loading the whole
-model into context:
-
-**Analyst / VP:**
-- "Show the P&L by segment with YoY growth" → `ete pnl --growth`
-- "What's IRR if exit multiple drops 2 turns?" → `ete scenario --exit-multiple X`
-- "Sensitivity of MOIC to exit timing and multiple" → `ete sensitivity --vary ...`
-- "Find the Peak Equity on the Cheat Sheet tab" → `ete query --search "Peak Equity" --sheet "Cheat Sheet"`
-
-**Partner / Principal:**
-- "Summarize for the IC memo" → `ete summary`
-- "Attribution — why did IRR drop 5pp?" → `ete compare --attribution`
-- "Bear / base / bull in one view" → `ete scenario --save` + `ete compare --scenarios`
-
-**LP / IR:**
-- "TVPI / DPI / RVPI / net IRR" → `ete query --name tvpi` (and friends)
-- "Vintage year, fund size, paid-in" → `ete query --name vintageYear`
-- "Capital call schedule" → `ete extract --type capital_call`
-- "Distribution schedule" → `ete extract --type distribution`
-
-**Portfolio CFO:**
-- "Debt amortization / interest expense over time" → `ete extract --type debt_balance`
-- "Covenant ratios" → `ete query --name dscr` (and `ltv`, `icr`, `leverage`)
-- "What's FCF if rates go up 100bps?" → `ete eval <cell> --inputs '{"Assumptions!Rate": 0.08}'`
-
-**Audit / "why" questions:**
-- "Where does totalCarry come from?" → `ete explain totalCarry`
-- "What formula computes Equity!AN125?" → `ete explain "Equity!AN125"`
-
-Use `--compact` on any agent-consumed output — ~60% fewer tokens than `--format json`.
-
-## Use with Claude Code
-
-The toolkit includes a Claude Code skill (`skill/SKILL.md`) that translates natural language into CLI commands. You don't need to know the CLI syntax — just ask questions:
-
-```
-"What happens to returns if tech grows at 40% instead of 30%?"
-→ ete scenario --revenue-growth techGP:0.40
-
-"Show me a sensitivity table for exit multiples and timing"
-→ ete sensitivity --vary exit-multiple:14-22:1 --vary exit-year:2028-2034:1
-
-"Capitalize the dev headcount over 5 years — what does that do to IRR?"
-→ ete scenario --capitalize tech_headcount:5
-
-"Build me bear, base, and bull cases for the board deck"
-→ ete scenario --save "bear" ... → --save "base" ... → --save "bull" ... → ete compare --scenarios "bear,base,bull"
-
-"What if we value tech at 12x revenue and RE at 15x NOI separately?"
-→ ete scenario --sotp --segment-multiple techGP:12 --segment-multiple reNOI:15
-```
-
-The skill handles manifest creation transparently — the PE user never needs to know about manifests, cell references, or ground truth files.
-
-## Scenario Files
-
-For complex multi-parameter scenarios, use JSON files:
-
-```json
-{
-  "name": "downside-q4",
-  "description": "Conservative: tech headwinds, delayed exit, multiple compression",
-  "adjustments": {
-    "exit": { "year": 2033, "multiple": 14 },
-    "revenue": [
-      { "segment": "techGP", "adj": "-20%" }
-    ],
-    "cost": [
-      { "segment": "technology", "adj": "+10%" }
-    ],
-    "capital": { "leverage": 0.50 }
-  }
-}
-```
-
-```bash
-node cli/index.mjs scenario ./my-model/chunked/ --file scenarios/downside.json
-```
+---
 
 ## How It Works
 
-### The Pipeline
-
 ```
 Excel (.xlsx)
-  → Rust parser (calamine, 10-50x faster than SheetJS)
-    → Per-sheet JS modules (formulas transpiled to JavaScript)
-    → Ground truth JSON (every cell value from Excel)
-    → Model manifest (semantic mapping of financial concepts to cells)
-    → Downstream contract maps (named-outputs/inputs.json + closures, cell-types.json)
-      → CLI scenario engine (delta cascade: adjustments → P&L → TV → equity → returns → carry)
+  → Rust parser (calamine, 10–50x faster than SheetJS)
+    → Per-sheet JS modules (formulas transpiled to JavaScript)  ──┐
+    → Ground truth JSON (every cell value from Excel)             │
+    → Model manifest (financial concepts → cells)                 ├─→  engine.js (run())
+    → Contract maps (named-outputs / named-inputs / cell-types)  ─┘    + INTEGRATION.md + example.mjs
+      → CLI scenario engine (instant what-ifs via a delta cascade)
 ```
+
+`ete init` does all of this in one step and finishes by emitting the developer
+handoff bundle (`INTEGRATION.md` + `example.mjs`) into the output folder.
+
+### Two ways to compute a scenario
+
+- **`engine.run()`** executes the model's actual transpiled formulas — exact,
+  the right choice for an app's production math.
+- **The CLI's `scenario`/`sensitivity`** use a fast first-order approximation (a
+  "delta cascade") for instant analyst queries. Great for exploration; use
+  `run()` when you need numbers that tie out to the penny.
 
 ### Downstream contract artifacts
 
@@ -466,9 +366,8 @@ excel-to-engine/
 
 ## Accuracy
 
-### Blind Eval (99.3%)
-
-A fresh Claude API session with zero knowledge of the engine answers 25 randomized financial questions per model:
+A fresh Claude API session with zero knowledge of the engine answers 25
+randomized financial questions per model:
 
 | Model | Sheets | Cells | Blind Eval |
 |-------|--------|-------|------------|
@@ -480,27 +379,38 @@ A fresh Claude API session with zero knowledge of the engine answers 25 randomiz
 | Corporate model B | 21 | 6.1M | **24/25 (96%)** |
 | **Total** | | **15.5M cells** | **149/150 (99.3%)** |
 
-### Scale
+~60 Excel functions transpiled: `SUM`, `IF`, `VLOOKUP`, `INDEX/MATCH`, `IRR`,
+`XIRR`, `NPV`, `PMT`, `SUMIFS`, `COUNTIFS`, `INDIRECT`, `OFFSET`, and more.
 
-| Model Size | Sheets | Cells | Parse Time |
-|------------|--------|-------|------------|
-| 3 KB | 3 | 78 | 1ms |
-| 332 KB | 2 | 5.7K | 56ms |
-| 1.5 MB | 7 | 96K | 718ms |
-| 21 MB | 38 | 1.7M | 12s |
-| 52 MB | 82 | 3.7M | 3.5min |
-| 84 MB | 21 | 6.1M | ~15min |
+---
 
-~60 Excel functions transpiled: `SUM`, `IF`, `VLOOKUP`, `INDEX/MATCH`, `IRR`, `XIRR`, `NPV`, `PMT`, `SUMIFS`, `COUNTIFS`, `INDIRECT`, `OFFSET`, and more.
+## Use with Claude Code (or any AI assistant)
 
-## Eval Pipeline
+The toolkit ships a skill (`skill/SKILL.md`) that translates natural language
+into CLI commands, so you can ask questions instead of memorizing flags:
 
-```bash
-# One-command full eval
-node eval/run-all.mjs model.xlsx --questions 50 --output output/
+```
+"What happens to returns if tech grows at 40% instead of 30%?"
+"Show me a sensitivity table for exit multiples and timing"
+"Build me bear, base, and bull cases for the board deck"
+```
 
-# Containerized auto-iteration (overnight, hands-free)
-cd eval && echo "ANTHROPIC_API_KEY=sk-ant-..." > .env && cp /path/to/*.xlsx models/ && ./run.sh
+The assistant handles model conversion, cell references, and the manifest behind
+the scenes. See **[GETTING_STARTED.md](GETTING_STARTED.md)** for the guided flow.
+
+---
+
+## Project Structure
+
+```
+excel-to-engine/
+├── cli/                 # The `ete` command (init, summary, query, pnl, scenario, …)
+├── lib/                 # IRR, waterfall, manifest, contract maps, integration-doc, verify-engine
+├── skill/SKILL.md       # AI-assistant skill (natural language → CLI)
+├── pipelines/rust/      # Excel → JS transpiler (the parser you build once)
+├── eval/                # Blind-eval accuracy harness (optional; needs an API key)
+├── tests/               # CLI + onboarding + use-case suites
+└── GETTING_STARTED.md   # The guided "walk me through it" companion
 ```
 
 ## License

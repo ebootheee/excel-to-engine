@@ -1,5 +1,42 @@
 # excel-to-engine — Plan
 
+## Status: Analyst onboarding + coding-agent handoff (Wave 1) — in progress 2026-05-29
+
+Usability initiative: make the toolkit usable by a non-technical finance analyst
+working through an AI assistant, with the explicit end-to-end target — *"PE
+analyst wants an explorable web app for LPs → points an AI agent at this repo →
+'walk me through it' → hands the JS engine to a coding agent → coding agent finds
+it easy and exactly what it needs."* Wave 1 (landed on `feat/analyst-onboarding`):
+detector accuracy fixes (periodicity / exit-multiple / carry-rate-vs-dollar), the
+`INTEGRATION.md` + `example.mjs` handoff bundle from `ete init`,
+`lib/verify-engine.mjs`, a rewritten README + new `GETTING_STARTED.md`, a guided
+onboarding play in `skill/SKILL.md`, cross-platform `check-env`. New
+`tests/cli/test-onboarding.mjs` + `tests/personas/` synthetic-model harness.
+
+**Wave 2 (landed):** model-family awareness driven by the 12-persona simulation
+(baseline 2/12 passing the benchmark gate). Contract now emits fund-level +
+covenant outputs + per-input UI metadata (min/max/step/format) with closures
+preserved across re-emits; the summary is lens-aware (fund/credit/RE/SaaS, no
+fabricated EBITDA, correct multiple basis); doctor validates cap-rate/exit-yield
+by type; `ete manifest set` self-refreshes the handoff bundle (catch-22 fixed);
+review checklist is family-aware.
+
+**Waves 3–4 (landed):** family-aware coverage report (the #1 trust-killer),
+doctor-validates-by-type (cap rate/yield), self-refreshing `manifest set`,
+input UI-metadata fixes, `outputs.*` promotion, delta-cascade honesty guard,
+exit-value labeled by its real cell, Net-dash explainer, doctor reconciliation.
+
+**Capstone acceptance scenario: PASSED** (5/5 both sides) — see
+`ANALYST_UX_REPORT.md`. A non-technical PE associate converts the LBO and hands
+off; a fresh coding agent builds a real LP what-if web app from the bundle alone
+with a headless smoke test that ties out.
+
+**Backlog (documented, not benchmark-blocking):** multi-sheet IRR so fund/infra
+returns aren't static literals; engine intra-sheet topological ordering (Rust
+emitter, gated by smoke + engine suites — Mippy depends on `run()`); per-year
+time-series outputs (debt/covenant monitors); non-defined-name driver levers
+(corporate budget); model-type classification (lens already compensates for
+display). See `tests/personas/FINDINGS.md`.
 > **Next session:** a clean **full `ete init`** now completes end-to-end on the
 > real Outpost A-1/A-2 models — the last two regen blockers are fixed. **#32**: the
 > cell-level dependency graph no longer expands ranges (37 GB / 7 min → ~0.5 GB

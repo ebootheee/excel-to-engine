@@ -37,15 +37,17 @@
   "scripts": {
     "setup": "npm install && cd eval && npm install && echo 'Setup complete. Build Rust parser: cd pipelines/rust && cargo build --release'",
     "check-env": "node scripts/check-env.mjs",
+    "build:parser": "cd pipelines/rust && cargo build --release",
     "smoke": "node pipelines/rust/tests/smoke-chunked.mjs",
     "test:engine": "node pipelines/rust/tests/test-engine-runtime.mjs",
     "test:depgraph": "node pipelines/rust/tests/test-dependency-graph.mjs",
     "test:runnable": "node pipelines/rust/tests/test-runnable-engine.mjs",
     "test:lazy-engine": "node pipelines/rust/tests/test-lazy-engine.mjs",
     "test:slimming": "node tests/cli/test-artifact-slimming.mjs",
+    "test:onboarding": "node tests/cli/test-onboarding.mjs",
     "test:golden": "node tests/cli/test-golden-master.mjs",
     "golden": "node eval/golden-master.mjs",
-    "test": "node tests/lib/test-lib.mjs && node tests/cli/test-cli.mjs && node tests/cli/test-manifest-improvements.mjs && node tests/cli/test-manifest-maps.mjs && node tests/cli/test-refine-label-index.mjs && node tests/cli/test-init-shared-gt.mjs && node tests/cli/test-per-sheet-eval.mjs && node tests/cli/test-ai-interface.mjs && node tests/cli/test-e2e4-fixes.mjs && node tests/cli/test-ship-ready.mjs && node tests/cli/use-case-suite.mjs",
+    "test": "node tests/lib/test-lib.mjs && node tests/cli/test-cli.mjs && node tests/cli/test-manifest-improvements.mjs && node tests/cli/test-manifest-maps.mjs && node tests/cli/test-refine-label-index.mjs && node tests/cli/test-init-shared-gt.mjs && node tests/cli/test-per-sheet-eval.mjs && node tests/cli/test-ai-interface.mjs && node tests/cli/test-e2e4-fixes.mjs && node tests/cli/test-ship-ready.mjs && node tests/cli/use-case-suite.mjs && node tests/cli/test-onboarding.mjs",
     "bench": "node benchmarks/bench.mjs"
   },
   "devDependencies": {}

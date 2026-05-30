@@ -5,6 +5,10 @@ node_modules/
 # Build artifacts
 pipelines/rust/target/
 
+# Generated engines + proprietary real models (never commit)
+engines/
+tests/personas/_tmp/
+
 # Eval outputs and config
 eval/output/
 eval/output-win/
