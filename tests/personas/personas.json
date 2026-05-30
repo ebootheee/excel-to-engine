@@ -1,0 +1,137 @@
+{
+  "_comment": "Persona matrix for usability testing. Each persona pairs a finance user (asset class, skill level, seniority, goal) with a synthetic model spec. Subagents generate the model (tests/personas/generators/<slug>.mjs) and simulate the journey. All data synthetic.",
+  "personas": [
+    {
+      "slug": "pe-buyout-associate",
+      "role": "PE Associate",
+      "providerType": "Private equity (mid-market buyout)",
+      "skillLevel": "non-technical",
+      "seniority": "associate",
+      "goal": "Turn our LBO model into an explorable web app for LPs.",
+      "assetClass": "pe_buyout",
+      "modelSpec": "Mid-market LBO: Assumptions (entry/exit multiple, leverage, growth, margin, pref, carry%), P&L (revenue→EBITDA over 5-6yr), Debt schedule (single balance row, prior-column roll-forward), Returns/IC Summary (entry equity, exit equity, MOIC, IRR, GP carry $). Defined names: ExitMultiple, RevenueGrowth, Leverage.",
+      "headlineMetrics": ["grossMOIC", "grossIRR", "exitMultiple", "totalCarry"]
+    },
+    {
+      "slug": "growth-equity-vp",
+      "role": "Growth Equity VP",
+      "providerType": "Growth equity",
+      "skillLevel": "semi-technical",
+      "seniority": "vp",
+      "goal": "Build an IC sensitivity tool and hand the engine to our dev.",
+      "assetClass": "growth_equity",
+      "modelSpec": "Minority growth investment in a software co: ARR build (new + expansion - churn) over 6yr, revenue multiple exit, ownership %, primary/secondary. Summary: revenue multiple, exit equity, gross MOIC/IRR. Defined names: RevenueMultiple, ARRGrowth, Ownership.",
+      "headlineMetrics": ["grossMOIC", "grossIRR", "exitMultiple"]
+    },
+    {
+      "slug": "vc-fund-partner",
+      "role": "VC Fund Partner",
+      "providerType": "Venture capital (early-stage fund)",
+      "skillLevel": "non-technical",
+      "seniority": "partner",
+      "goal": "Give LPs a portal showing fund returns and a power-law what-if.",
+      "assetClass": "vc_fund",
+      "modelSpec": "Seed fund: portfolio of ~10 companies with entry valuations, ownership, exit multiples (power-law), fund-level paid-in, distributed, NAV. Fund metrics: TVPI, DPI, RVPI, net IRR, fund MOIC, GP carry (20% over 1.0x). Defined names: FundSize, CarryRate.",
+      "headlineMetrics": ["grossMOIC", "grossIRR", "tvpi", "dpi"]
+    },
+    {
+      "slug": "re-valueadd-analyst",
+      "role": "Real Estate Analyst",
+      "providerType": "Real estate (value-add multifamily)",
+      "skillLevel": "non-technical",
+      "seniority": "analyst",
+      "goal": "Investor web app with cap-rate and rent-growth sliders.",
+      "assetClass": "real_estate",
+      "modelSpec": "Value-add multifamily: NOI build (rental income, vacancy, opex) over 7yr, exit on cap rate (use 'Exit Cap Rate' label), acquisition + reno capex, agency debt (LTV, amortization as single balance row). Summary: exit value, equity multiple, leveraged IRR, cash-on-cash. Defined names: ExitCapRate, RentGrowth, LTV.",
+      "headlineMetrics": ["grossMOIC", "grossIRR", "terminalValue"]
+    },
+    {
+      "slug": "infra-fund-director",
+      "role": "Infrastructure Director",
+      "providerType": "Infrastructure fund",
+      "skillLevel": "semi-technical",
+      "seniority": "director",
+      "goal": "Long-hold yield/IRR explorer for the investment committee.",
+      "assetClass": "infrastructure",
+      "modelSpec": "Renewables/availability asset, 12-15yr hold: contracted revenue with escalation, opex, EBITDA, project debt (long amortization), distributions/yield per year, terminal/residual value. Summary: project IRR, equity IRR, DSCR, yield. Defined names: Escalation, ExitYield, GearingRatio.",
+      "headlineMetrics": ["grossIRR", "terminalValue"]
+    },
+    {
+      "slug": "credit-directlending-analyst",
+      "role": "Private Credit Analyst",
+      "providerType": "Private credit / direct lending",
+      "skillLevel": "technical",
+      "seniority": "analyst",
+      "goal": "A yield + covenant calculator app for deal screening.",
+      "assetClass": "private_credit",
+      "modelSpec": "Unitranche loan: principal, spread+base rate, OID, fees, call protection, 5-7yr. Borrower EBITDA path, leverage (Debt/EBITDA), interest coverage (EBITDA/Interest), DSCR. Returns: gross yield/IRR to lender, MOIC. Defined names: Spread, BaseRate, OID.",
+      "headlineMetrics": ["grossIRR", "grossMOIC"]
+    },
+    {
+      "slug": "corp-fpa-manager",
+      "role": "FP&A Manager",
+      "providerType": "Corporate finance (FP&A)",
+      "skillLevel": "non-technical",
+      "seniority": "manager",
+      "goal": "A budget scenario tool execs can use without Excel.",
+      "assetClass": "corporate_3statement",
+      "modelSpec": "3-statement-lite: revenue by segment, gross margin, opex, EBITDA, D&A, EBIT, taxes, net income; simple balance items; free cash flow; DCF with WACC + terminal growth → enterprise value, equity value. Defined names: WACC, TerminalGrowth, RevenueGrowth.",
+      "headlineMetrics": ["terminalValue", "ebitda"]
+    },
+    {
+      "slug": "ma-sellside-analyst",
+      "role": "M&A Analyst (sell-side)",
+      "providerType": "M&A advisory",
+      "skillLevel": "semi-technical",
+      "seniority": "analyst",
+      "goal": "A buyer-returns explorer to include with the CIM.",
+      "assetClass": "ma_lbo",
+      "modelSpec": "Sell-side LBO/returns view from a buyer's lens: purchase price (entry multiple), sources & uses, financing (senior+mezz), 5yr projection, exit multiple, sponsor IRR/MOIC, accretion. Defined names: PurchaseMultiple, ExitMultiple, SeniorLeverage.",
+      "headlineMetrics": ["grossMOIC", "grossIRR", "exitMultiple"]
+    },
+    {
+      "slug": "saas-growth-operator",
+      "role": "SaaS Founder/Operator",
+      "providerType": "Operating company (SaaS)",
+      "skillLevel": "technical",
+      "seniority": "founder",
+      "goal": "A board-facing ARR scenario app.",
+      "assetClass": "saas_metrics",
+      "modelSpec": "SaaS metrics: ARR (new bookings, expansion, gross churn), NRR, CAC, magic number, burn, runway, gross margin, Rule of 40, implied valuation at ARR multiple. Monthly→annual ok but use ANNUAL year headers. Defined names: ARRMultiple, NetRetention, NewBookingsGrowth.",
+      "headlineMetrics": ["terminalValue", "exitMultiple"]
+    },
+    {
+      "slug": "searchfund-searcher",
+      "role": "Search Fund Searcher",
+      "providerType": "Search fund",
+      "skillLevel": "non-technical",
+      "seniority": "principal",
+      "goal": "An investor-update app showing returns under a few cases.",
+      "assetClass": "search_fund",
+      "modelSpec": "Single SMB acquisition: purchase (3-5x SDE/EBITDA), SBA + seller note + searcher equity, modest growth, exit 5-7yr, stepped equity (search/acquisition/operation), searcher carry/vesting. Summary: investor MOIC/IRR, searcher equity value. Defined names: EntryMultiple, ExitMultiple, SBALeverage.",
+      "headlineMetrics": ["grossMOIC", "grossIRR"]
+    },
+    {
+      "slug": "familyoffice-fof-ir",
+      "role": "Family Office IR",
+      "providerType": "Family office / fund-of-funds",
+      "skillLevel": "non-technical",
+      "seniority": "ir",
+      "goal": "A portfolio roll-up dashboard for the principals.",
+      "assetClass": "fund_of_funds",
+      "modelSpec": "FoF: commitments across ~6 underlying funds, called/uncalled, NAV, distributions, blended TVPI/DPI/net IRR, J-curve over 10yr, management fee + carry overlay. Defined names: TotalCommitment, BlendedCarry.",
+      "headlineMetrics": ["tvpi", "dpi", "grossIRR"]
+    },
+    {
+      "slug": "realestate-debt-cfo",
+      "role": "Portfolio CFO (RE debt)",
+      "providerType": "Real estate (portfolio CFO)",
+      "skillLevel": "semi-technical",
+      "seniority": "cfo",
+      "goal": "A debt-amortization + DSCR covenant monitor for lenders.",
+      "assetClass": "real_estate_debt",
+      "modelSpec": "Stabilized RE portfolio: NOI by property, consolidated NOI, senior debt facilities (balance roll-forward by prior column), interest, amortization, DSCR (NOI/Debt Service), LTV, debt yield over 10yr. Defined names: InterestRate, AmortYears.",
+      "headlineMetrics": ["terminalValue", "exitDebt"]
+    }
+  ]
+}

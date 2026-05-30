@@ -139,7 +139,7 @@ function formatSummaryTable(s, opts = {}) {
 
   if (visibleSegments.length > 0) {
     const colW = 12;
-    lines.push(padRight('Revenue Segments', 32) + padLeft('Start', colW) + padLeft('Exit', colW) + padLeft('CAGR', colW));
+    lines.push(padRight('Segments', 32) + padLeft('Start', colW) + padLeft('Exit', colW) + padLeft('CAGR', colW));
     for (const seg of visibleSegments) {
       const cagrStr = seg.cagr !== null ? fmtPct(seg.cagr) : '—';
       const marker = seg.suspect ? ' ⚠' : '';
