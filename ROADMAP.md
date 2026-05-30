@@ -14,17 +14,23 @@ IB/corp-dev) working through an AI assistant, end-to-end to a web-app handoff.
   cross-platform `check-env`, `npm run build:parser`.
 - `tests/personas/` synthetic-model harness + `tests/cli/test-onboarding.mjs`.
 
-**Open (next waves):**
-- Generate a persona-matrix of synthetic models (asset class × skill × seniority)
-  and run simulated-journey scoring loops; iterate on whatever blocks the
-  end-to-end benchmark.
+**Waves 2–4 — done:** persona-matrix simulation (12 personas × 3 rounds);
+model-family-aware summary + coverage; fund/covenant outputs + input UI-metadata
++ durable closures in the contract; cap-rate doctor; self-refreshing `manifest
+set`; delta-cascade honesty guard; exit-value labeling + Net-dash explainer.
+Summary segment/EBITDA clarity fixed (Wave 1–2). **Capstone acceptance scenario
+PASSED** (`ANALYST_UX_REPORT.md`).
+
+**Open (documented in `tests/personas/FINDINGS.md`, not benchmark-blocking):**
 - Engine fidelity: intra-sheet topological ordering so cross-row "staircase"
-  schedules (opening = prior row's closing) compute correctly — currently only
-  the standard column=time / row=metric layout is evaluation-safe. Touches the
-  Rust emitter; gate with smoke + engine suites (Mippy depends on `run()`).
-- Summary clarity: separate revenue vs cost segments (cost rows currently appear
-  under "Revenue Segments" and inflate "Platform EBITDA"); friendlier empty-equity
-  messaging.
+  schedules compute correctly — only the standard column=time / row=metric layout
+  is evaluation-safe today. Rust emitter; gate with smoke + engine suites (Mippy
+  depends on `run()`).
+- Multi-sheet IRR so fund/infra returns aren't static literal cells.
+- Per-year time-series outputs (debt amortization / covenant series) for the
+  credit/debt-monitor personas; non-defined-name driver levers (corporate budget).
+- Model-type classification (credit/FoF/search → "saas"); the summary lens
+  compensates for display but the type label is cosmetically wrong.
 - `npx ete` / `npm link` ergonomics so users type `ete` not `node cli/index.mjs`.
 
 ## Now — Engine-integration contract (Mippy request, 2026-05-27)

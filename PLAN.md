@@ -21,10 +21,22 @@ fabricated EBITDA, correct multiple basis); doctor validates cap-rate/exit-yield
 by type; `ete manifest set` self-refreshes the handoff bundle (catch-22 fixed);
 review checklist is family-aware.
 
-**Next:** re-run the journey simulation to measure Wave 2 lift, iterate on the
-remaining blockers (delta-cascade scenario accuracy on some models; engine
-intra-sheet topo ordering; model-type classification), then the end-to-end
-acceptance scenario.
+**Waves 3–4 (landed):** family-aware coverage report (the #1 trust-killer),
+doctor-validates-by-type (cap rate/yield), self-refreshing `manifest set`,
+input UI-metadata fixes, `outputs.*` promotion, delta-cascade honesty guard,
+exit-value labeled by its real cell, Net-dash explainer, doctor reconciliation.
+
+**Capstone acceptance scenario: PASSED** (5/5 both sides) — see
+`ANALYST_UX_REPORT.md`. A non-technical PE associate converts the LBO and hands
+off; a fresh coding agent builds a real LP what-if web app from the bundle alone
+with a headless smoke test that ties out.
+
+**Backlog (documented, not benchmark-blocking):** multi-sheet IRR so fund/infra
+returns aren't static literals; engine intra-sheet topological ordering (Rust
+emitter, gated by smoke + engine suites — Mippy depends on `run()`); per-year
+time-series outputs (debt/covenant monitors); non-defined-name driver levers
+(corporate budget); model-type classification (lens already compensates for
+display). See `tests/personas/FINDINGS.md`.
 
 ## Status: Artifact slimming (Round 2, part 2) — landed 2026-05-28
 
