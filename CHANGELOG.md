@@ -1,5 +1,23 @@
 # excel-to-engine — Changelog
 
+## 2026-05-29 — Analyst usability Waves 3–4 + capstone
+
+Wave 3 (family-aware coverage, doctor-by-type, self-refreshing `manifest set`,
+input-metadata fixes, `outputs.*` promotion, delta-cascade honesty guard) and
+Wave 4 (exit-value labeled by its real cell, Net-dash explainer, doctor
+reconciliation) closed the residual A5-trust cap. Across the simulation rounds:
+benchmark 2/12 → 3/12 passing, avg "woah" 3.50→4.00, avg trust 3.1→3.5, and
+coding-agent handoff mostly perfect.
+
+**Capstone (the exact acceptance scenario) PASSED, all 5/5 both sides:** a
+non-technical PE associate's assistant converted the LBO ("…every headline ties
+out exactly… ready to hand your developer"), and a fresh coding agent built a
+real, dependency-free LP what-if web app from the bundle alone, with a headless
+smoke test that ties out ("…a live LP what-if explorer wired straight to the
+contract in minutes… every lever pushes the outputs the right way"). See
+`ANALYST_UX_REPORT.md`. Follow-ups: INTEGRATION.md documents the browser-serve +
+Node `file://` import caveats; README lists `ete verify`.
+
 ## 2026-05-29 — Analyst usability Wave 2 (model-family awareness)
 
 Driven by a 12-persona simulation (synthetic models across PE/VC/RE/infra/credit/

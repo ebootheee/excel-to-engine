@@ -153,6 +153,17 @@ Carry: $50.3M (3 tiers), 8% pref
 Equity: 1 class (Series A), basis $270.0M
 ```
 
+### `ete verify` — Confirm the engine matches your spreadsheet
+
+```bash
+node cli/index.mjs verify ./my-model/chunked/
+# → "✓ engine.run() reproduces the model's base case exactly. Safe to hand off."
+```
+
+Runs the generated engine with no overrides and checks every named output against
+its base-case value. The trust signal to run before handing the bundle to a
+developer (also available as `ete init --verify`).
+
 ### `ete query` — Find Anything
 
 ```bash
