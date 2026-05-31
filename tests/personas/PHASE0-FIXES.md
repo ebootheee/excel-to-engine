@@ -100,7 +100,65 @@ Flips re-valueadd, searchfund, RE-debt (~3).
 
 ---
 
-## Fix #4 — Model-type misclassification (root of the 5 accuracy failures — MOST SERIOUS)
+## Fix #4 — Model-type misclassification (root of the accuracy failures — MOST SERIOUS, HIGH RISK)
+
+**Precise design (investigated 2026-05-30; implementation deferred to a clean tick —
+do NOT half-apply: it touches two shared functions and needs all-12 + npm test
+verification, which a flaky Bash channel blocked this tick).**
+
+Current detected types (4 wrong): credit→`saas`, searchfund→`saas`, fof→`saas`,
+corp→`unknown`, ma→`unknown`; growth→`saas` (OK, it IS saas-ish), infra→`re_fund`
+(acceptable). Accuracy-FALSE personas (from the structured scoreboard, 4 not 5):
+credit, saas-growth, searchfund, realestate-debt.
+
+Root cause (traced in code, not just symptom):
+- `detectModelType` (lib/manifest.mjs:715-760) scores only 7 types — there is NO
+  `credit`/`fund_of_funds`/`search_fund`/`infrastructure`, so those fall through to
+  whatever weak signal hits (credit/search/fof all land on `saas`).
+- `detectLens` (cli/commands/summary.mjs:324-335) reads `manifest.model.type`. credit
+  shows "@1.8x **Revenue**" because type=saas → the `t==='saas'` branch (line 332) →
+  `exitBasis()` (line 346) returns 'Revenue'. The `credit` lens DOES exist (line 329)
+  but only fires on `covenants.length>=2`, which aren't being detected on these models
+  — so **type is the binding cause**, and editing detectModelType alone routes credit
+  to the `equity` lens (→ 'EBITDA' basis, better but not ideal).
+
+TWO-PART fix (both required):
+1. `lib/manifest.mjs` MODEL_TYPES + detectModelType: add `credit`, `fund_of_funds`,
+   `search_fund`, `infrastructure` with signals. Suggested (tune against all 12; keep
+   existing weights so currently-correct types don't regress):
+   - credit: /unitranche|direct lending|\bOID\b|call protection|spread.*(bps|over)|
+     debt yield|interest coverage|\bICR\b|leverage.*ebitda|loan to/ (+3); guard:
+     borrower-EBITDA + a lender yield, NOT equity carry.
+   - fund_of_funds: /fund.?of.?funds|\bFoF\b|underlying fund|uncalled|unfunded
+     commitment|blended (tvpi|dpi|irr)/ (+3). NOTE overlaps VC (TVPI/DPI) — require an
+     FoF-specific token (underlying/uncalled/commitment) to beat venture_portfolio.
+   - search_fund: /search fund|\bSDE\b|seller note|\bSBA\b|searcher|stepped equity/ (+3).
+   - infrastructure: /availability|concession|contracted revenue|escalat|project
+     debt|\bCFADS\b|renewable|\bPPA\b/ (+3).
+2. `cli/commands/summary.mjs` detectLens: map `t==='credit'`→'credit';
+   `t==='fund_of_funds'||t.includes('fund')`→'fund'; `t==='search_fund'`→'equity'
+   (EBITDA/SDE basis, NOT revenue); `t==='infrastructure'`→'realestate' OR a new
+   'infra' lens (NOI/yield basis). Also extend `exitBasis()`: credit → 'EBITDA'
+   (leverage turns) or 'Debt/EBITDA'; search → 'EBITDA / SDE'; re-debt → ensure the
+   exit "13.2% cap rate" renders as "debt yield" (it's `cap_rate_inverse` today but the
+   label should be yield for a debt model — gate on credit/debt lens).
+
+NOTE: saas-growth's accuracy failure is NOT model-type (it IS saas) — it's a CAGR
+conflation (30.2% Revenue-segment CAGR pinned to the ARR row; ARR CAGR is 39.3%). That's
+a separate segment/CAGR-labeling bug, track under its own item, do not fold into #4.
+
+VERIFY (mandatory, needs reliable Bash): regenerate is NOT required (type is detected at
+init from the existing .xlsx) — just re-run `node cli/index.mjs summary <each>` for the 4
+failing personas to confirm corrected headers, re-run all 12 via run-prep (drift unaffected
+by type but confirms no crash), and `npm test` green. detectModelType has NO unit test today
+— add one in test-manifest-improvements or a new test asserting the 4 corrected types.
+
+REGRESSION GUARD: the only persona currently passing the gate is growth-equity-vp (saas
+lens) — confirm it still detects saas and still passes after the change.
+
+---
+
+### Original analysis
 
 credit/search/RE-debt/FoF mis-tag as `saas`/`unknown`, leaking SaaS/equity labels onto
 non-equity headlines: credit "@ 1.8x Revenue" is exit leverage (Debt/EBITDA); RE-debt
