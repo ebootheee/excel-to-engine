@@ -1,5 +1,25 @@
 # excel-to-engine — Changelog
 
+## 2026-05-31 — Wave 6: SaaS ARR headline — "x ARR" basis + split Revenue/ARR CAGR
+
+SaaS-growth headlined `@ 8.0x Revenue` (the multiple is actually EV/ARR = 8.0 exact;
+EV/Revenue = 8.84), and the operating line `Revenue / ARR … (CAGR 30.2%)` pinned **one**
+CAGR to two metrics whose growth genuinely differs (revenue 30.2% vs ARR 39.3%). Fixes:
+- **Data-driven exit basis** (`lib/manifest.mjs` `detectOutputs` + `summary.mjs` `exitBasis`):
+  an "Exit ARR Multiple" label now tags the exit multiple `type: 'arr_multiple'`, and the
+  header reads "x ARR" off the **type**, not the lens. Critically this leaves
+  **growth-equity-vp** (same `saas` lens but priced EV/Revenue = 7.5x) reading "x Revenue"
+  — no false "x ARR".
+- **Split the CAGR** (`summary.mjs`): the operating line is relabeled "Revenue" (its CAGR is
+  the revenue CAGR), and a separate **Ending ARR** line carries the true ARR figure + its own
+  CAGR. The ARR cells (`arrEnding`, `arrCAGR`) are detected gated-to-`saas` as flat scalar
+  outputs (resolved via the existing base-case passthrough). growth-equity, which tracks a
+  real ARR bridge, correctly gains an accurate `Ending ARR $96.9M` line.
+
+saas now: `@ 8.0x ARR` / `Revenue … (CAGR 30.2%)` / `Ending ARR $45.2M (CAGR 39.3%)`.
+saas verify 0-drift. Regen diff = only the two saas-lens personas; all others byte-identical.
+`npm test` green.
+
 ## 2026-05-31 — Wave 6: credit (direct-lending) lender headline + the "$2 debt at exit" bug
 
 The lone accuracy fail (A5). Two defects, both fixed:

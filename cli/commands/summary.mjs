@@ -225,6 +225,12 @@ function formatSummaryTable(s, opts = {}) {
     const cagrStr = s.ebitda.cagr !== null ? fmtPct(s.ebitda.cagr) : '—';
     lines.push(`${padRight(operatingLabel(s.lens), 28)}${fmtCur(s.ebitda.first)} → ${fmtCur(s.ebitda.last)}  (CAGR: ${cagrStr})`);
   }
+  // SaaS leads with ARR — surface ending ARR + its own CAGR (distinct from the
+  // revenue CAGR above) when the model tracks ARR separately.
+  if (s.lens === 'saas' && s.outputs.arrEnding != null) {
+    const arrCagr = s.outputs.arrCAGR != null ? `  (CAGR: ${fmtPct(s.outputs.arrCAGR)})` : '';
+    lines.push(`${padRight('Ending ARR', 28)}${fmtCur(s.outputs.arrEnding)}${arrCagr}`);
+  }
   // Corporate (DCF / operating-plan) headline — Enterprise Value + Equity Value are
   // the FP&A / corp-dev deliverables; the discounted-terminal-value stub is an
   // intermediate and is suppressed below for this lens.
@@ -373,7 +379,9 @@ function detectLens(manifest, fundLevel, covenants, outputs) {
 /** Label + basis for the operating line, by lens. */
 function operatingLabel(lens) {
   return lens === 'realestate' ? 'Net Operating Income'
-    : lens === 'saas' ? 'Revenue / ARR'
+    // The operating line tracks the revenue stream; ARR is surfaced on its own
+    // line (with its own, higher CAGR) so one CAGR isn't pinned to both metrics.
+    : lens === 'saas' ? 'Revenue'
     : lens === 'credit' ? 'Borrower EBITDA'
     : lens === 'corp' ? 'Operating EBITDA'
     : 'Platform EBITDA';
@@ -382,6 +390,11 @@ function operatingLabel(lens) {
 /** Human basis for an exit multiple, by lens + detected type. */
 function exitBasis(lens, exitMultipleType) {
   if (exitMultipleType === 'cap_rate_inverse') return 'cap rate';
+  // An ARR multiple prices ARR (data-driven via the cell label), so a SaaS model
+  // whose multiple is EV/Revenue still reads "x Revenue" — only a true "Exit ARR
+  // Multiple" reads "x ARR". This distinguishes a recurring-revenue SaaS from a
+  // growth-equity deal that is multiplied on total revenue.
+  if (exitMultipleType === 'arr_multiple') return 'ARR';
   // A credit deal's "x" is exit leverage (turns of Debt/EBITDA), not revenue.
   if (lens === 'credit') return 'EBITDA';
   return lens === 'saas' ? 'Revenue' : lens === 'realestate' ? 'NOI' : 'EBITDA';
