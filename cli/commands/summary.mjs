@@ -165,9 +165,14 @@ function formatSummaryTable(s, opts = {}) {
   const em = s.outputs.exitMultiple;
   let multStr = '';
   if (em != null) {
-    multStr = s.exitMultipleType === 'cap_rate_inverse'
-      ? ` @ ${fmtPct(em)} cap rate`
-      : ` @ ${em.toFixed(1)}x ${exitBasis(s.lens, s.exitMultipleType)}`;
+    if (s.exitMultipleType === 'cap_rate_inverse') {
+      // A debt/credit model's exit yield is the DEBT YIELD (NOI / loan), not a
+      // property cap rate — the lens distinguishes them.
+      const yieldLabel = s.lens === 'credit' ? 'debt yield' : 'cap rate';
+      multStr = ` @ ${fmtPct(em)} ${yieldLabel}`;
+    } else {
+      multStr = ` @ ${em.toFixed(1)}x ${exitBasis(s.lens, s.exitMultipleType)}`;
+    }
   }
   lines.push(`Period: ${s.timeline.investmentYear}–${s.timeline.exitYear} (${s.timeline.holdPeriod}yr, ${s.timeline.periodicity}) | Exit: ${s.timeline.exitYear}${multStr}`);
   lines.push('');
@@ -329,11 +334,13 @@ function detectLens(manifest, fundLevel, covenants, outputs) {
     || Object.keys(outputs).some(k => /\.gross(MOIC|IRR)$/.test(k));
   const hasCovenants = (covenants || []).length > 0;
   const capRate = manifest.outputs?.exitMultiple?.type === 'cap_rate_inverse';
-  if (hasFund) return 'fund';                          // VC fund / FoF → TVPI/DPI
-  if (hasCovenants && !hasReturns) return 'credit';    // debt monitor → DSCR/LTV
+  if (hasFund || t === 'fund_of_funds') return 'fund';              // VC fund / FoF → TVPI/DPI
+  // Credit + real-estate-DEBT are lender views → DSCR/LTV/debt-yield headline.
+  if (t === 'credit' || t === 'real_estate_debt' || (hasCovenants && !hasReturns)) return 'credit';
+  if (t === 'infrastructure') return 'realestate';                  // NOI / yield basis
   if (capRate || /re[_-]|real.?estate/.test(t)) return 'realestate'; // NOI + cap rate
   if (t === 'saas' || t === 'growth_equity') return 'saas';          // ARR
-  return 'equity';                                     // PE / operating (default)
+  return 'equity';                                     // PE / search_fund / operating (default)
 }
 
 /** Label + basis for the operating line, by lens. */
@@ -347,6 +354,8 @@ function operatingLabel(lens) {
 /** Human basis for an exit multiple, by lens + detected type. */
 function exitBasis(lens, exitMultipleType) {
   if (exitMultipleType === 'cap_rate_inverse') return 'cap rate';
+  // A credit deal's "x" is exit leverage (turns of Debt/EBITDA), not revenue.
+  if (lens === 'credit') return 'EBITDA';
   return lens === 'saas' ? 'Revenue' : lens === 'realestate' ? 'NOI' : 'EBITDA';
 }
 
