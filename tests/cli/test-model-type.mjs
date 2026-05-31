@@ -58,6 +58,20 @@ eq('real_estate_debt (lender summary + NOI + debt yield)', detectModelType(gtFro
   'Senior Loan Balance — Closing', 'Stabilized Portfolio Value (Cap Rate Basis)',
 ])), 'real_estate_debt');
 
+eq('corporate (operating plan + DCF / WACC / Gordon TV)', detectModelType(gtFrom([
+  'Northwind Devices — FY Operating Plan & DCF', 'Discounted Cash Flow Valuation ($)',
+  'WACC (discount rate)', 'Terminal Value (Gordon growth)', 'Free Cash Flow',
+  'Enterprise Value', 'Equity Value',
+])), 'corporate');
+
+// A corporate DCF must NOT steal an M&A/LBO sponsor-returns model (the OTHER
+// `unknown` persona): it has Enterprise/Equity Value but none of the DCF-unique
+// tokens (discounted cash flow / Gordon TV / WACC / operating plan).
+eq('ma-sellside LBO is NOT misread as corporate', detectModelType(gtFrom([
+  'Exit Enterprise Value', 'Sponsor Equity Invested', 'Gross MOIC', 'Gross IRR',
+  'Purchase Multiple (EV/EBITDA)', 'Net Debt at Exit',
+])), 'unknown');
+
 // --- Regression: existing families must still classify correctly ---
 eq('pe_fund (carried interest / waterfall)', detectModelType(gtFrom([
   'GP Carried Interest', 'Equity Invested', 'LP Preferred Hurdle Value', 'Exit Equity Value',

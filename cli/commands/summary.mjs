@@ -216,11 +216,19 @@ function formatSummaryTable(s, opts = {}) {
   // Only for lenses where the segment-derived EBITDA/revenue total is reliable.
   // Funds have no operating P&L; credit/RE headlines are covenants / exit value,
   // and their segment tables already show NOI/borrower-EBITDA rows directly.
-  if (s.ebitda && (s.lens === 'equity' || s.lens === 'saas') && Math.abs(s.ebitda.last || 0) > 0) {
+  if (s.ebitda && (s.lens === 'equity' || s.lens === 'saas' || s.lens === 'corp') && Math.abs(s.ebitda.last || 0) > 0) {
     const cagrStr = s.ebitda.cagr !== null ? fmtPct(s.ebitda.cagr) : '—';
     lines.push(`${padRight(operatingLabel(s.lens), 28)}${fmtCur(s.ebitda.first)} → ${fmtCur(s.ebitda.last)}  (CAGR: ${cagrStr})`);
   }
-  if (s.outputs.terminalValue) {
+  // Corporate (DCF / operating-plan) headline — Enterprise Value + Equity Value are
+  // the FP&A / corp-dev deliverables; the discounted-terminal-value stub is an
+  // intermediate and is suppressed below for this lens.
+  if (s.lens === 'corp' && (s.outputs.enterpriseValue != null || s.outputs.equityValue != null)) {
+    if (s.outputs.enterpriseValue != null) lines.push(`${padRight('Enterprise Value', 28)}${fmtCur(s.outputs.enterpriseValue)}`);
+    if (s.outputs.equityValue != null) lines.push(`${padRight('Equity Value', 28)}${fmtCur(s.outputs.equityValue)}`);
+    if (s.outputs.wacc != null) lines.push(`${padRight('  WACC (discount rate)', 28)}${fmtPct(s.outputs.wacc)}`);
+  }
+  if (s.outputs.terminalValue && s.lens !== 'corp') {
     const lensLabel = s.lens === 'realestate' ? 'Exit Value' : s.lens === 'fund' ? 'Total Value' : 'Terminal Value';
     // Prefer the cell's actual label (e.g. "Exit Equity Value") over a generic
     // heading so the headline can't misname equity as terminal/enterprise value.
@@ -335,6 +343,7 @@ function detectLens(manifest, fundLevel, covenants, outputs) {
   const hasCovenants = (covenants || []).length > 0;
   const capRate = manifest.outputs?.exitMultiple?.type === 'cap_rate_inverse';
   if (hasFund || t === 'fund_of_funds') return 'fund';              // VC fund / FoF → TVPI/DPI
+  if (t === 'corporate' || t === 'three_statement') return 'corp';  // FP&A / DCF → EV + Equity Value
   // Credit + real-estate-DEBT are lender views → DSCR/LTV/debt-yield headline.
   if (t === 'credit' || t === 'real_estate_debt' || (hasCovenants && !hasReturns)) return 'credit';
   if (t === 'infrastructure') return 'realestate';                  // NOI / yield basis
@@ -348,6 +357,7 @@ function operatingLabel(lens) {
   return lens === 'realestate' ? 'Net Operating Income'
     : lens === 'saas' ? 'Revenue / ARR'
     : lens === 'credit' ? 'Borrower EBITDA'
+    : lens === 'corp' ? 'Operating EBITDA'
     : 'Platform EBITDA';
 }
 

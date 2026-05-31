@@ -1,5 +1,29 @@
 # excel-to-engine — Changelog
 
+## 2026-05-31 — Wave 6: corporate (FP&A / DCF) family — detection + EV/Equity headline
+
+The corp-FP&A persona (operating plan + DCF) classified as `unknown` (every
+`detectModelType` signal scored 0) → no family lens → its headline led with **"PV of
+Terminal Value $510.5M"**, an intermediate discounting stub, while the **Enterprise Value
+($667.4M) and Equity Value ($625.4M)** an FP&A/corp-dev manager actually leads with were
+never even bound as outputs (`terminalValue` grabbed the "PV of Terminal Value" row by
+iteration order). Fix, three parts:
+- **`detectModelType`** (`lib/manifest.mjs`): new `corporate` family gated on **DCF-unique**
+  tokens (`discounted cash flow` / `terminal value (gordon` / `gordon growth` +4; `wacc` /
+  `cost of capital` +2; `operating plan` / `free cash flow` / `pv of …` +2). Deliberately
+  NOT `enterprise value` / `equity value` / `gross profit` — those also appear in PE/M&A/
+  SaaS exit summaries (a persona-safety scan confirmed the gated tokens are unique to the
+  corp model; the M&A-sellside LBO, the other `unknown`, stays `unknown`).
+- **`detectOutputs`** (`lib/manifest.mjs`): bind `enterpriseValue` + `equityValue`, **gated
+  to `modelType === 'corporate'`** so the other 11 families' contracts are byte-identical.
+- **summary** (`cli/commands/summary.mjs`): new `corp` lens → headline block (Enterprise
+  Value / Equity Value / WACC), generic terminal-value line suppressed for the lens, the
+  operating EBITDA line relabeled "Operating EBITDA".
+
+corp now: `Model: model (corporate)` → `Enterprise Value $667.4M / Equity Value $625.4M /
+WACC 9.2%`. `ete verify` 0-drift (5 outputs). `test-model-type.mjs` +2 assertions (corp
+classifies; ma-sellside NOT misread as corporate); full `npm test` green (132/132 + 15/15).
+
 ## 2026-05-30 — Wave 6 (start): clean model name in the summary header (drop the absolute path)
 
 The summary/INTEGRATION header printed the **full absolute workbook path** as the model
