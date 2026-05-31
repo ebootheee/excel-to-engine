@@ -7,11 +7,11 @@ Re-ran the full hardened 12-persona journey after shipping all five Phase-0 fixe
 **C4=true for all 12** (every coding-agent integration ran, tied to base case, moved a
 lever). Newly passing (+6): pe-buyout, vc-fund, re-valueadd, ma-sellside, searchfund,
 familyoffice-fof (growth-equity held). Still failing (5): credit [A5 — needs a credit
-HEADLINE not just label], infra [A4,A6,A7], saas [A4,A6,A7], re-debt [A5,A6,A7], corp-fpa
+HEADLINE not just label], infra [A4,A6,A7], saas [A4,A6,A7], re-debt [A6,A7], corp-fpa
 [A4,A7 — still `unknown` type]. Next-wave ROI (per the run's synthesis): per-family
 headline blocks > more levers per family > saas "x ARR" label > corp three_statement
-detection + clean model name. Full detail + a harness-anomaly note (the run's `scored[]`
-serialized mangled; `board` authoritative) in `tests/personas/BENCHMARKS.md`. No code
+detection + clean model name. Full detail in `tests/personas/BENCHMARKS.md` (board + a
+code-recomputed gate match all 12 personas; data internally consistent). No code
 change in this entry — measurement only.
 
 ## 2026-05-30 — Phase 0 fix #3: collapse duplicate-cell levers (inert-slider fix)
