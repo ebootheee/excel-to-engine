@@ -25,6 +25,7 @@ The headline scalars we track each round:
 | 2026-05-29 | Wave 3 (family coverage + cascade guard) | **3/12** | 4.00 | 3.75 | 3.50 | A5 climbs; most fails now single-dimension |
 | 2026-05-29 | Wave 4 (TV label, Net note, doctor reconcile) | capstone only* | — | — | — | **capstone PASSED 5/5 both sides** |
 | 2026-05-30 | Phase 0 re-baseline (full 12, hardened harness†) | **1/12** | 3.00 | 4.00 | **4.42** | re-baseline shock, not a backslide — see below |
+| 2026-05-30 | Wave 5 — Phase-0 five-fix‡ | **7/12** | 3.75 | 4.67 | **4.58** | +6 personas; A6/A7 handoff debt cleared; C4=true ×12 |
 
 \* Wave 4 targeted the exact residual A5=3 causes but was only validated via the
 single-persona capstone (`pe-buyout-associate`, 5/5).
@@ -41,6 +42,47 @@ NOT happen — same systemic defects, not persona-specific.
 
 **Binding-dimension frequency across the 11 fails:** `A6` 11 · `A7` 9 · `A4` 4 ·
 `A5` 3 · `C4` 1 · `C5` 1. Only `growth-equity-vp` cleared the gate.
+
+‡ **Wave 5 (2026-05-30) — the five Phase-0 fixes, measured.** After shipping all
+five fixes (schedule scalar `cell`; live `=IRR()`; `chunked/` auto-resolve;
+asset-class detection; lever dedup) the same hardened journey re-ran: **1/12 → 7/12**,
+avg A5 4.42→**4.58**, A7 3.00→**3.75**, C5 4.00→**4.67**, and **C4=true for all 12**
+(every coding-agent integration ran, tied to base case, and a lever moved). Newly
+passing (+6): pe-buyout-associate, vc-fund-partner, re-valueadd-analyst,
+ma-sellside-analyst, searchfund-searcher, familyoffice-fof-ir (growth-equity-vp held).
+
+**Still failing (5) and the binding cause (A5 for re-debt corrected from the raw
+output — see anomaly note):**
+- `credit-directlending-analyst` [**A5**] — lone accuracy fail; classifies as `credit`
+  but the summary HEADLINE is still equity-shaped (exit "multiple"/MOIC, not
+  yield-to-lender / debt yield / exit leverage). Needs a credit-lens *headline block*,
+  not just the label.
+- `infra-fund-director` [**A4,A6,A7**] — DSCR/CFADS not surfaced as the headline; only
+  ExitYield is a lever (escalator/gearing aren't).
+- `saas-growth-operator` [**A4,A6,A7**] — "8.0x Revenue" should be "8.0x ARR" + the
+  Revenue/ARR line conflates one CAGR for two metrics; NRR/churn/bookings aren't levers.
+- `realestate-debt-cfo` [**A5,A6,A7**] — debt-yield headline is right now, but only the
+  cap-rate lever moves (rate/amort/LTV aren't levers); A5=3 on residual label nuance.
+- `corp-fpa-manager` [**A4,A7**] — model type still `unknown` → no family lens, reads
+  generic; needs a 3-statement/corporate-budget lens + driver levers (rev growth %, opex %, WACC).
+
+**Binding frequency across the 5 fails:** `A7` 4 · `A4` 3 · `A6` 3 · `A5` 2.
+
+**Next-wave ROI order (from the run's synthesis):** (1) per-family HEADLINE blocks
+(credit YTM/debt-yield/leverage, infra project-IRR+DSCR, corp EV/equity-value) — flips
+credit, lifts infra/corp A4; (2) expose more levers per family (infra escalator/gearing,
+saas NRR/churn, re-debt rate/amort/LTV) — up to 3 more passes; (3) saas "x ARR" + split
+CAGR; (4) corp three_statement detection + a clean model name (drop the absolute path —
+recurs in nearly every persona's A2/A7 notes, a cheap cross-cutting win).
+
+> **Harness anomaly (2026-05-30):** the journey workflow's serialized `scored[]` array
+> came back mangled (20 entries, 10 unique — searchfund + fof dropped, 10 others
+> doubled) while the `board` object was complete and internally consistent (7+5=12, all
+> distinct). The headline pass/12, passing/failing lists, and synthesis are taken from
+> `board` (authoritative). The avgs were computed in the same phase; the 1→7 jump is far
+> beyond the ±1 LLM-judge noise floor, but treat the exact avg decimals as ±0.1. Likely
+> tied to the intermittent tool-output corruption seen this session. Re-run to firm up
+> the decimals if a precise trend point is needed.
 
 > Scoring is stochastic (LLM judges), so a ±1 swing on a single dimension is
 > noise. Track the **aggregate** (avg A5/A7/C5) and the **set of binding
