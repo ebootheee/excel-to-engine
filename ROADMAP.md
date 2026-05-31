@@ -21,6 +21,32 @@ set`; delta-cascade honesty guard; exit-value labeling + Net-dash explainer.
 Summary segment/EBITDA clarity fixed (Wave 1–2). **Capstone acceptance scenario
 PASSED** (`ANALYST_UX_REPORT.md`).
 
+**Wave 5 — done (measured 1/12 → 7/12, 2026-05-30):** five Phase-0 fixes — schedule
+scalar `cell`; live `=IRR()`; `chunked/` auto-resolve; asset-class detection; lever
+dedup. avg A5 4.42→4.58, C4=true ×12.
+
+**Wave 6 — done (measured 7/12 → 8/12, 2026-05-31; A5 perfect 5.00):** per-family
+HEADLINE blocks + detection — `corporate` family + EV/Equity headline; credit
+Lender-Returns block + the "$2 debt-at-exit" ratio-cell fix; saas "x ARR" + split
+Revenue/ARR CAGR; infra returns-led headline (Project/Equity IRR + DSCR); + 6
+adversarial-review fixes. credit + saas flipped; corp/infra A4/A7 lifted; all 12
+`accuracyVerified=true`. Scoreboard in `tests/personas/BENCHMARKS.md`.
+
+**Wave 7 — next (the 4 remaining fails, from the run synthesis — all three for 12/12):**
+1. **Schedule-output aggregation semantics** — never SUM a `fraction|percent` series
+   (use terminal/avg); emit the per-year debt-balance/DSCR series into named-outputs;
+   make `extract --type debt_balance` find "Balance Roll-Forward" sheets. *Flips re-debt;
+   removes the fabricated `$1` freeCashFlow (a ratio summed as dollars).*
+2. **Suppress derived/backsolved cells as what-if dials + format outputs by unit** —
+   `equityBasis` (backsolved) must not be a slider (a higher exit-yield demo inflates
+   MOIC 6.7x→41.7x); cap-rate/exit-yield outputs format as `%`, never `"0.09x"`. *Flips
+   infra; lifts re-valueadd/credit.*
+3. **Model-type-aware labeling** — `pe_buyout` vs `pe_fund`; corp 3-statement → budget
+   lens ("Forecast" not "Exit", P&L-led, revenue/opex/margin levers); drop "Platform"/
+   "Segments"-over-P&L jargon. *Flips corp + pe-buyout (A4).*
+Plus scoped family levers (infra Opex/Amort, saas GrossChurn, re-debt EntryLTV — generator
+`defineName`s + DSCR/LTV promoted to outputs so the closure tracks them).
+
 **Open (documented in `tests/personas/FINDINGS.md`, not benchmark-blocking):**
 - Engine fidelity: intra-sheet topological ordering so cross-row "staircase"
   schedules compute correctly — only the standard column=time / row=metric layout

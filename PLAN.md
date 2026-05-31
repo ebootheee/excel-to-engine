@@ -1,5 +1,14 @@
 # excel-to-engine — Plan
 
+## Status: Analyst-UX gate at 8/12 (Wave 6 measured 2026-05-31; A5 perfect 5.00)
+
+The persona-journey gate has moved 2/12 → 3/12 → 7/12 (Wave 5) → **8/12 (Wave 6)**, with
+avg A5 (trust) now a perfect **5.00** and C5 (coder) **4.92**. Wave 6 shipped per-family
+headline blocks + model-type detection (corp/credit/saas/infra) to `main`. Remaining 4 fails
+and the Wave-7 plan (schedule-aggregation semantics → flips re-debt; derived-cell dials +
+yield formatting → flips infra; model-type-aware labeling → flips corp + pe-buyout) are in
+`ROADMAP.md` + `tests/personas/BENCHMARKS.md`. History (Wave 1 detail) below.
+
 ## Status: Analyst onboarding + coding-agent handoff (Wave 1) — in progress 2026-05-29
 
 Usability initiative: make the toolkit usable by a non-technical finance analyst

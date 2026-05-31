@@ -1,5 +1,26 @@
 # excel-to-engine — Changelog
 
+## 2026-05-31 — Wave 6 MEASURED: per-family headline blocks move the gate 7/12 → 8/12 (A5 perfect)
+
+Re-ran the full hardened 12-persona journey after the Wave-6 headline/detection wave.
+**pass/12: 7 → 8.** avg **A5 (trust) 4.58 → 5.00 — perfect across all 12** (every persona
+converts AND its headline numbers tie out to ground truth; `accuracyVerified=true` ×12),
+A7 3.75 → 3.83, C5 4.67 → **4.92**, **C4=true ×12**. Flipped to PASS: credit (Lender
+headline + real $56M balance) and saas ("8.0x ARR" + split CAGR). corp (A7 3→4) and infra
+(A4 3→4) lifted but still bind; pe-buyout slipped A4 4→3 on byte-identical output (judge
+noise on the pre-existing `pe_fund`/"Segments"/"Platform EBITDA" labels). **No accuracy
+regressions** — the closest defects are presentation/contract-shape, not wrong numbers.
+Full board + the Wave-7 plan in `tests/personas/BENCHMARKS.md`. Measurement only — no code
+change in this entry.
+
+**Wave 7 (next, from the run synthesis — all three needed for 12/12):** (1) schedule-output
+aggregation semantics — never SUM a ratio series; expose the per-year debt-balance/DSCR
+series (flips re-debt, kills the fabricated `$1` freeCashFlow); (2) suppress derived/
+backsolved cells as what-if dials + format yield outputs as `%` not `"0.09x"` (flips infra);
+(3) model-type-aware labeling — `pe_buyout` vs `pe_fund`, corp budget lens ("Forecast" not
+"Exit", P&L-led), drop "Platform"/"Segments" jargon (flips corp + pe-buyout). Plus the scoped
+family levers (infra Opex/Amort, saas GrossChurn, re-debt EntryLTV).
+
 ## 2026-05-31 — Wave 6: adversarial-review fixes (SaaS "Revenue" mislabel + 5 robustness fixes)
 
 A 4-dimension adversarial review (per-finding verified against a live persona) of the

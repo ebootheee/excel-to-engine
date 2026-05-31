@@ -26,6 +26,7 @@ The headline scalars we track each round:
 | 2026-05-29 | Wave 4 (TV label, Net note, doctor reconcile) | capstone only* | — | — | — | **capstone PASSED 5/5 both sides** |
 | 2026-05-30 | Phase 0 re-baseline (full 12, hardened harness†) | **1/12** | 3.00 | 4.00 | **4.42** | re-baseline shock, not a backslide — see below |
 | 2026-05-30 | Wave 5 — Phase-0 five-fix‡ | **7/12** | 3.75 | 4.67 | **4.58** | +6 personas; A6/A7 handoff debt cleared; C4=true ×12 |
+| 2026-05-31 | Wave 6 — per-family headline blocks§ | **8/12** | 3.83 | **4.92** | **5.00** | credit+saas flip; **A5 perfect ×12**; A5/C5/A7 all up; corp/infra A4/A7 lift |
 
 \* Wave 4 targeted the exact residual A5=3 causes but was only validated via the
 single-persona capstone (`pe-buyout-associate`, 5/5).
@@ -50,6 +51,51 @@ avg A5 4.42→**4.58**, A7 3.00→**3.75**, C5 4.00→**4.67**, and **C4=true fo
 (every coding-agent integration ran, tied to base case, and a lever moved). Newly
 passing (+6): pe-buyout-associate, vc-fund-partner, re-valueadd-analyst,
 ma-sellside-analyst, searchfund-searcher, familyoffice-fof-ir (growth-equity-vp held).
+
+§ **Wave 6 (2026-05-31) — per-family HEADLINE blocks + detection, measured.** After the
+five Wave-6 commits (corp `corporate` family + EV/Equity headline; credit Lender-Returns
+block + the "$2 debt-at-exit" ratio-cell fix; saas "x ARR" + split Revenue/ARR CAGR; infra
+returns-led headline; + adversarial-review fixes) the same hardened journey re-ran:
+**7/12 → 8/12**, **avg A5 4.58 → 5.00 (perfect — every persona converts AND verifies; all
+12 `accuracyVerified=true`)**, A7 3.75 → **3.83**, C5 4.67 → **4.92**, **C4=true ×12**.
+- **Flipped to PASS (+2):** `credit-directlending-analyst` (A5 3→5 — Lender headline + real
+  $56M balance) and `saas-growth-operator` (A4 3→4 — "8.0x ARR" + ARR/Revenue CAGR split).
+- **Lifted but still binding:** `corp-fpa-manager` (A7 3→4; A4 still 3) and
+  `infra-fund-director` (A4 3→4; A6/A7 still 3).
+- **Regressed on noise:** `pe-buyout-associate` A4 4→3 on **byte-identical output** (judge
+  variance on the pre-existing `pe_fund` tag / "Segments"-over-P&L / "Platform EBITDA"
+  jargon) — net 7→8.
+
+**Still failing (4) — two clusters:**
+- **A4 (labeling): `pe-buyout-associate`, `corp-fpa-manager`.** Model-type/lens mislabel:
+  LBO tagged `pe_fund`; "Segments" header over P&L lines (Revenue/COGS/EBITDA/Net Income);
+  "Platform EBITDA" jargon; corp headline says **"Exit: 2029"** (wrong vocabulary — it's a
+  forecast horizon) and leads with a DCF block instead of a P&L/budget view.
+- **A6/A7 (contract behaves wrong): `infra-fund-director`, `realestate-debt-cfo`.** Two
+  distinct contract defects:
+  - infra: `equityBasis` is a **backsolved/derived** cell wired as a what-if dial → the demo
+    example.mjs raises ExitYield and reports grossMOIC **6.73x→41.68x** (backwards); and the
+    exit-yield output is force-fit into the `exitMultiple` slot with `format:"multiple"` →
+    renders **"0.09x"**. Base case correct; the *what-if* and *output format* read as broken.
+  - re-debt: `freeCashFlow` baseCaseValue shows **$1** because the contract SUM-aggregates a
+    per-year **ratio** (debt yield 9.5%…13.25%) — you can't sum a ratio (a fabricated-looking
+    headline); and the amortization series ("Facility Balance — Closing", $152M) is absent
+    from named-outputs / `extract --type debt_balance` dead-ends.
+
+**Next-wave ROI (Wave 7, from the run synthesis — all three needed for 12/12):**
+1. **Schedule-output aggregation semantics** — never SUM a `fraction|percent` series (use
+   terminal/avg); emit the per-year debt-balance/DSCR series into named-outputs and make
+   `extract --type debt_balance` find "Balance Roll-Forward" sheets. **Flips re-debt**
+   (removes the fabricated $1 FCF — the closest thing to an accuracy bug).
+2. **Suppress derived/backsolved cells as dials + format outputs by detected unit** — mark
+   backsolved cells (`equityBasis`) read-only so the what-if explorer never wires them; key
+   output `format` off the concept (cap rate / exit yield → `%`, never `multiple`). **Flips
+   infra**; also lifts re-valueadd/credit (same `exitMultiple`-as-"0.0Nx" stumble).
+3. **Model-type-aware labeling** — `pe_buyout` vs `pe_fund`; corp 3-statement → budget lens
+   ("Forecast" not "Exit", P&L-led, revenue/opex/margin levers); LBO → drop "Platform"/"fund"
+   jargon; "Segments"→"P&L Summary" when rows are P&L lines. **Flips corp + pe-buyout** (A4).
+Plus the scoped **family-lever** additions (infra OpexEscalation/AnnualAmortization, saas
+GrossChurn, re-debt EntryLTV) for richer A6 dials once the contract semantics above are fixed.
 
 **Still failing (5)** — bindings below are the deterministic per-code gate
 (A4/A5/A6/A7≥4 ∧ C4 ∧ C5≥4), recomputed from each persona's scores and matched
