@@ -1,5 +1,28 @@
 # excel-to-engine — Changelog
 
+## 2026-05-30 — Phase 0 fix #4: asset-class detection (correct headline labels — most serious A5 class)
+
+The root of the model-type accuracy failures (right number, wrong asset-class label).
+`detectModelType` knew only 7 types, so credit/search-fund/FoF/infra/RE-debt fell through
+to `saas` or `re_fund` and the summary mislabeled headlines: credit "Exit @ 1.8x **Revenue**"
+(it's exit leverage), search "@ 5.5x **Revenue**" (EBITDA/SDE), RE-debt "@ 13.2% **cap rate**"
+(it's a debt yield, NOI/loan). A contributing substring bug: a bare `/arr/` matched
+"c**arr**ied"/"c**arr**y"/"**arr**angement", which is *why* credit & search-fund read as SaaS.
+
+Fix (two coordinated changes, no engine/tool behavior change):
+- `lib/manifest.mjs`: add `credit`, `fund_of_funds`, `search_fund`, `infrastructure`,
+  `real_estate_debt` to MODEL_TYPES + detectModelType (lender/fund/SDE/CFADS/debt-yield
+  signals); tighten `/arr/`→`/\barr\b/` (+ `\bmrr\b`, `\bcac\b`); boost real_estate_debt by
+  re_fund so it wins over plain RE.
+- `cli/commands/summary.mjs`: detectLens maps the new types (credit + real_estate_debt →
+  credit lens; fund_of_funds → fund; infrastructure → realestate); a `cap_rate_inverse`
+  exit reads "debt yield" under the credit lens; `exitBasis` returns EBITDA for credit.
+
+Result: all 12 personas classify correctly (credit→1.8x EBITDA, search→5.5x EBITDA,
+RE-debt→13.2% debt yield); pe_fund/saas/venture_portfolio/re_fund unchanged (no regression;
+corp/ma stay `unknown`→equity lens, not a wrong label). New `tests/cli/test-model-type.mjs`
+(10 assertions incl. regression + substring-bug guards), wired into `npm test`. Full suite green.
+
 ## 2026-05-30 — Phase 0 fix #5: dir-commands auto-resolve chunked/ (first-command dead-end)
 
 A non-technical analyst following GETTING_STARTED (whose examples point at `./my-model/`)

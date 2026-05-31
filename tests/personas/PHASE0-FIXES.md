@@ -100,7 +100,17 @@ Flips re-valueadd, searchfund, RE-debt (~3).
 
 ---
 
-## Fix #4 — Model-type misclassification (root of the accuracy failures — MOST SERIOUS, HIGH RISK)
+## Fix #4 — ✅ DONE (2026-05-30, commit 4c08fb3). Model-type misclassification (root of accuracy failures)
+
+**SHIPPED.** Added credit/fund_of_funds/search_fund/infrastructure/real_estate_debt to
+detectModelType + fixed the `/arr/`→`/\barr\b/` substring bug (was matching "carried"/
+"arrangement" → credit/search misread as saas); mapped the new types through detectLens +
+exitBasis + the cap_rate_inverse→"debt yield" exit string. All 12 classify correctly:
+credit→"1.8x EBITDA", search→"5.5x EBITDA", RE-debt→"13.2% debt yield" (all were wrong);
+pe_fund/saas/venture/re_fund unchanged. New test-model-type.mjs (10 assertions) wired into
+npm test; full suite green. saas-CAGR remains a SEPARATE bug (see note below). Design below.
+
+
 
 **Precise design (investigated 2026-05-30; implementation deferred to a clean tick —
 do NOT half-apply: it touches two shared functions and needs all-12 + npm test
