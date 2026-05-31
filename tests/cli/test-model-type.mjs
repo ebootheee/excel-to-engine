@@ -77,6 +77,21 @@ eq('pe_fund (carried interest / waterfall)', detectModelType(gtFrom([
   'GP Carried Interest', 'Equity Invested', 'LP Preferred Hurdle Value', 'Exit Equity Value',
 ])), 'pe_fund');
 
+// A SINGLE-COMPANY LBO: pays GP carry/pref (so it would score pe_fund) but has
+// single-deal markers (entry/exit EV multiple, acquisition leverage, a senior
+// facility) and NO fund-of-companies markers — must classify as pe_buyout.
+eq('pe_buyout (single-company LBO, not a fund)', detectModelType(gtFrom([
+  'Entry EV / EBITDA Multiple', 'Exit EV / EBITDA Multiple', 'Acquisition Leverage (LTV)',
+  'GP Carried Interest', 'LP Preferred Return', 'Equity Invested', 'Senior Debt Balance',
+])), 'pe_buyout');
+
+// A real fund-of-companies with the SAME carry/pref but fund markers present
+// (vintage, fund size, portfolio companies) must STAY pe_fund, not flip to buyout.
+eq('pe_fund stays a fund when fund markers present', detectModelType(gtFrom([
+  'GP Carried Interest', 'LP Preferred Return', 'Vintage Year', 'Fund Size',
+  'Portfolio Company A', 'Exit EV / EBITDA Multiple',
+])), 'pe_fund');
+
 eq('saas (real ARR token survives the \\barr\\b fix)', detectModelType(gtFrom([
   'ARR', 'Net Revenue Retention (NRR)', 'Gross Churn', 'CAC Payback', 'Rule of 40',
 ])), 'saas');

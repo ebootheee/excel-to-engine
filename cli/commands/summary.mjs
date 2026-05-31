@@ -7,6 +7,7 @@
  * @license MIT
  */
 
+import { basename } from 'path';
 import { loadManifest, loadGroundTruth, resolveCell, resolveBaseCaseOutputs, resolveEquityClass } from '../../lib/manifest.mjs';
 import { detectDateColumns } from '../extractors/date-detector.mjs';
 import { aggregateSegmentPnL, computeCAGR } from '../extractors/annual-aggregator.mjs';
@@ -158,9 +159,12 @@ function formatSummaryTable(s, opts = {}) {
   const { terse = false } = opts;
   const lines = [];
 
-  // Header
+  // Header. Source shows the workbook FILE (basename) — never a full filesystem
+  // path. `ete init` records an absolute model.source for provenance, but leaking
+  // "C:\Users\…\model.xlsx" into the analyst-facing header is a trust dent; the
+  // JSON output keeps the full source for machine consumers.
   lines.push(`Model: ${s.model.name} (${s.model.type})`);
-  lines.push(`Source: ${s.model.source || '—'}`);
+  lines.push(`Source: ${s.model.source ? basename(s.model.source) : '—'}`);
 
   const em = s.outputs.exitMultiple;
   let multStr = '';
@@ -185,7 +189,13 @@ function formatSummaryTable(s, opts = {}) {
       multStr = ` @ ${em.toFixed(1)}x ${exitBasis(s.lens, s.exitMultipleType)}`;
     }
   }
-  lines.push(`Period: ${s.timeline.investmentYear}–${s.timeline.exitYear} (${s.timeline.holdPeriod}yr, ${s.timeline.periodicity}) | Exit: ${s.timeline.exitYear}${multStr}`);
+  if (s.lens === 'corp') {
+    // A corporate operating plan / DCF has no transaction exit — it's a multi-year
+    // FORECAST. "Exit: 2029" is the wrong vocabulary for an FP&A audience.
+    lines.push(`Forecast: ${s.timeline.investmentYear}–${s.timeline.exitYear} (${s.timeline.holdPeriod}yr, ${s.timeline.periodicity})`);
+  } else {
+    lines.push(`Period: ${s.timeline.investmentYear}–${s.timeline.exitYear} (${s.timeline.holdPeriod}yr, ${s.timeline.periodicity}) | Exit: ${s.timeline.exitYear}${multStr}`);
+  }
   lines.push('');
 
   // Segments — drop ratio/percent rows (DSCR, LTV, leverage, growth %, margin,
@@ -201,7 +211,13 @@ function formatSummaryTable(s, opts = {}) {
 
   if (visibleSegments.length > 0) {
     const colW = 12;
-    lines.push(padRight('Segments', 32) + padLeft('Start', colW) + padLeft('Exit', colW) + padLeft('CAGR', colW));
+    // For a corporate forecast the rows are P&L lines (Revenue/COGS/EBITDA/Net
+    // Income), not business segments — label the block "P&L Summary" and the
+    // last-period column "End" (no transaction exit). Reserve "Segments"/"Exit"
+    // for true multi-business-line and deal models.
+    const segHeader = s.lens === 'corp' ? 'P&L Summary' : 'Segments';
+    const endColLabel = s.lens === 'corp' ? 'End' : 'Exit';
+    lines.push(padRight(segHeader, 32) + padLeft('Start', colW) + padLeft(endColLabel, colW) + padLeft('CAGR', colW));
     for (const seg of visibleSegments) {
       const cagrStr = seg.cagr !== null ? fmtPct(seg.cagr) : '—';
       const marker = seg.suspect ? ' ⚠' : '';
@@ -231,7 +247,7 @@ function formatSummaryTable(s, opts = {}) {
   // (when segment typing is imperfect) overstates revenue and contradicts the
   // Revenue segment row — its Revenue/Operating-Income rows are already in the
   // segment table, and ARR is surfaced on its own line below.
-  if (s.ebitda && (s.lens === 'equity' || s.lens === 'corp') && Math.abs(s.ebitda.last || 0) > 0) {
+  if (s.ebitda && (s.lens === 'equity' || s.lens === 'corp' || s.lens === 'buyout') && Math.abs(s.ebitda.last || 0) > 0) {
     const cagrStr = s.ebitda.cagr !== null ? fmtPct(s.ebitda.cagr) : '—';
     lines.push(`${padRight(operatingLabel(s.lens), 28)}${fmtCur(s.ebitda.first)} → ${fmtCur(s.ebitda.last)}  (CAGR: ${cagrStr})`);
   }
@@ -413,6 +429,7 @@ function detectLens(manifest, fundLevel, covenants, outputs) {
   const capRate = manifest.outputs?.exitMultiple?.type === 'cap_rate_inverse';
   if (hasFund || t === 'fund_of_funds') return 'fund';              // VC fund / FoF → TVPI/DPI
   if (t === 'corporate') return 'corp';                             // FP&A / DCF → EV + Equity Value
+  if (t === 'pe_buyout') return 'buyout';                           // single-company LBO → EBITDA (not "Platform")
   // (three_statement intentionally NOT routed here: detectOutputs only binds
   // EV/Equity for `corporate`, so a 3-statement model keeps the default equity
   // lens and still renders its terminalValue headline.)
@@ -431,6 +448,7 @@ function operatingLabel(lens) {
   return lens === 'realestate' ? 'Net Operating Income'
     : lens === 'credit' ? 'Borrower EBITDA'
     : lens === 'corp' ? 'Operating EBITDA'
+    : lens === 'buyout' ? 'EBITDA'   // a single-company LBO has no "platform" of businesses
     : 'Platform EBITDA';
 }
 
