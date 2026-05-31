@@ -98,6 +98,55 @@ Collapse to one canonical lever per cell with the real `affectsOutputs` closure;
 pseudo-levers pointing at formula cells. Lifts A6 and removes the searchfund C4 fail.
 Flips re-valueadd, searchfund, RE-debt (~3).
 
+### Fix #3 — precise design (diagnosed 2026-05-30; implementation deferred to a clean tick)
+
+CONFIRMED duplicate-cell levers (from `named-inputs.json`, two personas, same shape):
+- re-valueadd `Deal Assumptions!B4`: `ExitCapRate`(aff=0, src=defined-name) +
+  `exitMultiple`(aff=4, src=manifest-driver)
+- infra `Assumptions!B10`: `ExitYield`(aff=0, src=defined-name) +
+  `exitMultiple`(aff=4, src=manifest-driver)
+
+ROOT CAUSE: `enumerateInputCells` / the named-input emitter in `lib/manifest-maps.mjs`
+adds BOTH (a) the manifest-driver levers (`exitMultiple`/`exitYearSelector`/`hurdleRate`
+— these get the real `affectsOutputs` closure from the BFS) AND (b) every workbook
+defined-name input. When a defined name (`ExitCapRate`) points at the SAME cell as a
+manifest-driver (`exitMultiple` → B4), TWO entries land in `named-inputs.json` for one
+cell. The human-recognizable defined-name one shows `affectsOutputs: []` (the closure was
+computed under the driver key, not the defined-name key) → the analyst's actual slider
+("Exit Cap Rate") looks inert while a cryptic `exitMultiple` twin holds the real wiring.
+
+THE FIX (dedup-by-cell with closure union, in lib/manifest-maps.mjs):
+After both input sets are built and closures baked, collapse entries that share a `cell`:
+keep ONE canonical entry per cell, preferring the **defined-name's human name + excelName**
+(what the analyst recognizes) but carrying the **union of affectsOutputs** (so it's not
+inert) and the richest format/min/max/step. Drop the redundant twin. Pseudo-code:
+```
+const byCell = new Map();
+for (const [name, v] of Object.entries(namedInputs)) {
+  const prev = byCell.get(v.cell);
+  if (!prev) { byCell.set(v.cell, [name, v]); continue; }
+  // merge: prefer defined-name identity, union the closures
+  const [pn, pv] = prev;
+  const keepDefined = v.source === 'defined-name' ? [name, v] : [pn, pv];
+  const other = v.source === 'defined-name' ? [pn, pv] : [name, v];
+  const merged = { ...other[1], ...keepDefined[1],
+    affectsOutputs: [...new Set([...(pv.affectsOutputs||[]), ...(v.affectsOutputs||[])])],
+    excelName: keepDefined[1].excelName || other[1].excelName };
+  byCell.set(v.cell, [keepDefined[0], merged]);
+}
+// rebuild namedInputs from byCell (one entry per cell)
+```
+EDGE CASES: (1) keep insertion order stable for INTEGRATION.md readability; (2) if a
+manifest-driver points at a FORMULA cell (not a literal input) it should be DROPPED, not
+merged — a derived cell can't be a real lever (the recon noted credit's `exitMultiple`
+points at a derived cell; confirm against cell-types.json and drop if type!=='number'
+literal). (3) Don't merge across different cells that happen to share a name.
+
+VERIFY (needs reliable channel): regenerate all 12, assert no two named-inputs share a
+cell, assert ExitCapRate/ExitYield now carry aff>0; re-run the affected personas' summary;
+npm test green; add a test-manifest-maps assertion (no duplicate-cell inputs + the
+defined-name retains the closure).
+
 ---
 
 ## Fix #4 — ✅ DONE (2026-05-30, commits 74761a0 + regression f193972). Model-type misclassification (root of accuracy failures)
