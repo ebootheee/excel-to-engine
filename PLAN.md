@@ -1,13 +1,18 @@
 # excel-to-engine — Plan
 
-## Status: Analyst-UX gate at 8/12 (Wave 6 measured 2026-05-31; A5 perfect 5.00)
+## Status: Analyst-UX gate at **12/12** (Wave 7 measured 2026-05-31 — first clean sweep)
 
-The persona-journey gate has moved 2/12 → 3/12 → 7/12 (Wave 5) → **8/12 (Wave 6)**, with
-avg A5 (trust) now a perfect **5.00** and C5 (coder) **4.92**. Wave 6 shipped per-family
-headline blocks + model-type detection (corp/credit/saas/infra) to `main`. Remaining 4 fails
-and the Wave-7 plan (schedule-aggregation semantics → flips re-debt; derived-cell dials +
-yield formatting → flips infra; model-type-aware labeling → flips corp + pe-buyout) are in
-`ROADMAP.md` + `tests/personas/BENCHMARKS.md`. History (Wave 1 detail) below.
+The persona-journey gate has moved 2/12 → 3/12 → 7/12 (Wave 5) → 8/12 (Wave 6) → **12/12
+(Wave 7)** — the first time the whole panel clears the gate. avg A7 (woah) **4.08**, C5
+(coder) **4.50**, A5 (trust) **4.92** (all 12 `accuracyVerified=true`). Wave 7 shipped three
+rolling commits to `main` — schedule-aggregation semantics (flips re-debt), derived-dial
+suppression + concept-based output formatting (flips infra), and model-type-aware labeling
+(`pe_buyout`/corp budget lens — flips corp + pe-buyout) — plus scoped family levers. A
+4-reviewer adversarial-review workflow's `fix-now` findings were all fixed before merge. The
+dimensions still at exactly 4 (A6/A7/C5 on the debt/credit family + saas) are now polish, not
+correctness: net-of-fee returns, a deal-name header, a name-keyed `run()` overload (see
+ROADMAP "Next"). Full scoreboard + per-persona detail in `tests/personas/BENCHMARKS.md`.
+History (Wave 1 detail) below.
 
 ## Status: Analyst onboarding + coding-agent handoff (Wave 1) — in progress 2026-05-29
 

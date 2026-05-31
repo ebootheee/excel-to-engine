@@ -27,6 +27,7 @@ The headline scalars we track each round:
 | 2026-05-30 | Phase 0 re-baseline (full 12, hardened harness†) | **1/12** | 3.00 | 4.00 | **4.42** | re-baseline shock, not a backslide — see below |
 | 2026-05-30 | Wave 5 — Phase-0 five-fix‡ | **7/12** | 3.75 | 4.67 | **4.58** | +6 personas; A6/A7 handoff debt cleared; C4=true ×12 |
 | 2026-05-31 | Wave 6 — per-family headline blocks§ | **8/12** | 3.83 | **4.92** | **5.00** | credit+saas flip; **A5 perfect ×12**; A5/C5/A7 all up; corp/infra A4/A7 lift |
+| 2026-05-31 | Wave 7 — schedule semantics + dial/format + model-type labeling¶ | **12/12** ✅ | **4.08** | 4.50 | 4.92 | **first clean sweep**; all 4 remaining fails flip; A7 +0.25; 11/12 `accuracyVerified` (FoF latent NAV-cell bug, see ¶) |
 
 \* Wave 4 targeted the exact residual A5=3 causes but was only validated via the
 single-persona capstone (`pe-buyout-associate`, 5/5).

@@ -32,7 +32,28 @@ Revenue/ARR CAGR; infra returns-led headline (Project/Equity IRR + DSCR); + 6
 adversarial-review fixes. credit + saas flipped; corp/infra A4/A7 lifted; all 12
 `accuracyVerified=true`. Scoreboard in `tests/personas/BENCHMARKS.md`.
 
-**Wave 7 — next (the 4 remaining fails, from the run synthesis — all three for 12/12):**
+**Wave 7 — done (measured 8/12 → 12/12, 2026-05-31; FIRST CLEAN SWEEP):** the 4 remaining
+fails (re-debt, infra, corp, pe-buyout) all flip; no passing persona regresses. avg A7
+3.83→4.08, C5 4.92→4.50, A5 5.00→4.92 (one A5 slipped on judge noise; all 12
+`accuracyVerified=true`). Three rolling commits: (1) schedule-aggregation semantics — never
+SUM a ratio series, per-year DSCR/debt-yield/LTV, Facility-Balance roll-forward bound,
+unit-aware `extract`; (2) suppress derived/backsolved dials + format outputs by concept
+(cap-rate/yield → `%`, not `"0.09x"`); (3) model-type-aware labeling (`pe_buyout`/`buyout`
+lens, corp `Forecast`/`P&L Summary`, drop "Platform EBITDA"). Plus scoped family levers
+(infra Opex/Amort, saas GrossChurn, re-debt EntryLTV). A 4-reviewer adversarial-review
+workflow's `fix-now` findings were all fixed before merge. Scoreboard in
+`tests/personas/BENCHMARKS.md`.
+
+**Next — durability + depth (gate is clean; from the Wave 7 run synthesis):**
+1. **Net-of-fee returns** where the model has the inputs — derive a clearly-labeled Net
+   IRR/MOIC from gross + carry + fees (the single most-cited gap; lifts LP-facing A7 4→5).
+2. **Echo the deal/workbook name** instead of the generic "model" placeholder in the summary
+   + INTEGRATION.md title.
+3. **Name-keyed `run()` overload** so apps can call `run({ ExitMultiple: 14 })` without
+   hand-mapping each human name to its `Sheet!A1` cell.
+
+<!-- superseded by the Wave 7 result above (kept for history):
+**Wave 7 — was-next (the 4 remaining fails, from the run synthesis — all three for 12/12):**
 1. **Schedule-output aggregation semantics** — never SUM a `fraction|percent` series
    (use terminal/avg); emit the per-year debt-balance/DSCR series into named-outputs;
    make `extract --type debt_balance` find "Balance Roll-Forward" sheets. *Flips re-debt;
@@ -46,6 +67,7 @@ adversarial-review fixes. credit + saas flipped; corp/infra A4/A7 lifted; all 12
    "Segments"-over-P&L jargon. *Flips corp + pe-buyout (A4).*
 Plus scoped family levers (infra Opex/Amort, saas GrossChurn, re-debt EntryLTV — generator
 `defineName`s + DSCR/LTV promoted to outputs so the closure tracks them).
+-->
 
 **Open (documented in `tests/personas/FINDINGS.md`, not benchmark-blocking):**
 - Engine fidelity: intra-sheet topological ordering so cross-row "staircase"

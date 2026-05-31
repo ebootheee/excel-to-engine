@@ -1,5 +1,56 @@
 # excel-to-engine — Changelog
 
+## 2026-05-31 — Wave 7 MEASURED: schedule semantics + dial/format + model-type labeling → **12/12 (first clean sweep)**
+
+Re-ran the full hardened 12-persona journey after the Wave-7 wave. **pass/12: 8 → 12** — the
+first time the whole panel clears the gate. avg A7 (woah) 3.83 → **4.08**, C5 (coder) 4.92 →
+4.50, A5 (trust) 5.00 → 4.92 (gate floor A5≥4 held for all 12). **Flipped to PASS (+4):** the
+exact four the wave targeted — `realestate-debt-cfo`, `infra-fund-director`, `corp-fpa-manager`,
+`pe-buyout-associate`. No previously-passing persona regressed below the gate (a Source-normalized
+regen-diff kept the 8 passing summaries byte-identical; only the 4 targets changed). One
+`accuracyVerified=false` — `familyoffice-fof-ir` (still PASSES; A5=4 meets the floor) — is **not
+a Wave 7 regression** (byte-identical to Wave 6, where it verified true); the auditor caught a
+latent pre-existing manifest bug (FoF `residualValue` maps NAV to the wrong cell, ~15% high). The
+remaining dimensions sitting at exactly 4 (A6/A7/C5 on the debt/credit family + saas) are now
+polish — net-of-fee returns, a deal-name in the header, a name-keyed `run()` overload — not
+correctness or labeling. The FoF NAV remap is the highest-priority next-wave fix. Three rolling commits, merged to `main` (read the live tip via
+`git rev-parse --short origin/main`). Method: understand-map → rolling commits w/ per-commit
+regen-diff → adversarial-review workflow (4 reviewers / 10 findings / 16 verified; all `fix-now`
+items fixed before commit) → FF main → re-measure. Scoreboard + per-persona detail in
+`tests/personas/BENCHMARKS.md` (Wave 7 / ¶). Measurement only — no code change in this entry.
+
+The Wave 7 code is in the three entries below (originally logged as "code complete; measurement
+pending"); this entry records the measured result.
+
+### Wave 7 — schedule semantics, derived-dial suppression, model-type labeling (2026-05-31)
+
+The four remaining persona fails (re-debt, infra, corp, pe-buyout). Four workstreams:
+
+- **Schedule-aggregation semantics (flips re-debt).** A per-year RATIO series (debt yield, DSCR,
+  LTV) is no longer SUM-aggregated — `collectNamedOutputs` infers the series unit and uses the
+  terminal (exit) value with a `fraction`/`multiple` format, so a debt-yield headline reads
+  `13.2%` not the fabricated `$1`. `detectSchedules` gained `coverage`/`debt_yield`/`ltv` types
+  (ordered before `debt_balance`/`debt_service`); `debt_balance` (debt-gated) now matches a
+  roll-forward "Facility/Closing/Ending Balance" row, so `outstandingDebt` binds the real
+  $152.4M→$139.8M amortization series and `extract --type debt_balance` finds it. New per-year
+  `dscrByYear`/`debtYieldByYear`/`ltvByYear` outputs; `freeCashFlow` no longer mis-binds the
+  debt-yield row. `ete extract` reports a type-aware aggregate (Exit/Average/Total, never a
+  summed ratio) and formats ratios as `x`/`%`, never `$` (a DSCR was printing `$2`); periods
+  sort numerically so the terminal pick is the true last year.
+- **Suppress backsolved dials + format outputs by unit (flips infra).** A `cap_rate_inverse`
+  output formats as `fraction`, never `multiple` (killed the `0.09x` render); no phantom
+  `exitMultiple` driver is minted on a yield cell; a named input whose own cell is a formula
+  target is flagged `derived`; the INTEGRATION demo picks a non-derived, monotonic-positive
+  lever (camelCase-aware, so `ExitYield`/`TaxRate`/`CostOfCapital` are demoted) — the worked
+  what-if no longer shows returns falling as you raise a rate.
+- **Model-type-aware labeling (flips corp + pe-buyout).** New `pe_buyout` type + `buyout` lens —
+  a single-company LBO is distinguished from a `pe_fund` and shows `EBITDA` not "Platform
+  EBITDA". A `corporate` model reads `Forecast: 2025–2029` (not "Exit: 2029") with a `P&L
+  Summary` / `End` section. `summary` Source: shows the workbook basename, not a full path.
+- **Scoped family levers.** infra `OpexEscalation` + `AnnualAmortization` (the debt principal
+  row now reads the input cell), saas `GrossChurn`, re-debt `EntryLTV` — each verified to carry
+  a non-empty `affectsOutputs`.
+
 ## 2026-05-31 — Wave 6 MEASURED: per-family headline blocks move the gate 7/12 → 8/12 (A5 perfect)
 
 Re-ran the full hardened 12-persona journey after the Wave-6 headline/detection wave.
