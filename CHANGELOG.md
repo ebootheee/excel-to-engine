@@ -1,5 +1,18 @@
 # excel-to-engine — Changelog
 
+## 2026-05-30 — Wave 6 (start): clean model name in the summary header (drop the absolute path)
+
+The summary/INTEGRATION header printed the **full absolute workbook path** as the model
+name (`Model: C:\Users\…\engines\_personas\pe-buyout-associate\model`) — a recurring
+"looks leaky/unfinished" trust dent in nearly every persona's A2/A7 notes from the Wave-5
+journey. Root cause: `lib/manifest.mjs` set `model.name = options.source.replace(/\.xlsx?$/,'')`,
+and `options.source` is the resolved ABSOLUTE path, so stripping only the extension left the
+whole path. Fix: `model.name = basename(options.source)` without extension (handles `\` and
+`/` on win32); `model.source` keeps the full path for provenance. Now `Model: model (pe_fund)`;
+real workbooks (`Project Meridian LBO.xlsx`) get a genuinely good name. No math change; all 12
+re-init clean, full `npm test` green. First Wave-6 item (cheap cross-cutting A2/A7 win);
+per-family headline blocks + more levers still to come.
+
 ## 2026-05-30 — Wave 5 measured: the five Phase-0 fixes move the gate 1/12 → 7/12
 
 Re-ran the full hardened 12-persona journey after shipping all five Phase-0 fixes.
