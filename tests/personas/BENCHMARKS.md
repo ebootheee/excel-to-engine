@@ -51,22 +51,36 @@ avg A5 4.42→**4.58**, A7 3.00→**3.75**, C5 4.00→**4.67**, and **C4=true fo
 passing (+6): pe-buyout-associate, vc-fund-partner, re-valueadd-analyst,
 ma-sellside-analyst, searchfund-searcher, familyoffice-fof-ir (growth-equity-vp held).
 
-**Still failing (5) and the binding cause (A5 for re-debt corrected from the raw
-output — see anomaly note):**
-- `credit-directlending-analyst` [**A5**] — lone accuracy fail; classifies as `credit`
-  but the summary HEADLINE is still equity-shaped (exit "multiple"/MOIC, not
-  yield-to-lender / debt yield / exit leverage). Needs a credit-lens *headline block*,
-  not just the label.
-- `infra-fund-director` [**A4,A6,A7**] — DSCR/CFADS not surfaced as the headline; only
-  ExitYield is a lever (escalator/gearing aren't).
-- `saas-growth-operator` [**A4,A6,A7**] — "8.0x Revenue" should be "8.0x ARR" + the
-  Revenue/ARR line conflates one CAGR for two metrics; NRR/churn/bookings aren't levers.
-- `realestate-debt-cfo` [**A5,A6,A7**] — debt-yield headline is right now, but only the
-  cap-rate lever moves (rate/amort/LTV aren't levers); A5=3 on residual label nuance.
-- `corp-fpa-manager` [**A4,A7**] — model type still `unknown` → no family lens, reads
-  generic; needs a 3-statement/corporate-budget lens + driver levers (rev growth %, opex %, WACC).
+**Still failing (5)** — bindings below are the deterministic per-code gate
+(A4/A5/A6/A7≥4 ∧ C4 ∧ C5≥4), recomputed from each persona's scores and matched
+1:1 to the workflow's `binding`:
+- `credit-directlending-analyst` [**A5**] (scores A4 4·A5 3·A6 4·A7 4·C5 4) — lone
+  accuracy fail; classifies as `credit` but the summary HEADLINE is still equity-shaped
+  (exit "multiple"/MOIC, not yield-to-lender / debt yield / exit leverage). Needs a
+  credit-lens *headline block*, not just the label.
+- `infra-fund-director` [**A4,A6,A7**] (A4 3·A5 5·A6 3·A7 3) — DSCR/CFADS not surfaced
+  as the headline; only ExitYield is a lever (escalator/gearing aren't).
+- `saas-growth-operator` [**A4,A6,A7**] (A4 3·A5 5·A6 3·A7 3) — "8.0x Revenue" should be
+  "8.0x ARR" + the Revenue/ARR line conflates one CAGR for two metrics; NRR/churn/
+  bookings aren't levers.
+- `realestate-debt-cfo` [**A6,A7**] (A4 4·A5 5·A6 3·A7 3) — debt-yield headline is
+  correct now (A5=5); only the cap-rate lever moves (rate/amort/LTV aren't levers).
+- `corp-fpa-manager` [**A4,A7**] (A4 3·A5 5·A6 4·A7 3) — model type still `unknown` → no
+  family lens, reads generic; needs a 3-statement/corporate-budget lens + driver levers
+  (rev growth %, opex %, WACC).
 
-**Binding frequency across the 5 fails:** `A7` 4 · `A4` 3 · `A6` 3 · `A5` 2.
+**Binding frequency across the 5 fails:** `A7` 4 · `A4` 3 · `A6` 3 · `A5` 1.
+
+**Accuracy flags (from the run's LLM synthesis — VERIFY before acting, narrative not
+deterministic):** all 12 came back `accuracyVerified=true` except growth/fof/credit.
+Two to check: (1) **familyoffice-fof-ir (PASSES the gate) may report NAV from the wrong
+cell** — synthesis claims `Cash Flows!K7` ("Net CF to LP incl. residual NAV", ~$184.8M)
+instead of `IR Cheat Sheet!B12` (~$161M), a ~15% overstatement under an LP-facing NAV
+heading. If real, it's the most serious live defect (a wrong number in a *passing*
+persona). (2) credit's `Debt at exit` cell mapping (the recon's "$2"/leverage-vs-balance
+issue). growth's flag was only "couldn't re-dump _ground-truth mid-run", not a wrong
+value (it ties out via verify 4/4). These are synthesis *claims* — confirm against
+ground truth on a clean tick before treating as bugs.
 
 **Next-wave ROI order (from the run's synthesis):** (1) per-family HEADLINE blocks
 (credit YTM/debt-yield/leverage, infra project-IRR+DSCR, corp EV/equity-value) — flips
@@ -75,14 +89,15 @@ saas NRR/churn, re-debt rate/amort/LTV) — up to 3 more passes; (3) saas "x ARR
 CAGR; (4) corp three_statement detection + a clean model name (drop the absolute path —
 recurs in nearly every persona's A2/A7 notes, a cheap cross-cutting win).
 
-> **Harness anomaly (2026-05-30):** the journey workflow's serialized `scored[]` array
-> came back mangled (20 entries, 10 unique — searchfund + fof dropped, 10 others
-> doubled) while the `board` object was complete and internally consistent (7+5=12, all
-> distinct). The headline pass/12, passing/failing lists, and synthesis are taken from
-> `board` (authoritative). The avgs were computed in the same phase; the 1→7 jump is far
-> beyond the ±1 LLM-judge noise floor, but treat the exact avg decimals as ±0.1. Likely
-> tied to the intermittent tool-output corruption seen this session. Re-run to firm up
-> the decimals if a precise trend point is needed.
+> **Data provenance (2026-05-30):** numbers are from the workflow result's `board`
+> object; the full `scored[]` array was independently re-extracted from the saved task
+> output and is clean (12 entries, 12 distinct), and a code-recomputed gate
+> (A4/A5/A6/A7≥4 ∧ C4 ∧ C5≥4) matched the workflow's per-persona `binding` for all 12 —
+> so the row above is internally consistent, not estimated. (An earlier note here
+> claimed a mangled `scored[]`; that was a misread of the *truncated* completion
+> notification, not the saved output — corrected.) Scoring is LLM-judged so treat single
+> dimensions as ±1 noise and avg decimals as ±~0.1; the **1/12→7/12** jump is far beyond
+> that floor.
 
 > Scoring is stochastic (LLM judges), so a ±1 swing on a single dimension is
 > noise. Track the **aggregate** (avg A5/A7/C5) and the **set of binding
