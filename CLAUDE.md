@@ -191,6 +191,35 @@ The script reads `_sources.cells` and checks every value against `_ground-truth.
 - **Multi-class understatement**: Forgetting to sum carry across multiple investor classes
 
 
+## Agent git discipline (read before any commit/merge)
+
+Learned the hard way (a branch drifted 31 commits behind `origin/main` → a painful
+catch-up rebase; and commit hashes were hand-typed/guessed → a rejected push + false
+records). Follow these:
+
+**Integrate on a rolling basis — main → branch → small commit → push.**
+- Branch off **`origin/main`** (never stale local `main`). After a merge, immediately
+  `git branch -f main origin/main` so local main never goes stale.
+- Land work in **small units** (a fix + its test, green) and **push promptly**. Do not
+  accumulate 10–30 commits before integrating — that's what forces big rebases.
+- `git fetch origin` periodically and rebase the branch onto `origin/main` so it stays a
+  few commits ahead, not dozens. The repo norm is PRs (#34/#35/#36); keep each PR small.
+
+**Never hand-type or guess a git hash.** Read it from `git push` output, `git rev-parse
+--short HEAD`, or `git log -1 --pretty=%h` and paste *that*. In prose, refer to commits by
+their subject line, not a remembered hash.
+
+**`git commit` and `git push` are SOLO tool calls.** Never batch them in one message with a
+command that can exit non-zero (`grep -c` finding 0 matches, `test`, a `node -e` that may
+throw) — in a parallel tool batch a single nonzero exit cancels the *whole* batch and
+silently drops the commit/push. Run state-changing git as its own call and verify the
+result (`git log -1`, `git status`) before reporting done.
+
+**Before a merge to main:** confirm fast-forward safety (`git merge-base --is-ancestor
+origin/main <branch>`), run `npm test` green on the *rebased* tree, and read the real tip
+hash from git for the push. A non-force FF push is self-guarding — if it's rejected, fetch
+and rebase; never `--force` to main.
+
 ## Important Notes
 
 - Public open-source project — never include proprietary data, real financials, or participant names
