@@ -112,7 +112,15 @@ signatures; prerequisite for trustworthy A5 on the harder half of the panel.
 
 ---
 
-## Fix #5 — CLI papercut: dir-commands don't auto-resolve `chunked/`
+## Fix #5 — ✅ DONE (2026-05-30). CLI papercut: dir-commands don't auto-resolve `chunked/`
+
+**SHIPPED.** `loadGroundTruth` (lib/manifest.mjs) now mirrors `loadManifest`'s `chunked/`
+fallback (the relative `./_ground-truth.json` resolves at either level) + remediation hints
++ new `resolveModelDir()` helper. `ete summary <parent>` works (was the dead-end); chunked/
+still works; bogus dir exits non-zero with a clear message. test-onboarding locks both forms
+(15/15). Original analysis below.
+
+
 
 `summary <dir>` (and pnl/scenario/etc.) require `<dir>/chunked/` and else error
 "Ground truth not found" with no remediation, while `verify` auto-resolves it

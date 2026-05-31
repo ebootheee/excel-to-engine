@@ -120,6 +120,16 @@ const verRes = spawnSync('node', [CLI, 'verify', chunked], { encoding: 'utf-8', 
 ok('ete verify exits 0', verRes.status === 0, (verRes.stderr || '').slice(0, 200));
 ok('ete verify confirms base-case reproduction', /reproduces the model's base case/.test(verRes.stdout || ''));
 
+// --- chunked/ auto-resolve: dir-commands accept the PARENT, not just chunked/ ---
+// (the docs' own ./my-model/ examples point at the parent; before this, summary
+// dead-ended on "Ground truth not found" while verify worked — a confidence dent.)
+const sumParent = spawnSync('node', [CLI, 'summary', OUT], { encoding: 'utf-8', timeout: 60000 });
+ok('summary accepts the parent dir (auto-resolves chunked/)', sumParent.status === 0,
+  (sumParent.stderr || '').slice(0, 200));
+const sumChunked = spawnSync('node', [CLI, 'summary', chunked], { encoding: 'utf-8', timeout: 60000 });
+ok('summary still accepts the chunked/ dir', sumChunked.status === 0,
+  (sumChunked.stderr || '').slice(0, 200));
+
 try { rmSync(OUT, { recursive: true, force: true }); } catch {}
 
 console.log(`\nResults: ${pass} passed, ${fail} failed, ${pass + fail} total\n`);

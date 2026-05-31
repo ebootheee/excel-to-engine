@@ -1,5 +1,21 @@
 # excel-to-engine — Changelog
 
+## 2026-05-30 — Phase 0 fix #5: dir-commands auto-resolve chunked/ (first-command dead-end)
+
+A non-technical analyst following GETTING_STARTED (whose examples point at `./my-model/`)
+hit `Error: Ground truth not found` on the very FIRST command, because `ete summary
+<dir>` (and pnl/scenario/sensitivity/compare/carry/extract/explain/query) required
+`<dir>/chunked/` while `verify` already auto-resolved it. Root cause: `loadManifest`
+probed `chunked/` but `loadGroundTruth` resolved the manifest's relative
+`./_ground-truth.json` only against the passed dir.
+
+Fix (`lib/manifest.mjs`, one place → all consumers): `loadGroundTruth` now mirrors
+`loadManifest`'s `chunked/` fallback, and both errors carry a remediation hint. Added a
+`resolveModelDir()` helper for callers that need the resolved dir directly. `ete summary
+engines/.../pe-buyout-associate/` now works (was the documented dead-end); chunked/ still
+works; bogus dirs exit non-zero with a clear message. New `test-onboarding.mjs` assertions
+lock both forms (15/15). Full `npm test` green.
+
 ## 2026-05-30 — Phase 0 fix #2: headline returns are LIVE (static-literal IRR → real =IRR())
 
 The #1 A6 ("what-if expressiveness") binder: `grossIRR`/`netIRR`/`tvpi`/`dpi`/`MOIC`
