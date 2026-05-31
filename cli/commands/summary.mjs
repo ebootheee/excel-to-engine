@@ -227,12 +227,16 @@ function formatSummaryTable(s, opts = {}) {
   // Only for lenses where the segment-derived EBITDA/revenue total is reliable.
   // Funds have no operating P&L; credit/RE headlines are covenants / exit value,
   // and their segment tables already show NOI/borrower-EBITDA rows directly.
-  if (s.ebitda && (s.lens === 'equity' || s.lens === 'saas' || s.lens === 'corp') && Math.abs(s.ebitda.last || 0) > 0) {
+  // SaaS is EXCLUDED: its `s.ebitda` is Σ(revenue-typed rows) − Σ(expenses), which
+  // (when segment typing is imperfect) overstates revenue and contradicts the
+  // Revenue segment row — its Revenue/Operating-Income rows are already in the
+  // segment table, and ARR is surfaced on its own line below.
+  if (s.ebitda && (s.lens === 'equity' || s.lens === 'corp') && Math.abs(s.ebitda.last || 0) > 0) {
     const cagrStr = s.ebitda.cagr !== null ? fmtPct(s.ebitda.cagr) : '—';
     lines.push(`${padRight(operatingLabel(s.lens), 28)}${fmtCur(s.ebitda.first)} → ${fmtCur(s.ebitda.last)}  (CAGR: ${cagrStr})`);
   }
   // SaaS leads with ARR — surface ending ARR + its own CAGR (distinct from the
-  // revenue CAGR above) when the model tracks ARR separately.
+  // Revenue segment row's CAGR) when the model tracks ARR separately.
   if (s.lens === 'saas' && s.outputs.arrEnding != null) {
     const arrCagr = s.outputs.arrCAGR != null ? `  (CAGR: ${fmtPct(s.outputs.arrCAGR)})` : '';
     lines.push(`${padRight('Ending ARR', 28)}${fmtCur(s.outputs.arrEnding)}${arrCagr}`);
@@ -250,11 +254,16 @@ function formatSummaryTable(s, opts = {}) {
   // value framing the RE lens uses.
   if (s.lens === 'infra') {
     const hr2 = headlineReturns(s.outputs);
-    if (s.outputs.projectIRR != null || hr2.grossIRR != null || hr2.grossMOIC != null) {
+    if (s.outputs.projectIRR != null || hr2.grossIRR != null || hr2.grossMOIC != null
+        || hr2.netIRR != null || hr2.netMOIC != null) {
       lines.push(padRight('Returns', 26) + padLeft('Value', 10));
       if (s.outputs.projectIRR != null) lines.push(padRight('  Project IRR (unlevered)', 26) + padLeft(fmtPct(s.outputs.projectIRR), 10));
+      // Equity returns: prefer gross; fall back to net so a net-of-fees infra
+      // vehicle (no gross/project IRR) still shows returns rather than a blank block.
       if (hr2.grossIRR != null) lines.push(padRight('  Equity IRR', 26) + padLeft(fmtPct(hr2.grossIRR), 10));
+      else if (hr2.netIRR != null) lines.push(padRight('  Equity IRR (net)', 26) + padLeft(fmtPct(hr2.netIRR), 10));
       if (hr2.grossMOIC != null) lines.push(padRight('  Equity MOIC', 26) + padLeft(fmtMult(hr2.grossMOIC), 10));
+      else if (hr2.netMOIC != null) lines.push(padRight('  Equity MOIC (net)', 26) + padLeft(fmtMult(hr2.netMOIC), 10));
       const dscrs = [];
       const seenD = new Set();
       for (const c of (s.covenants || [])) {
@@ -280,7 +289,9 @@ function formatSummaryTable(s, opts = {}) {
     lines.push(`${padRight(tvLabel, 28)}${fmtCur(s.outputs.terminalValue)}`);
   }
   if (s.outputs.exitEquity) lines.push(`${padRight('Exit Equity', 28)}${fmtCur(s.outputs.exitEquity)}`);
-  lines.push('');
+  // Avoid a double blank when none of the value lines above rendered (e.g. a
+  // credit model whose headline is the Lender Returns block further down).
+  if (lines[lines.length - 1] !== '') lines.push('');
 
   // Fund (LP) metrics block — the headline for VC funds / FoF.
   const fl = s.fundLevel || {};
@@ -401,7 +412,10 @@ function detectLens(manifest, fundLevel, covenants, outputs) {
   const hasCovenants = (covenants || []).length > 0;
   const capRate = manifest.outputs?.exitMultiple?.type === 'cap_rate_inverse';
   if (hasFund || t === 'fund_of_funds') return 'fund';              // VC fund / FoF → TVPI/DPI
-  if (t === 'corporate' || t === 'three_statement') return 'corp';  // FP&A / DCF → EV + Equity Value
+  if (t === 'corporate') return 'corp';                             // FP&A / DCF → EV + Equity Value
+  // (three_statement intentionally NOT routed here: detectOutputs only binds
+  // EV/Equity for `corporate`, so a 3-statement model keeps the default equity
+  // lens and still renders its terminalValue headline.)
   // Credit + real-estate-DEBT are lender views → DSCR/LTV/debt-yield headline.
   if (t === 'credit' || t === 'real_estate_debt' || (hasCovenants && !hasReturns)) return 'credit';
   if (t === 'infrastructure') return 'infra';                       // Project/Equity IRR + DSCR
@@ -412,10 +426,9 @@ function detectLens(manifest, fundLevel, covenants, outputs) {
 
 /** Label + basis for the operating line, by lens. */
 function operatingLabel(lens) {
+  // (saas intentionally has no operating line — see formatSummaryTable; its
+  // segment-derived total is unreliable and ARR is shown separately.)
   return lens === 'realestate' ? 'Net Operating Income'
-    // The operating line tracks the revenue stream; ARR is surfaced on its own
-    // line (with its own, higher CAGR) so one CAGR isn't pinned to both metrics.
-    : lens === 'saas' ? 'Revenue'
     : lens === 'credit' ? 'Borrower EBITDA'
     : lens === 'corp' ? 'Operating EBITDA'
     : 'Platform EBITDA';

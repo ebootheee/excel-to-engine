@@ -1,5 +1,34 @@
 # excel-to-engine — Changelog
 
+## 2026-05-31 — Wave 6: adversarial-review fixes (SaaS "Revenue" mislabel + 5 robustness fixes)
+
+A 4-dimension adversarial review (per-finding verified against a live persona) of the
+Wave-6 headline diff surfaced one real bug and several latent fragilities; all fixed:
+- **(major) SaaS "Revenue $45.0M" contradicted the Revenue segment row ($40.9M).** The
+  operating line printed `s.ebitda` = Σ(revenue-typed rows) − Σ(expenses), which on a
+  multi-row SaaS model (imperfect segment typing) overstates revenue. Relabeling it
+  "Revenue" in the prior commit turned an ambiguous blend into a false claim. Fix: the
+  SaaS lens shows **no operating line** — Revenue/Operating-Income are already segment
+  rows and ARR is its own line. (growth-equity-vp's identical-but-redundant line also
+  drops; its Recognized-Revenue segment row is unchanged.)
+- **(regression) `three_statement` → corp lens** lost its headline (EV/Equity bind only
+  for `corporate`; corp lens suppresses terminalValue). Fix: route only `corporate` to the
+  corp lens — a 3-statement model keeps the default equity lens + its terminalValue.
+- **(robustness) detectDebt guard over-rejected** legit dollar balances whose label
+  contains "multiple"/"coverage" (multi-tranche / mezzanine). Fix: magnitude-gate the
+  ratio rejection (only reject values < $1000 with a ratio-ish label) — also rejects a
+  small "Exit Debt Yield" rate that shares the summary sheet with the real balance.
+- **(robustness) SaaS arrEnding** could bind an "Ending ARR (target)" assumption row by
+  iteration order. Fix: exclude target/assumption/plan/budget/goal labels.
+- **(edge) infra net-only** vehicles would show an empty returns block. Fix: the infra
+  block falls back to net IRR/MOIC when no gross/project return exists.
+- **(nit) credit/fund** double blank line before the first headline block. Fix: skip the
+  trailing blank when the prior line is already blank.
+
+Regen diff vs the post-headline state = only the two SaaS-lens operating lines removed +
+cosmetic blank collapses; no value changed, no debt line changed. All 12 verify 0-drift;
+`npm test` 132/132 + 15/15.
+
 ## 2026-05-31 — Wave 6: infrastructure returns-led headline (Project IRR + Equity IRR/MOIC + DSCR)
 
 Infra borrowed the real-estate lens → headline `@ 8.5% cap rate` + `Residual / Terminal
