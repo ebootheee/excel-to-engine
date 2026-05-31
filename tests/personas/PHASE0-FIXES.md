@@ -98,7 +98,14 @@ Collapse to one canonical lever per cell with the real `affectsOutputs` closure;
 pseudo-levers pointing at formula cells. Lifts A6 and removes the searchfund C4 fail.
 Flips re-valueadd, searchfund, RE-debt (~3).
 
-### Fix #3 — precise design (diagnosed 2026-05-30; implementation deferred to a clean tick)
+### Fix #3 — ✅ DONE (2026-05-30). Implemented `dedupeInputsByCell` in lib/manifest-maps.mjs
+
+**SHIPPED.** Post-closure dedup-by-cell keeps the defined-name identity + union of
+affectsOutputs. 6 personas fixed (ExitCapRate/ExitYield/ExitMultiple/ExitRevenueMultiple
+aff 0→real); re-debt correctly not merged (different cells). No duplicate-cell levers remain;
+test-dedupe-inputs.mjs (10 assertions) in npm test; full suite green. Design below.
+
+### Original design (diagnosed 2026-05-30)
 
 CONFIRMED duplicate-cell levers (from `named-inputs.json`, two personas, same shape):
 - re-valueadd `Deal Assumptions!B4`: `ExitCapRate`(aff=0, src=defined-name) +

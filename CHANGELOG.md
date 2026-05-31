@@ -1,5 +1,24 @@
 # excel-to-engine — Changelog
 
+## 2026-05-30 — Phase 0 fix #3: collapse duplicate-cell levers (inert-slider fix)
+
+The #1 cause of "dead slider" A6 complaints: a workbook defined name (`ExitCapRate`,
+`ExitMultiple`, `ExitYield`, `ExitRevenueMultiple`) and a manifest-driver (`exitMultiple`)
+often resolve to the SAME input cell. `collectNamedInputs` guarded driver insertion by KEY
+NAME (`!result.exitMultiple`), not by cell, so BOTH landed in `named-inputs.json` — and
+because `affectsOutputs` is computed per input *name*, the human-named lever showed
+`affectsOutputs: []` while a cryptic `exitMultiple` twin held the real closure. The analyst's
+actual slider ("Exit Cap Rate") looked inert. Affected 6 of 12 personas (incl. pe-buyout).
+
+Fix (`lib/manifest-maps.mjs`): new exported `dedupeInputsByCell()`, run in `emitManifestMaps`
+AFTER closures are baked, collapses entries sharing a `cell` into one — keeping the
+defined-name identity (+ excelName) but carrying the UNION of `affectsOutputs` and the richer
+format/min/max/step, tagged `mergedFrom` for audit. Result: re-valueadd `ExitCapRate` aff 0→5,
+infra `ExitYield` 0→6, pe-buyout/ma/searchfund `ExitMultiple` 0→4/5, growth `ExitRevenueMultiple`
+0→4; re-debt correctly NOT merged (its two exit levers are genuinely different cells). No more
+duplicate-cell levers across any persona. New `tests/cli/test-dedupe-inputs.mjs` (10 assertions)
+wired into `npm test`; full suite green.
+
 ## 2026-05-30 — Phase 0 fix #4: asset-class detection (correct headline labels — most serious A5 class)
 
 The root of the model-type accuracy failures (right number, wrong asset-class label).
