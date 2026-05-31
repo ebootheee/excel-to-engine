@@ -23,7 +23,7 @@
  * @license MIT
  */
 import { ModelBuilder, colLetter, r2 } from '../lib/model-builder.mjs';
-import { computeXIRR } from '../../../lib/irr.mjs';
+import { computeIRR } from '../../../lib/irr.mjs';
 
 export function build(outPath) {
   const m = new ModelBuilder('Northpole Ventures Fund II — LP Reporting', 'venture_portfolio');
@@ -110,12 +110,14 @@ export function build(outPath) {
   const callSum = r2(calls.reduce((a, b) => a + b, 0));
   calls[nY - 1] = r2(calls[nY - 1] - (callSum - -paidIn));
 
-  // Distributions — back-loaded, sum to total realized proceeds.
+  // Distributions — back-loaded, a fraction of REALIZED PORTFOLIO PROCEEDS each
+  // year. Written below as formulas referencing Portfolio!G{totals} so a change
+  // to a holding's exit value (the TopCompanyExit lever) cascades into the fund
+  // cashflow → net IRR. Cached values are the UNROUNDED product so they match the
+  // transpiled formula exactly (fracs sum to 1.0, so the series sums to proceeds).
   const distFracs = [0, 0, 0.02, 0.05, 0.10, 0.18, 0.30, 0.35];
-  const dists = distFracs.map(f => r2(totalProceeds * f));
-  const distSum = r2(dists.reduce((a, b) => a + b, 0));
-  dists[nY - 1] = r2(dists[nY - 1] + (totalProceeds - distSum));
-  const totalDistributed = r2(dists.reduce((a, b) => a + b, 0)); // == totalProceeds
+  const dists = distFracs.map(f => totalProceeds * f);
+  const totalDistributed = dists.reduce((a, b) => a + b, 0); // == totalProceeds
 
   // Net cashflow per year + cumulative roll-forward.
   const netCF = years.map((_, i) => r2(calls[i] + dists[i]));
@@ -126,7 +128,9 @@ export function build(outPath) {
   cf.label('A1', 'Fund Cash Flows — LP Net (J-Curve)');
   cf.label('A2', 'Year'); cf.valueRow('B2', years);
   cf.label('A3', 'Capital Called'); cf.valueRow('B3', calls);
-  cf.label('A4', 'Distributions');  cf.valueRow('B4', dists);
+  cf.label('A4', 'Distributions');
+  // Each year = its calibrated fraction of realized portfolio proceeds (live ref).
+  cf.formulaRow('B4', dists, (i) => `Portfolio!G${totalsRow}*${distFracs[i]}`);
   // Net CF row: this year's call + dist (same column, two rows above — both are
   // value rows, so reading them is evaluation-safe).
   cf.label('A5', 'Net Cash Flow');
@@ -140,16 +144,20 @@ export function build(outPath) {
     return `${prev}6+${colL}5`;
   });
 
-  // Fund net IRR via XIRR over dated net flows (mid-year convention: Jun 30).
-  const datedFlows = years.map((y, i) => ({ date: new Date(Date.UTC(y, 5, 30)), amount: netCF[i] }));
-  const netIRR = computeXIRR(datedFlows);
+  // Fund IRR via annual IRR over the net-cashflow row (one flow per year column),
+  // placed below as a live =IRR() formula so it recomputes under any lever that
+  // moves the cashflows. computeIRR here uses the same NPV-root math as the
+  // engine's transpiled IRR(), so the cached value ties out.
+  const netIRR = computeIRR(netCF);
 
   // -------------------------------------------------------------------------
   // Fund-level returns math (computed in JS, placed as formulas w/ cached vals).
   // -------------------------------------------------------------------------
   const navPct = 0.12;                                   // unrealized stub vs. invested cost
   const residualNAV = r2(totalInvested * navPct);        // holdings still on the books
-  const totalValue = r2(totalDistributed + residualNAV); // distributions + NAV
+  // B13 = B11 (=Portfolio proceeds) + B12 (=residual NAV); cache the exact sum of
+  // those two cell values so the formula ties out (totalDistributed≈proceeds).
+  const totalValue = totalProceeds + residualNAV;        // distributions + NAV
   const tvpi = totalValue / paidIn;
   const dpi = totalDistributed / paidIn;
   const rvpi = residualNAV / paidIn;
@@ -178,7 +186,7 @@ export function build(outPath) {
   s.label('A10', 'Realized Proceeds');           s.formula('B10', `Portfolio!G${totalsRow}`, totalProceeds);
   // Total Distributed: the cashflow distributions were calibrated to equal the
   // realized proceeds total, so express it as that total (single, clean ref).
-  s.label('A11', 'Total Distributed');           s.formula('B11', `Portfolio!G${totalsRow}`, totalDistributed);
+  s.label('A11', 'Total Distributed');           s.formula('B11', `Portfolio!G${totalsRow}`, totalProceeds);
   s.label('A12', 'Residual NAV (Unrealized)');   s.formula('B12', `Portfolio!D${totalsRow}*${navPct}`, residualNAV);
   s.label('A13', 'Total Value (Dist + NAV)');    s.formula('B13', 'B11+B12', totalValue);
 
@@ -190,11 +198,11 @@ export function build(outPath) {
   // Fund returns block — Gross MOIC / Gross IRR anchored near "Total Equity
   // Invested" (row 9) so the equity detector wires grossMOIC + grossIRR.
   s.label('A19', 'Fund Gross MOIC');              s.formula('B19', 'B10/B9', r6(grossMOIC));
-  // IRR has no closed-form cell-formula over the dated flows; pin the
-  // JS-computed XIRR via a stable arithmetic identity (value*1) so the
-  // transpiled engine reproduces it to full precision.
-  s.label('A20', 'Fund Gross IRR');               s.formula('B20', `${r6(netIRR)}*1`, r6(netIRR));
-  s.label('A21', 'Fund Net IRR');                 s.formula('B21', 'B20', r6(netIRR));
+  // Live IRR over the fund's net-cashflow row — recomputes whenever a lever moves
+  // the cashflows (TopCompanyExit → proceeds → distributions → net CF → IRR).
+  const cfLastCol = colLetter(1 + nY); // B..I for the 8 year columns
+  s.label('A20', 'Fund Gross IRR');               s.formula('B20', `IRR(Cashflows!B5:${cfLastCol}5)`, netIRR);
+  s.label('A21', 'Fund Net IRR');                 s.formula('B21', 'B20', netIRR);
 
   // GP economics block.
   s.label('A23', 'Profit Above 1.0x');            s.formula('B23', 'MAX(0,B13-B8)', profitAboveOneX);
@@ -209,6 +217,10 @@ export function build(outPath) {
   m.defineName('FundSize', 'Fund Cheat Sheet', 'B3');
   m.defineName('PaidInPct', 'Fund Cheat Sheet', 'B4');
   m.defineName('CarryRate', 'Fund Cheat Sheet', 'B5');
+  // The "power-law winner" lever (the persona's literal ask): the top holding's
+  // exit value. Read by Portfolio!G4 (proceeds), so moving it cascades through
+  // proceeds → distributions → net cashflow → grossMOIC, TVPI, DPI, and live IRR.
+  m.defineName('TopCompanyExit', 'Portfolio', 'F4');
 
   m.write(outPath);
   return {

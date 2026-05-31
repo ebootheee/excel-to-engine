@@ -1,5 +1,30 @@
 # excel-to-engine — Changelog
 
+## 2026-05-30 — Phase 0 fix #2: headline returns are LIVE (static-literal IRR → real =IRR())
+
+The #1 A6 ("what-if expressiveness") binder: `grossIRR`/`netIRR`/`tvpi`/`dpi`/`MOIC`
+shipped as **static literal cells** in three personas, so no lever moved them — the
+"what-if explorer" had no working dial on the numbers that matter. Root cause was
+generator-side, not engine-side: the transpiler + engine already support live IRR
+(`transpiler.rs` emits `computeIRR`/`computeXIRR`; every engine ships `_helpers.mjs`
+with them), but the generators pinned IRR via a `value*1` identity with an outdated
+"IRR has no closed-form cell-formula" comment.
+
+Rewrote the three generators to use **real `=IRR()` over a live cash-flow row**, the
+way an actual fund model does:
+- **vc-fund-partner**: distributions now reference realized portfolio proceeds;
+  `=IRR(Cashflows!B5:I5)`; new **`TopCompanyExit`** power-law lever → grossIRR
+  0.112→0.162, MOIC 1.82→2.16, TVPI 1.62→1.90, DPI 1.52→1.80 (all were STATIC).
+- **infra-fund-director**: equity cash-flow vector on one row; `grossIRR`=`IRR(...)`,
+  `MOIC`=`SUM(...)/-entry`; driven by existing RevenueEscalation/ExitYield/InterestRate
+  → grossIRR 0.168→0.198.
+- **familyoffice-fof-ir**: added a "Net CF to LP (incl. residual NAV)" row; blended
+  `IRR()` over it; new **`TopFundNAV`** mark lever → grossIRR 0.155→0.172, netIRR
+  0.137→0.154, TVPI 2.03→2.16, RVPI 0.11→0.20. (DPI correctly stays NAV-independent.)
+
+All 12 personas re-verify **0-drift**; full `npm test` green. No tool/engine changes —
+purely making the synthetic models realistic so their headline returns are live.
+
 ## 2026-05-30 — Phase 0 fix #1: schedule outputs carry a scalar cell (kills false "contract may be stale")
 
 The full 12-persona re-baseline (see BENCHMARKS.md) showed trust ROSE (avg A5 4.42)

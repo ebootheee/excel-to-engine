@@ -65,7 +65,17 @@ let it block #1.
 
 ---
 
-## Fix #2 — Static-literal headline returns (THE #1 A6 binder)
+## Fix #2 — ✅ DONE (2026-05-30). Static-literal headline returns (THE #1 A6 binder)
+
+**SHIPPED.** Root cause was generator-side (the engine already supports live IRR via
+`transpiler.rs` → `_helpers.mjs computeIRR/computeXIRR`). Rewrote vc/infra/fof generators
+to use real `=IRR()` over live cash-flow rows: vc gains a `TopCompanyExit` power-law
+lever (grossIRR 0.112→0.162, MOIC 1.82→2.16), infra's grossIRR/MOIC go live on existing
+RevEsc/ExitYield/InterestRate (0.168→0.198), fof gains a `TopFundNAV` mark lever
+(grossIRR 0.155→0.172, TVPI 2.03→2.16). All 12 re-verify 0-drift; npm test green.
+DPI correctly stays NAV-independent (realized cash). Original analysis below.
+
+
 
 `grossIRR/netIRR/tvpi/dpi/MOIC` are hardcoded literal cells, so no lever cascades into
 them → the summary shows them `— static` and the "what-if explorer" has no working dial

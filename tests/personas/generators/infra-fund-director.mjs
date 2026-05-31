@@ -23,6 +23,7 @@
  * @license MIT
  */
 import { ModelBuilder, colLetter, r2 } from '../lib/model-builder.mjs';
+import { computeIRR } from '../../../lib/irr.mjs';
 
 // IRR via Newton-Raphson with bisection fallback. Cash flows are period-spaced
 // (annual). cfs[0] is the entry outflow (negative).
@@ -232,7 +233,10 @@ export function build(outPath) {
     if (i === exitIdx) cfv = r2(cfv + residualToEquity);
     equityCF.push(cfv);
   }
-  const equityIRR = r6(irr(equityCF));
+  // Cache with the same NPV-root solver the engine's transpiled IRR() uses, so the
+  // live =IRR() cell below ties out (the local bisection irr() still serves the
+  // unlevered projectIRR literal).
+  const equityIRR = r6(computeIRR(equityCF));
 
   // Project cash flow series (unlevered): t0 = -entryEV; t1..t12 = CFADS;
   // final year adds full terminal value (pre-debt).
@@ -276,15 +280,30 @@ export function build(outPath) {
   rs.label('A10', 'Residual Equity Proceeds');
   rs.formula('B10', `B8-B9`, residualToEquity);
 
+  // Equity cash-flow vector on ONE row (entry outflow + each year's distribution
+  // to equity, the exit year also collecting the residual equity proceeds). This
+  // lets Gross IRR and MOIC be LIVE formulas over the row — so they recompute
+  // under RevenueEscalation / ExitYield / InterestRate. Placed ABOVE the IRR/MOIC
+  // rows for row-major safety (those cells read this row, which is up-and-left).
+  // B11 = entry; C11..O11 = the nY annual equity flows.
+  rs.label('A11', 'Equity Cash Flow (entry → exit)');
+  rs.formula('B11', '-B3', -entryEquity);
+  for (let k = 0; k < nY; k++) {
+    const col = colLetter(3 + k);          // C..O
+    const cfCol = colLetter(2 + k);        // 'Cash Flow' distribution col B..N
+    const f = (k === exitIdx) ? `'Cash Flow'!${cfCol}6+B10` : `'Cash Flow'!${cfCol}6`;
+    rs.formula(`${col}11`, f, equityCF[k + 1]);
+  }
+  const lastEqCol = colLetter(2 + nY);     // O (entry B + nY flows)
+
   // Returns block. "Gross IRR" label (equity IRR) sits within 20 rows of the
   // equity basis row (B3) so detectEquity binds grossIRR. Value in [-0.5, 2].
   rs.label('A12', 'Project IRR (unlevered)');
   rs.formula('B12', `${projectIRR}`, projectIRR);
 
   rs.label('A13', 'Gross IRR (equity)');
-  // Express as the IRR of the equity vector. We can't easily write a live IRR
-  // formula across sheets, so reference a computed cell. Keep formula == value.
-  rs.formula('B13', `${equityIRR}`, equityIRR);
+  // LIVE: IRR over the equity cash-flow vector row (row 11, up-and-left → safe).
+  rs.formula('B13', `IRR(B11:${lastEqCol}11)`, equityIRR);
 
   rs.label('A14', 'Average DSCR');
   rs.formula('B14', `${avgDSCR}`, avgDSCR);
@@ -296,7 +315,8 @@ export function build(outPath) {
   const totalEquityIn = entryEquity;
   const totalEquityOut = equityCF.slice(1).reduce((s, v) => s + v, 0);
   const moic = r6(totalEquityOut / totalEquityIn);
-  rs.formula('B16', `${moic}`, moic);
+  // LIVE: total equity inflows / entry outflow, over the same vector row.
+  rs.formula('B16', `SUM(C11:${lastEqCol}11)/(-B11)`, moic);
 
   m.write(outPath);
   return {

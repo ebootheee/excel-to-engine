@@ -29,7 +29,7 @@
  * @license MIT
  */
 import { ModelBuilder, colLetter, r2 } from '../lib/model-builder.mjs';
-import { computeXIRR } from '../../../lib/irr.mjs';
+import { computeIRR } from '../../../lib/irr.mjs';
 
 export function build(outPath) {
   const m = new ModelBuilder('Cedarhill Family Office — Fund-of-Funds Roll-Up', 'fund_of_funds');
@@ -141,10 +141,19 @@ export function build(outPath) {
     return `${prev}6+${colL}5`;
   });
 
-  // Blended net IRR via XIRR over dated net flows (year-end convention: Dec 31),
-  // including the terminal NAV harvest so it reflects total LP value.
-  const datedFlows = years.map((y, i) => ({ date: new Date(Date.UTC(y, 11, 31)), amount: netCFwithNAV[i] }));
-  const blendedNetIRR = computeXIRR(datedFlows);
+  // Net CF to LP INCLUDING the terminal residual-NAV harvest (a full-liquidation
+  // view). Each year mirrors Net Cash Flow (row 5); the FINAL year also collects
+  // the consolidated NAV from the Underlying Funds total — so a NAV mark (the
+  // TopFundNAV lever) flows through to a LIVE blended IRR over this row.
+  const navTotalsCell = `'Underlying Funds'!E${totalsRow}`;
+  const lastCfCol = colLetter(1 + nY); // B..K for the 10 year columns
+  cf.label('A7', 'Net CF to LP (incl. residual NAV)');
+  cf.formulaRow('B7', netCFwithNAV, (i, colL) => (i === nY - 1 ? `${colL}5+${navTotalsCell}` : `${colL}5`));
+
+  // Blended net IRR over the annual LP net-cashflow row (incl. NAV harvest),
+  // written below as a live =IRR() so it recomputes under the NAV-mark lever.
+  // computeIRR uses the same NPV-root math as the engine's transpiled IRR().
+  const blendedNetIRR = computeIRR(netCFwithNAV);
   // Blended gross IRR: net IRR before the fee/carry drag. FoF fees compress the
   // gross-to-net spread; use a modest, plausible uplift derived from the carry.
   const carryRate = 0.05;     // FoF-level carry (5% over return of capital)
@@ -209,10 +218,9 @@ export function build(outPath) {
   s.label('A19', 'Blended RVPI');                s.formula('B19', 'B12/B6', r6(rvpi));
 
   // Blended IRR block — Gross IRR anchored near "Total Capital Committed" (row 3)
-  // so the equity detector wires grossIRR. IRR has no closed-form cell-formula
-  // over dated flows; pin the JS XIRR via a stable arithmetic identity (value*1)
-  // so the transpiled engine reproduces it to full precision.
-  s.label('A21', 'Blended Net IRR');             s.formula('B21', `${r6(blendedNetIRR)}*1`, r6(blendedNetIRR));
+  // so the equity detector wires grossIRR. LIVE: IRR over the LP net-cashflow row
+  // (incl. NAV harvest) on the Cash Flows sheet — recomputes under the NAV lever.
+  s.label('A21', 'Blended Net IRR');             s.formula('B21', `IRR('Cash Flows'!B7:${lastCfCol}7)`, r6(blendedNetIRR));
   s.label('A22', 'Blended Gross IRR');           s.formula('B22', `B21+${grossIRRspread}`, r6(blendedGrossIRR));
 
   // FoF carry overlay block — reads the carry-rate lever (B4).
@@ -231,6 +239,10 @@ export function build(outPath) {
   m.defineName('TotalCommitment', 'IR Cheat Sheet', 'B3');
   m.defineName('BlendedCarry', 'IR Cheat Sheet', 'B4');
   m.defineName('FoFMgmtFee', 'IR Cheat Sheet', 'B5');
+  // NAV-mark lever (the classic FoF what-if): the largest underlying fund's NAV.
+  // Read by the consolidated NAV SUM (Underlying Funds!E10), so flexing it moves
+  // NAV → TVPI/RVPI and the residual-NAV harvest → blended IRR.
+  m.defineName('TopFundNAV', 'Underlying Funds', 'E4');
 
   m.write(outPath);
   return {
