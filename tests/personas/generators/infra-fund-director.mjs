@@ -85,6 +85,12 @@ export function build(outPath) {
   m.defineName('RevenueEscalation', 'Assumptions', 'B4');
   m.defineName('ExitYield', 'Assumptions', 'B10');
   m.defineName('InterestRate', 'Assumptions', 'B7');
+  // Two more operator dials. OpexEscalation (B6) is already read by the Operating
+  // Costs row → EBITDA → returns. AnnualPrincipalRepayment (B9) becomes live once
+  // the debt Principal Repayment row reads it (rewired below) → closing balance →
+  // exit debt + interest + DSCR + equity IRR.
+  m.defineName('OpexEscalation', 'Assumptions', 'B6');
+  m.defineName('AnnualAmortization', 'Assumptions', 'B9');
 
   // ---------------------------------------------------------------------------
   // Operations (P&L): contracted revenue escalates off prior column, opex
@@ -159,9 +165,14 @@ export function build(outPath) {
   // closing-balance roll-forward then reads prior-column SAME row (left) minus
   // this-period principal (an earlier row, up).
   //
-  // Row 3: Principal Repayment — literal sculpted schedule (an input row).
+  // Row 3: Principal Repayment — each year reads the AnnualAmortization input
+  // (Assumptions!$B$9) so that lever is LIVE (a literal row would make it a dead
+  // dial). Row-major safe: row 3 references only an Assumptions cell, never the
+  // closing-balance row below it. Base-case amort (16M) is always below the
+  // opening balance, so `=B9` reproduces the cached `principal[i]` exactly
+  // (drift 0); the original MIN(amort, opening) cap is immaterial at base case.
   d.label('A3', 'Principal Repayment');
-  d.valueRow('B3', principal);
+  d.formulaRow('B3', principal, () => `Assumptions!$B$9`);
 
   // Row 4: Closing Balance (roll-forward).
   //   B4 = initial debt input - year-1 principal (row 3, up).

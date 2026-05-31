@@ -51,6 +51,9 @@ export function build(outPath) {
   m.defineName('ARRMultiple', 'Drivers', 'B3');
   m.defineName('NetRetention', 'Drivers', 'B4');
   m.defineName('GrossMargin', 'Drivers', 'B5');
+  // Gross $ churn (B6) is already read by the Ending-ARR roll-forward and the
+  // Gross Churned ARR row → ending ARR → implied valuation; expose it as a dial.
+  m.defineName('GrossChurn', 'Drivers', 'B6');
 
   // ---------------------------------------------------------------------------
   // Compute the ARR build in JS first (same math the formulas will encode).

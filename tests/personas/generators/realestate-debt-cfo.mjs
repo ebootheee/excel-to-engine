@@ -126,6 +126,9 @@ export function build(outPath) {
   m.defineName('AnnualAmortization', 'Portfolio Assumptions', 'B4');
   m.defineName('ExitCapRate', 'Portfolio Assumptions', 'B5');
   m.defineName('PropertyValueGrowth', 'Portfolio Assumptions', 'B6');
+  // Entry LTV (B7) sizes the senior facility draw (B10 = B9*B7) → closing balance
+  // → exit debt + LTV/debt-yield series; expose it as a dial.
+  m.defineName('EntryLTV', 'Portfolio Assumptions', 'B7');
 
   // ===========================================================================
   // Sheet 2 — NOI by Property (per-property NOI + consolidated NOI + value)
