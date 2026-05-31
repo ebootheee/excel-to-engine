@@ -170,6 +170,11 @@ function formatSummaryTable(s, opts = {}) {
       // property cap rate — the lens distinguishes them.
       const yieldLabel = s.lens === 'credit' ? 'debt yield' : 'cap rate';
       multStr = ` @ ${fmtPct(em)} ${yieldLabel}`;
+    } else if (s.lens === 'credit') {
+      // Direct-lending: the "x" is exit LEVERAGE (turns of Debt/EBITDA), not an
+      // EBITDA purchase multiple. It's surfaced in the Lender Returns block below,
+      // so don't mislabel it as a buyout-style entry multiple in the header.
+      multStr = '';
     } else {
       multStr = ` @ ${em.toFixed(1)}x ${exitBasis(s.lens, s.exitMultipleType)}`;
     }
@@ -259,7 +264,20 @@ function formatSummaryTable(s, opts = {}) {
 
   // Returns — handle class-prefixed keys so a single-class model still shows them.
   const hr = headlineReturns(s.outputs);
-  if (hr.grossMOIC != null || hr.grossIRR != null || hr.netMOIC != null || hr.netIRR != null) {
+  // Credit (direct-lending) lens → a LENDER returns block: yield to lender, MOIC,
+  // exit leverage. A lender has no carry / net-of-fees concept, so the generic
+  // Gross/Net equity table with its "net of carry not shown" footnote reads wrong.
+  // (real_estate_debt shares the credit lens but carries no grossIRR/MOIC, so it
+  // skips this block and the generic one — its debt-yield header is the headline.)
+  if (s.lens === 'credit' && (hr.grossIRR != null || hr.grossMOIC != null)) {
+    lines.push('Lender Returns');
+    if (hr.grossIRR != null) lines.push(padRight('  Yield to Lender (Gross IRR)', 32) + padLeft(fmtPct(hr.grossIRR), 8));
+    if (hr.grossMOIC != null) lines.push(padRight('  MOIC', 32) + padLeft(fmtMult(hr.grossMOIC), 8));
+    if (s.outputs.exitMultiple != null && s.exitMultipleType !== 'cap_rate_inverse') {
+      lines.push(padRight('  Exit Leverage (Debt/EBITDA)', 32) + padLeft(`${s.outputs.exitMultiple.toFixed(1)}x`, 8));
+    }
+    lines.push('');
+  } else if (hr.grossMOIC != null || hr.grossIRR != null || hr.netMOIC != null || hr.netIRR != null) {
     lines.push(padRight('Returns', 20) + padLeft('Gross', 12) + padLeft('Net', 12));
     lines.push(padRight('  MOIC', 20) + padLeft(fmtMult(hr.grossMOIC), 12) + padLeft(fmtMult(hr.netMOIC), 12));
     lines.push(padRight('  IRR', 20) + padLeft(hr.grossIRR != null ? fmtPct(hr.grossIRR) : '—', 12) + padLeft(hr.netIRR != null ? fmtPct(hr.netIRR) : '—', 12));

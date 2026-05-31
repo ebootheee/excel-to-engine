@@ -1,5 +1,27 @@
 # excel-to-engine — Changelog
 
+## 2026-05-31 — Wave 6: credit (direct-lending) lender headline + the "$2 debt at exit" bug
+
+The lone accuracy fail (A5). Two defects, both fixed:
+- **`Debt at exit: $2`** — `detectDebt` bound `debt.exitBalance` to `Lender IC Summary!B18`,
+  the **"Exit Leverage (Debt/EBITDA)" RATIO cell** (1.79), because its label matches
+  `/exit.*debt/`. Rendered "$2", a hard trust-kill for a lender. Meanwhile the real
+  closing balance (`Borrower Credit!H5` ≈ $56M, label "Debt Balance — Closing ($)") was
+  *missed* — the old pattern required "exit"/"loan" next to "balance". Fix (`lib/manifest.mjs`
+  `detectDebt`): reject leverage/coverage/ratio-style labels, and broaden the match to
+  `debt balance` / `closing balance` / `ending balance` so the roll-forward closing row is
+  found. Credit now shows `Debt at exit: $56.0M`; re-debt (`$139.8M`) is unchanged.
+- **Equity-shaped headline** — returns were correct (MOIC 1.62x, IRR 11.6%) but rendered
+  as a generic Gross/Net table with a "net of carry not shown" footnote, and the header
+  read `@ 1.8x EBITDA` (a buyout purchase-multiple framing). Fix (`cli/commands/summary.mjs`):
+  a **Lender Returns** block for the credit lens — Yield to Lender (Gross IRR) / MOIC /
+  Exit Leverage (Debt/EBITDA) — and the header drops the misleading `@ 1.8x EBITDA`
+  (the leverage now lives in the block). `real_estate_debt` shares the credit lens but has
+  no gross IRR/MOIC, so it skips the block and keeps its correct `@ 13.2% debt yield`.
+
+credit verify 0-drift (8 outputs). Full-12 regen diff = exactly the credit + corp deltas,
+all 7 passing personas byte-identical. `npm test` green.
+
 ## 2026-05-31 — Wave 6: corporate (FP&A / DCF) family — detection + EV/Equity headline
 
 The corp-FP&A persona (operating plan + DCF) classified as `unknown` (every
