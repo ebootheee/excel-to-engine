@@ -166,10 +166,16 @@ function formatSummaryTable(s, opts = {}) {
   let multStr = '';
   if (em != null) {
     if (s.exitMultipleType === 'cap_rate_inverse') {
-      // A debt/credit model's exit yield is the DEBT YIELD (NOI / loan), not a
-      // property cap rate — the lens distinguishes them.
-      const yieldLabel = s.lens === 'credit' ? 'debt yield' : 'cap rate';
-      multStr = ` @ ${fmtPct(em)} ${yieldLabel}`;
+      // Infra's exit yield is a debt-sculpting input, not the headline — it's
+      // surfaced in the returns block below, so the header stays just the period.
+      if (s.lens === 'infra') {
+        multStr = '';
+      } else {
+        // A debt/credit model's exit yield is the DEBT YIELD (NOI / loan), not a
+        // property cap rate — the lens distinguishes them.
+        const yieldLabel = s.lens === 'credit' ? 'debt yield' : 'cap rate';
+        multStr = ` @ ${fmtPct(em)} ${yieldLabel}`;
+      }
     } else if (s.lens === 'credit') {
       // Direct-lending: the "x" is exit LEVERAGE (turns of Debt/EBITDA), not an
       // EBITDA purchase multiple. It's surfaced in the Lender Returns block below,
@@ -239,6 +245,33 @@ function formatSummaryTable(s, opts = {}) {
     if (s.outputs.equityValue != null) lines.push(`${padRight('Equity Value', 28)}${fmtCur(s.outputs.equityValue)}`);
     if (s.outputs.wacc != null) lines.push(`${padRight('  WACC (discount rate)', 28)}${fmtPct(s.outputs.wacc)}`);
   }
+  // Infrastructure / project finance → lead with returns + coverage (Project IRR,
+  // Equity IRR, Equity MOIC, DSCR, exit yield), not the property cap-rate + exit-
+  // value framing the RE lens uses.
+  if (s.lens === 'infra') {
+    const hr2 = headlineReturns(s.outputs);
+    if (s.outputs.projectIRR != null || hr2.grossIRR != null || hr2.grossMOIC != null) {
+      lines.push(padRight('Returns', 26) + padLeft('Value', 10));
+      if (s.outputs.projectIRR != null) lines.push(padRight('  Project IRR (unlevered)', 26) + padLeft(fmtPct(s.outputs.projectIRR), 10));
+      if (hr2.grossIRR != null) lines.push(padRight('  Equity IRR', 26) + padLeft(fmtPct(hr2.grossIRR), 10));
+      if (hr2.grossMOIC != null) lines.push(padRight('  Equity MOIC', 26) + padLeft(fmtMult(hr2.grossMOIC), 10));
+      const dscrs = [];
+      const seenD = new Set();
+      for (const c of (s.covenants || [])) {
+        if (!/dscr|cfads|coverage/i.test(c.label)) continue;
+        const k = c.label.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (seenD.has(k)) continue;
+        seenD.add(k);
+        dscrs.push(`${c.label.replace(/\s*\(.*\)\s*$/, '')} ${fmtMult(c.value)}`);
+        if (dscrs.length >= 3) break;
+      }
+      if (dscrs.length) lines.push(padRight('  Coverage', 26) + dscrs.join('  |  '));
+      if (s.outputs.exitMultiple != null && s.exitMultipleType === 'cap_rate_inverse') {
+        lines.push(padRight('  Exit yield', 26) + padLeft(fmtPct(s.outputs.exitMultiple), 10));
+      }
+      lines.push('');
+    }
+  }
   if (s.outputs.terminalValue && s.lens !== 'corp') {
     const lensLabel = s.lens === 'realestate' ? 'Exit Value' : s.lens === 'fund' ? 'Total Value' : 'Terminal Value';
     // Prefer the cell's actual label (e.g. "Exit Equity Value") over a generic
@@ -283,7 +316,7 @@ function formatSummaryTable(s, opts = {}) {
       lines.push(padRight('  Exit Leverage (Debt/EBITDA)', 32) + padLeft(`${s.outputs.exitMultiple.toFixed(1)}x`, 8));
     }
     lines.push('');
-  } else if (hr.grossMOIC != null || hr.grossIRR != null || hr.netMOIC != null || hr.netIRR != null) {
+  } else if (s.lens !== 'infra' && (hr.grossMOIC != null || hr.grossIRR != null || hr.netMOIC != null || hr.netIRR != null)) {
     lines.push(padRight('Returns', 20) + padLeft('Gross', 12) + padLeft('Net', 12));
     lines.push(padRight('  MOIC', 20) + padLeft(fmtMult(hr.grossMOIC), 12) + padLeft(fmtMult(hr.netMOIC), 12));
     lines.push(padRight('  IRR', 20) + padLeft(hr.grossIRR != null ? fmtPct(hr.grossIRR) : '—', 12) + padLeft(hr.netIRR != null ? fmtPct(hr.netIRR) : '—', 12));
@@ -317,7 +350,8 @@ function formatSummaryTable(s, opts = {}) {
 
   // Covenants block — DSCR/LTV/ICR/leverage. The headline for credit/debt models.
   // Dedup by label and cap so a model with many ratio rows stays readable.
-  if ((s.covenants || []).length > 0) {
+  // (infra shows DSCR in its returns block above, so skip the standalone line.)
+  if (s.lens !== 'infra' && (s.covenants || []).length > 0) {
     const seen = new Set();
     const parts = [];
     for (const c of s.covenants) {
@@ -370,7 +404,7 @@ function detectLens(manifest, fundLevel, covenants, outputs) {
   if (t === 'corporate' || t === 'three_statement') return 'corp';  // FP&A / DCF → EV + Equity Value
   // Credit + real-estate-DEBT are lender views → DSCR/LTV/debt-yield headline.
   if (t === 'credit' || t === 'real_estate_debt' || (hasCovenants && !hasReturns)) return 'credit';
-  if (t === 'infrastructure') return 'realestate';                  // NOI / yield basis
+  if (t === 'infrastructure') return 'infra';                       // Project/Equity IRR + DSCR
   if (capRate || /re[_-]|real.?estate/.test(t)) return 'realestate'; // NOI + cap rate
   if (t === 'saas' || t === 'growth_equity') return 'saas';          // ARR
   return 'equity';                                     // PE / search_fund / operating (default)

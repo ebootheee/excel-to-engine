@@ -1,5 +1,24 @@
 # excel-to-engine — Changelog
 
+## 2026-05-31 — Wave 6: infrastructure returns-led headline (Project IRR + Equity IRR/MOIC + DSCR)
+
+Infra borrowed the real-estate lens → headline `@ 8.5% cap rate` + `Residual / Terminal
+Value $492.9M`, while the metrics a project-finance director leads with were absent or
+broken: **Project IRR (unlevered)** wasn't bound at all, **Equity MOIC** was unmapped
+(Returns showed `MOIC —`), and DSCR was buried in a trailing Covenants line.
+- **`lib/manifest.mjs`**: broaden the equity-MOIC matcher to capture "Equity Multiple
+  (MOIC)" (net-guarded) so `grossMOIC` resolves to `Investor Summary!B16` (6.73x); add
+  `projectIRR` detection gated to infrastructure (`Investor Summary!B12`, 11.1%).
+- **`cli/commands/summary.mjs`**: new dedicated **`infra` lens** (split out of `realestate`)
+  with a returns-led headline block — Project IRR (unlevered) / Equity IRR / Equity MOIC /
+  DSCR coverage / Exit yield. The `@ cap rate` header suffix, the generic Gross/Net Returns
+  table (with its wrong "net of carry" footnote), and the standalone Covenants line are all
+  suppressed for the lens; Residual/Terminal Value now follows the returns.
+
+infra now leads with `Project IRR 11.1% / Equity IRR 16.8% / Equity MOIC 6.73x / DSCR
+1.95x · 1.35x / Exit yield 8.5%`. verify 0-drift (15 outputs). Regen diff = only the infra
+persona; all others byte-identical. `npm test` green.
+
 ## 2026-05-31 — Wave 6: SaaS ARR headline — "x ARR" basis + split Revenue/ARR CAGR
 
 SaaS-growth headlined `@ 8.0x Revenue` (the multiple is actually EV/ARR = 8.0 exact;
