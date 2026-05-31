@@ -100,7 +100,7 @@ Flips re-valueadd, searchfund, RE-debt (~3).
 
 ---
 
-## Fix #4 — ✅ DONE (2026-05-30, commit 4c08fb3). Model-type misclassification (root of accuracy failures)
+## Fix #4 — ✅ DONE (2026-05-30, commits 74761a0 + regression f193972). Model-type misclassification (root of accuracy failures)
 
 **SHIPPED.** Added credit/fund_of_funds/search_fund/infrastructure/real_estate_debt to
 detectModelType + fixed the `/arr/`→`/\barr\b/` substring bug (was matching "carried"/
