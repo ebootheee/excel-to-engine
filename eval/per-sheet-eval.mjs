@@ -36,11 +36,11 @@ function getFlag(name, fallback) {
 const OUTPUT_FILE = getFlag('output', join(chunkedDir, '..', 'per-sheet-report.json'));
 const CONCURRENCY = parseInt(getFlag('concurrency', process.env.EVAL_CONCURRENCY || '6'));
 const SAMPLE_SIZE = parseInt(getFlag('sample', process.env.SAMPLE_SIZE || '2000'));
-// --skip-clusters: record circular-cluster sheets as skipped instead of
-// evaluating them. The current convergence path re-runs the whole cluster once
-// per member sheet (O(cluster²) work), which is infeasible on big models; this
-// flag yields a fast, real accuracy number for the standalone sheets while the
-// single-pass orchestrator eval is built. See ROADMAP (circular-cluster eval).
+// --skip-clusters: OPT-OUT. By default the single-pass orchestrator now converges
+// each cross-sheet cluster ONCE (one child task) and scores every member from
+// that shared fixed point, so clusters are measured — the returns/MIP cone is no
+// longer skipped. Pass --skip-clusters for the fast standalone-sheets-only number
+// (records cluster sheets as skipped, the old O(cluster²) avoidance).
 const SKIP_CLUSTERS = args.includes('--skip-clusters');
 const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '8192');
 const MAX_SHEET_SIZE_MB = parseInt(process.env.MAX_SHEET_SIZE_MB || '150');
@@ -113,15 +113,37 @@ async function main() {
     } catch { /* ignore */ }
   }
 
+  // Named outputs whose cell lives in a circular cluster — surfaced with accuracy
+  // (no values) so the returns/MIP cone (MIP Proceeds, hurdle, ...) is reported
+  // rather than skipped. Only the named outputs the contract already tagged.
+  const RETURN_KEY = /moic|irr|carry|promote|mip|proceeds|tvpi|dpi|hurdle|threshold|participation|terminal.?value|equity.?basis|valuation|shares|nav/i;
+  const namedOfInterest = []; // {name, cell}
+  const noPath = join(chunkedDir, 'named-outputs.json');
+  if (existsSync(noPath) && clusterSheetSet.size > 0) {
+    try {
+      const no = JSON.parse(await readFile(noPath, 'utf8'));
+      const outs = no.namedOutputs || no.outputs || no;
+      for (const [name, spec] of Object.entries(outs)) {
+        const cell = spec && typeof spec === 'object' ? spec.cell : null;
+        if (!cell || typeof cell !== 'string' || cell.indexOf('!') < 0) continue;
+        const sheet = cell.slice(0, cell.indexOf('!'));
+        if (RETURN_KEY.test(name) && clusterSheetSet.has(sheet)) namedOfInterest.push({ name, cell });
+      }
+    } catch { /* ignore */ }
+  }
+  const namedCells = namedOfInterest.map(o => o.cell);
+
   // Write full ground truth to a temp file for child processes
   const tmpDir = join(chunkedDir, '_eval_tmp');
   await mkdir(tmpDir, { recursive: true });
   const gtTmpPath = join(tmpDir, '_gt_full.json');
   await writeFile(gtTmpPath, JSON.stringify(allGt));
 
-  // Build task list
+  // Build task list. Cross-sheet circular clusters become a SINGLE task (one
+  // convergence, all members scored); standalone sheets stay one task each.
   const tasks = [];
   const skipped = [];
+  const clusterTasks = new Map(); // clusterKey -> { kind:'cluster', clusterSheets, members:[] }
 
   for (const entry of sheetEntries) {
     const sanitized = entry.name.replace(/[^a-zA-Z0-9]/g, '_');
@@ -165,7 +187,7 @@ async function main() {
     const sheetGtPath = join(tmpDir, `_gt_${sanitized}.json`);
     await writeFile(sheetGtPath, JSON.stringify(sampleGt));
 
-    tasks.push({
+    const member = {
       sheetName: entry.name,
       sanitized,
       modulePath: resolve(modulePath),
@@ -173,8 +195,25 @@ async function main() {
       gtTmpPath: resolve(gtTmpPath),
       gtCount: Object.keys(sampleGt).length,
       totalCount: entry.totalCount,
-    });
+    };
+
+    // Route cluster members into one shared cluster task; standalone sheets each
+    // get their own task.
+    const cluster = clusterSheetSet.has(entry.name) ? sheetClusters.find(c => c.includes(entry.name)) : null;
+    if (cluster) {
+      const key = cluster.join('|');
+      if (!clusterTasks.has(key)) {
+        clusterTasks.set(key, { kind: 'cluster', clusterSheets: cluster.slice(), members: [], gtTmpPath: resolve(gtTmpPath) });
+      }
+      clusterTasks.get(key).members.push(member);
+    } else {
+      tasks.push({ kind: 'sheet', ...member });
+    }
   }
+
+  // Append one task per cluster (after standalone sheets, so the largest
+  // standalone sheets still start first under the concurrency window).
+  for (const ct of clusterTasks.values()) tasks.push(ct);
 
   if (skipped.length > 0) {
     console.log(`  Skipped ${skipped.length} sheets:`);
@@ -366,11 +405,159 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
     }
   }
 
-  // Run with concurrency limit
+  // Cluster task: converge the whole cross-sheet cluster ONCE, then score every
+  // member sheet against the shared fixed point (was: re-run convergence per
+  // member). Returns one result row per member, plus convergence telemetry and
+  // any cluster-resident named-output values.
+  const clusterMeta = [];      // {clusterSheets, iters, converged, nonFiniteCell}
+  const namedCellValues = {};  // converged values for cluster-resident named outputs
+
+  async function evalOneCluster(task) {
+    const { clusterSheets, members, gtTmpPath: gtFullPath } = task;
+    const importLines = members.map((m, i) =>
+      `import { compute as compute_${i} } from ${JSON.stringify(pathToFileURL(m.modulePath).href)};`).join('\n');
+    const membersMeta = members.map(m => ({ sheetName: m.sheetName, sheetGtPath: m.sheetGtPath.replace(/\\/g, '/') }));
+
+    const evalScript = `
+import { readFile } from 'fs/promises';
+${importLines}
+
+const allGt = JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8'));
+
+const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
+const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
+const ctx = {
+  values: {},
+  _written: new Set(),
+  get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
+  set(addr, value) { this.values[addr] = value; this._written.add(addr); },
+  _parseRange(rangeStr) {
+    const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
+    if (!m) return null;
+    const [, sheet, c1, r1, c2, r2] = m;
+    return { sheet, c1: cn(c1), r1: +r1, c2: cn(c2), r2: +r2 };
+  },
+  range(rangeStr) {
+    const p = this._parseRange(rangeStr); if (!p) return [];
+    const result = [];
+    for (let r = p.r1; r <= p.r2; r++) for (let c = p.c1; c <= p.c2; c++) result.push(this.get(p.sheet+'!'+nc(c)+r));
+    return result;
+  },
+  range2d(rangeStr) {
+    const p = this._parseRange(rangeStr); if (!p) return [];
+    const result = [];
+    for (let r = p.r1; r <= p.r2; r++) { const row = []; for (let c = p.c1; c <= p.c2; c++) row.push(this.get(p.sheet+'!'+nc(c)+r)); result.push(row); }
+    return result;
+  }
+};
+
+// Seed context with full ground truth (upstream sheet values)
+for (const [addr, val] of Object.entries(allGt)) ctx.values[addr] = val;
+
+// ONE convergence loop over ALL cluster members. Diff only the cells the cluster
+// wrote (ctx._written). A non-finite cell (Inf/NaN from a waterfall/coverage
+// formula dividing by a not-yet-converged 0) is recorded and stops the loop
+// rather than poisoning the delta — converged stays false (honest contract).
+const clusterFns = [${members.map((_, i) => `compute_${i}`).join(', ')}];
+const MAX_ITER = 200, TOL = 1e-6;
+const prevSnapshot = {};
+let _iters = 0, _conv = false, _nonFinite = null, _err = null;
+try {
+  for (let _ci = 0; _ci < MAX_ITER; _ci++) {
+    _iters = _ci + 1;
+    for (const fn of clusterFns) fn(ctx);
+    let maxDelta = 0, bad = null;
+    for (const k of ctx._written) {
+      const v = ctx.values[k];
+      if (typeof v !== 'number') continue;
+      if (!Number.isFinite(v)) { bad = k; break; }
+      const prev = prevSnapshot[k] || 0;
+      const d = Math.abs(v - prev);
+      if (d > maxDelta) maxDelta = d;
+      prevSnapshot[k] = v;
+    }
+    if (bad !== null) { _nonFinite = bad; if (_ci >= 2) break; continue; }
+    if (_ci > 0 && maxDelta < TOL) { _conv = true; break; }
+  }
+} catch (e) { _err = e.message; }
+
+const compareOne = (sheetGt) => {
+  let correct = 0, total = 0; const failures = [];
+  for (const [addr, expected] of Object.entries(sheetGt)) {
+    const actual = ctx.values[addr];
+    if (actual === undefined || actual === null) { if (failures.length<30) failures.push({ address: addr, expected, actual: null, relError: 1.0 }); total++; continue; }
+    total++;
+    if (typeof expected === 'string' || typeof actual === 'string') {
+      if (String(actual) === String(expected)) correct++; else if (failures.length<30) failures.push({ address: addr, expected, actual, relError: 1.0 });
+      continue;
+    }
+    const relError = Math.abs(expected) < 1e-9 ? Math.abs(actual) : Math.abs((actual - expected) / expected);
+    if (relError < 0.01) correct++; else if (failures.length<30) failures.push({ address: addr, expected, actual, relError });
+  }
+  return { accuracy: total > 0 ? correct/total : 0, correct, total, failures };
+};
+
+const members = ${JSON.stringify(membersMeta)};
+const results = [];
+for (const m of members) {
+  const sheetGt = JSON.parse(await readFile(m.sheetGtPath, 'utf8'));
+  results.push({ sheetName: m.sheetName, ...compareOne(sheetGt) });
+}
+const namedCells = ${JSON.stringify(namedCells)};
+const namedCellValues = {};
+for (const c of namedCells) if (typeof ctx.values[c] === 'number') namedCellValues[c] = ctx.values[c];
+process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, nonFiniteCell: _nonFinite, error: _err, namedCellValues }));
+`;
+
+    const clusterKey = clusterSheets.join('_').replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
+    const tmpScript = join(tmpDir, `_eval_cluster_${clusterKey}.mjs`);
+    await writeFile(tmpScript, evalScript);
+
+    const evalStart = Date.now();
+    try {
+      const safeEnv = { ...process.env };
+      delete safeEnv.ANTHROPIC_API_KEY;
+      const { stdout: evalOut } = await execAsync(
+        'node',
+        [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript],
+        { timeout: 300000, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
+      );
+      const out = JSON.parse(evalOut);
+      const elapsed = Date.now() - evalStart;
+      clusterMeta.push({ clusterSheets, iters: out.iters, converged: !!out.converged, nonFiniteCell: out.nonFiniteCell || null });
+      Object.assign(namedCellValues, out.namedCellValues || {});
+      if (out.error) {
+        console.log(`  XX cluster [${clusterSheets.join(', ')}]: convergence error - ${String(out.error).slice(0, 100)}  ${elapsed}ms`);
+        return members.map(m => { completed++; return { sheetName: m.sheetName, accuracy: 0, correct: 0, total: 0, failures: [], elapsed, status: 'error', error: String(out.error).slice(0, 200) }; });
+      }
+      return (out.results || []).map(r => {
+        completed++;
+        const pct = r.total > 0 ? (r.correct / r.total * 100).toFixed(1) : '0.0';
+        const icon = r.accuracy >= 0.95 ? 'OK' : r.accuracy >= 0.70 ? '--' : '!!';
+        const tag = out.converged ? `cluster ${out.iters}i` : `cluster NOT-CONVERGED${out.nonFiniteCell ? ' nonfinite:' + out.nonFiniteCell : ''}`;
+        console.log(`  ${icon} ${r.sheetName}: ${pct}% (${r.correct}/${r.total})  [${tag}] ${elapsed}ms`);
+        return { sheetName: r.sheetName, accuracy: r.accuracy, correct: r.correct, total: r.total, failures: r.failures, elapsed, status: 'ok' };
+      });
+    } catch (err) {
+      const elapsed = Date.now() - evalStart;
+      const isOOM = err.killed || err.signal === 'SIGKILL' || (err.message && err.message.includes('ENOMEM'));
+      const reason = isOOM ? 'OOM' : (err.signal || 'crash');
+      console.log(`  XX cluster [${clusterSheets.join(', ')}]: ${reason}  ${elapsed}ms`);
+      clusterMeta.push({ clusterSheets, iters: 0, converged: false, nonFiniteCell: null });
+      return members.map(m => { completed++; return { sheetName: m.sheetName, accuracy: 0, correct: 0, total: 0, failures: [], elapsed, status: isOOM ? 'oom' : 'crash', error: isOOM ? `OOM (killed after ${(elapsed / 1000).toFixed(1)}s)` : err.message?.slice(0, 200) }; });
+    }
+  }
+
+  // Run with concurrency limit. A cluster counts as ONE slot but expands to one
+  // result row per member sheet, so per-sheet aggregation downstream is unchanged.
   for (let i = 0; i < tasks.length; i += CONCURRENCY) {
     const batch = tasks.slice(i, i + CONCURRENCY);
-    const batchResults = await Promise.all(batch.map(evalOneSheet));
-    results.push(...batchResults);
+    const batchResults = await Promise.all(batch.map(t =>
+      t.kind === 'cluster' ? evalOneCluster(t) : evalOneSheet(t)));
+    for (const r of batchResults) {
+      if (Array.isArray(r)) results.push(...r);
+      else results.push(r);
+    }
   }
 
   // Aggregate
@@ -404,8 +591,10 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
     summary: {
       chunkedDir,
       totalGroundTruthCells: totalCells,
-      sheetsEvaluated: tasks.length,
+      sheetsEvaluated: results.length,
       sheetsSkipped: skipped.length,
+      clustersTotal: clusterMeta.length,
+      clustersConverged: clusterMeta.filter(c => c.converged).length,
       sheetsPassing: sheetsOk,
       sheetsWithErrors: sheetsError,
       sheetsOom: sheetsOom,
@@ -426,6 +615,18 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
       error: r.error || null,
       topFailures: (r.failures || []).slice(0, 5),
     })),
+    // Returns/MIP cone: accuracy ONLY (never the value — proprietary) for each
+    // named output whose cell lives in a converged cluster (MIP Proceeds, hurdle).
+    namedOutputs: namedOfInterest.map(o => {
+      const expected = allGt[o.cell];
+      const actual = namedCellValues[o.cell];
+      let accuracy = null;
+      if (typeof expected === 'number' && typeof actual === 'number') {
+        const rel = Math.abs(expected) < 1e-9 ? Math.abs(actual) : Math.abs((actual - expected) / expected);
+        accuracy = parseFloat(((1 - Math.min(1, rel)) * 100).toFixed(2));
+      }
+      return { name: o.name, cell: o.cell, accuracy, measured: typeof actual === 'number' };
+    }),
     skipped,
     topFailures: allFailures
       .sort((a, b) => Math.abs(b.relError) - Math.abs(a.relError))
@@ -439,7 +640,7 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
   console.log('='.repeat(60));
   console.log('  Summary');
   console.log('-'.repeat(60));
-  console.log(`  Sheets evaluated:    ${tasks.length}`);
+  console.log(`  Sheets evaluated:    ${results.length}${clusterMeta.length ? ` (${clusterMeta.filter(c => c.converged).length}/${clusterMeta.length} clusters converged)` : ''}`);
   console.log(`  Sheets passing >95%: ${sheetsOk}`);
   console.log(`  Sheets with errors:  ${sheetsError}`);
   console.log(`  Sheets OOM:          ${sheetsOom}`);
