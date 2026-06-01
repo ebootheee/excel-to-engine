@@ -187,7 +187,18 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
 // ---------------------------------------------------------------------------
 
 fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> String {
-    let name_upper = name.to_uppercase();
+    // Excel stores newer functions with future-function prefixes in the file
+    // format: `_xlfn.` (e.g. MINIFS/MAXIFS/XNPV) and `_xlfn._xlws.` (dynamic-array
+    // spills like FILTER/SORT/UNIQUE). Strip them so dispatch matches the bare
+    // Excel name — otherwise `_XLFN._XLWS.FILTER` etc. fall through to the _fn()
+    // stub even though the function is implemented.
+    let raw_upper = name.to_uppercase();
+    let name_upper = raw_upper
+        .strip_prefix("_XLFN._XLWS.")
+        .or_else(|| raw_upper.strip_prefix("_XLFN."))
+        .or_else(|| raw_upper.strip_prefix("_XLWS."))
+        .unwrap_or(&raw_upper)
+        .to_string();
 
     // Helper: transpile a single arg
     let arg = |i: usize| -> String {

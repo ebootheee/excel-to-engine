@@ -175,11 +175,17 @@ function buildFnTestSheet() {
     ws[`E${r}`] = { v: fnFlag[i] };
   }
   // Formula cells: label in F, formula in G — one per new function.
-  ws['F2'] = { v: 'XNPV' };       ws['G2'] = fv('XNPV(0.1,B2:B6,A2:A6)', XNPV_EXPECTED);
-  ws['F3'] = { v: 'MinValA' };    ws['G3'] = fv('MINIFS(D2:D6,C2:C6,"A")', MINIFS_A);
-  ws['F4'] = { v: 'MaxValA' };    ws['G4'] = fv('MAXIFS(D2:D6,C2:C6,"A")', MAXIFS_A);
-  ws['F5'] = { v: 'FlaggedSum' }; ws['G5'] = fv('SUM(FILTER(D2:D6,E2:E6))', FILTER_SUM);
-  ws['!ref'] = 'A1:G6';
+  // Rows 2-5 use bare Excel names; rows 6-8 use the `_xlfn.`/`_xlfn._xlws.`
+  // future-function prefixes EXACTLY as Excel stores MINIFS/MAXIFS/FILTER in the
+  // real models (the transpiler must strip the prefix before dispatch).
+  ws['F2'] = { v: 'XNPV' };          ws['G2'] = fv('XNPV(0.1,B2:B6,A2:A6)', XNPV_EXPECTED);
+  ws['F3'] = { v: 'MinValA' };       ws['G3'] = fv('MINIFS(D2:D6,C2:C6,"A")', MINIFS_A);
+  ws['F4'] = { v: 'MaxValA' };       ws['G4'] = fv('MAXIFS(D2:D6,C2:C6,"A")', MAXIFS_A);
+  ws['F5'] = { v: 'FlaggedSum' };    ws['G5'] = fv('SUM(FILTER(D2:D6,E2:E6))', FILTER_SUM);
+  ws['F6'] = { v: 'MinValA_xlfn' };  ws['G6'] = fv('_xlfn.MINIFS(D2:D6,C2:C6,"A")', MINIFS_A);
+  ws['F7'] = { v: 'MaxValA_xlfn' };  ws['G7'] = fv('_xlfn.MAXIFS(D2:D6,C2:C6,"A")', MAXIFS_A);
+  ws['F8'] = { v: 'FlaggedSum_xlfn' }; ws['G8'] = fv('SUM(_xlfn._xlws.FILTER(D2:D6,E2:E6))', FILTER_SUM);
+  ws['!ref'] = 'A1:G8';
   return ws;
 }
 
