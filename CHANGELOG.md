@@ -1,5 +1,34 @@
 # excel-to-engine — Changelog
 
+## 2026-06-01 — Scenario-override lock in the chunked engine
+
+Converting a large operating-platform reporting model (80+ sheets, ~3M cells)
+surfaced a real bug in the transpiled engine: `ete eval --inputs` overrides
+were silently clobbered. The orchestrator applied overrides via `ctx.set(...)`
+before running sheets, but every cell — including pasted literals — is
+re-`set` by its own sheet's `compute()`, overwriting the override. Scenarios
+on any literal-backed input did nothing.
+
+### Fix (`pipelines/rust/src/chunked_emitter.rs`)
+
+- **Override lock.** `run(inputs)` now seeds `ctx._locked = new Set(keys)`
+  and writes overrides directly to `ctx.values`. `ComputeContext.set()`
+  early-returns for locked addresses, so a sheet's literal/formula setter
+  can no longer clobber a scenario input. Base runs (`inputs = {}`) get an
+  empty lock set → behavior unchanged.
+- Rebuilt the Rust parser; regenerated the engine. Rust unit tests 11/11,
+  chunked smoke 78/78, CLI use-case suite 132/132 — all green.
+
+### Observed during the conversion (informs the roadmap)
+
+- Reporting models with **text year headers** (`2024A`, `2025B`) defeat the
+  numeric-only date detector — a manual `timeline.columnMap` is needed.
+- The operating P&L down to Operating EBITDA reproduced the workbook base case
+  exactly and overrides cascaded correctly; some **below-EBITDA inputs flatten
+  to 0** when their source is an unpopulated cross-sheet range (e.g.
+  `sum(J60:U60)`), which drifts operating profit / balance-sheet rollforwards.
+  See ROADMAP "Transpiler fidelity below the operating line."
+
 ## 2026-05-07 — Security audit pass (PR #13, v0.2.0)
 
 External security review by @shanedog. Two commits, 8 files, 397/397

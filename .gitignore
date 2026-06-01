@@ -20,6 +20,7 @@ _extracted/
 .claude/
 tests/uat-*/
 chariot/
+outpost-model/
 
 # Internal telemetry
 project-telemetry.json

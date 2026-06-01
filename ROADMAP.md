@@ -24,6 +24,27 @@ when we next touch the monitor server or auth surface.
   builds. Document the mirror approach (vendor the tarball into the repo
   or a private registry) before any locked-down deployment.
 
+## Now — Transpiler fidelity below the operating line
+
+A large operating-platform reporting model (converted 2026-06-01) recomputes
+the operating P&L to Operating EBITDA exactly, but several below-EBITDA inputs
+flatten to 0 in the engine — a borrowing-cost input that resolves to a
+`sum(J60:U60)` cross-sheet range comes back empty, which cascades into
+operating profit, balance-sheet rollforwards, and leverage ratios. Worth
+investigating:
+
+- **Why such ranges come back empty.** Likely cross-sheet/array references or a
+  transpile gap on certain range/aggregation patterns. Pick one drifted cell
+  and trace it end-to-end.
+- **Mark non-reproducing cells.** When the engine recompute of a cell diverges
+  from ground truth beyond a tolerance, tag it in `_sources`/manifest so
+  `eval`/`scenario` can warn instead of silently serving a drifted value (a
+  per-model `manifest.fidelity` block can be hand-built today — automate it).
+- **Manual `timeline.columnMap` for text year headers.** The date-detector only
+  recognizes numeric years (`2024`), not text labels (`2024A`). Honor a
+  manifest-supplied `columnMap` in the scenario/aggregation path so reporting
+  models with `2024A/2025A/2026B` headers work without numeric headers.
+
 ## Now — V3 Polish + Production Validation
 
 ### CLI Field Testing

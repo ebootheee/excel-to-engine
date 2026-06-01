@@ -562,9 +562,11 @@ fn generate_orchestrator(graph: &SheetGraph, _partitions: &[SheetPartition]) -> 
     lines.push("export function run(inputs = {}) {".to_string());
     lines.push("  const ctx = new ComputeContext();".to_string());
     lines.push(String::new());
-    lines.push("  // Apply input overrides".to_string());
+    lines.push("  // Apply input overrides. Lock them so a sheet's own".to_string());
+    lines.push("  // literal/formula setter cannot clobber the scenario input.".to_string());
+    lines.push("  ctx._locked = new Set(Object.keys(inputs));".to_string());
     lines.push("  for (const [addr, val] of Object.entries(inputs)) {".to_string());
-    lines.push("    ctx.set(addr, val);".to_string());
+    lines.push("    ctx.values[addr] = val;".to_string());
     lines.push("  }".to_string());
     lines.push(String::new());
 
@@ -657,8 +659,11 @@ class ComputeContext {
 
   /**
    * Set a cell value by qualified address.
+   * Locked addresses (seeded as scenario overrides via run(inputs)) are
+   * immutable — a sheet's own literal/formula setter cannot clobber them.
    */
   set(addr, value) {
+    if (this._locked !== undefined && this._locked.has(addr)) return;
     this.values[addr] = value;
   }
 
