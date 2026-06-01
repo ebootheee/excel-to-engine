@@ -291,7 +291,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     writeln!(w)?;
 
     // Runtime helpers for Excel functions — import from shared module
-    writeln!(w, "{}", "import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER } from './_helpers.mjs';")?;
+    writeln!(w, "{}", "import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _filter } from './_helpers.mjs';")?;
     writeln!(w)?;
 
     // compute(ctx) function
@@ -703,6 +703,7 @@ export function run(inputs = {}, options = {}) {"#.to_string());
         // Run the entire cluster in a convergence loop, recording telemetry.
         let _prevClusterDelta = Infinity, _clusterStale = 0;
         let _iters = 0, _lastDelta = Infinity, _conv = false;
+        let _nonFiniteCell = null, _nonFiniteStreak = 0;
         for (let iter = 0; iter < MAX_ITER; iter++) {
           _iters = iter + 1;
           const snapshot = JSON.stringify(ctx.values);
@@ -713,8 +714,14 @@ export function run(inputs = {}, options = {}) {"#.to_string());
           const after = ctx.values;
           const before = JSON.parse(snapshot);
           let maxDelta = 0;
+          let _badCell = null;
           for (const key in after) {
             if (typeof after[key] !== 'number') continue;
+            // Lock-grade NaN-guard: a non-finite cell (Inf/NaN — typically a
+            // waterfall/coverage formula dividing by a cold-started 0) must never
+            // look like convergence. Record it; a persistent non-finite fixed point
+            // is reported converged=false rather than silently poisoning the result.
+            if (!Number.isFinite(after[key])) { _badCell = key; break; }
             const _b = before[key];
             // A cell going undefined -> number is a change, not convergence.
             // (The original loop skipped these, so the first pass — where every
@@ -723,13 +730,22 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             if (typeof _b !== 'number') { maxDelta = Infinity; break; }
             maxDelta = Math.max(maxDelta, Math.abs(after[key] - _b));
           }
+          if (_badCell !== null) {
+            _nonFiniteCell = _badCell;
+            _nonFiniteStreak++;
+            _lastDelta = Infinity;
+            _prevClusterDelta = Infinity;
+            if (_nonFiniteStreak >= 3) break; // not recovering — stop churning to MAX_ITER
+            continue;
+          }
+          _nonFiniteStreak = 0;
           _lastDelta = maxDelta;
           if (maxDelta < TOL) { _conv = true; break; }
           _clusterStale = (Math.abs(maxDelta - _prevClusterDelta) < TOL * 0.01) ? _clusterStale + 1 : 0;
           if (_clusterStale >= 5) break; // stale — values stopped improving
           _prevClusterDelta = maxDelta;
         }
-        _clusterMeta.push({ sheets: cluster.slice(), iterations: _iters, converged: _conv, maxDelta: _lastDelta });
+        _clusterMeta.push({ sheets: cluster.slice(), iterations: _iters, converged: _conv, maxDelta: _lastDelta, nonFiniteCell: _nonFiniteCell });
         for (const s of cluster) executed.add(s);
       }
     } else {
@@ -1422,6 +1438,40 @@ function _countifs(criteriaPairs) {
   return count;
 }
 
+function _minifs(valueRange, criteriaPairs) {
+  if (!Array.isArray(valueRange)) return 0;
+  const matched = [];
+  for (let i = 0; i < valueRange.length; i++) {
+    let ok = true;
+    for (const [cr, cv] of criteriaPairs) {
+      if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { ok = false; break; }
+    }
+    if (ok && typeof valueRange[i] === 'number' && isFinite(valueRange[i])) matched.push(valueRange[i]);
+  }
+  return matched.length ? Math.min(...matched) : 0; // Excel MINIFS: 0 when no match
+}
+
+function _maxifs(valueRange, criteriaPairs) {
+  if (!Array.isArray(valueRange)) return 0;
+  const matched = [];
+  for (let i = 0; i < valueRange.length; i++) {
+    let ok = true;
+    for (const [cr, cv] of criteriaPairs) {
+      if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { ok = false; break; }
+    }
+    if (ok && typeof valueRange[i] === 'number' && isFinite(valueRange[i])) matched.push(valueRange[i]);
+  }
+  return matched.length ? Math.max(...matched) : 0; // Excel MAXIFS: 0 when no match
+}
+
+function _filter(array, include, ifEmpty) {
+  if (!Array.isArray(array)) return array;
+  const arr = array.flat();
+  const inc = Array.isArray(include) ? include.flat() : arr.map(() => include);
+  const out = arr.filter((_, i) => { const f = inc[i]; return f === true || (typeof f === 'number' && f !== 0); });
+  return out.length ? out : (ifEmpty !== undefined ? ifEmpty : 0);
+}
+
 function _colNum(col) {
   let n = 0;
   for (const ch of col) n = n * 26 + ch.charCodeAt(0) - 64;
@@ -1502,6 +1552,19 @@ function computeXIRR(cashflows, dates, guess) {
     if (Math.abs(dr) < 1e-10 && Math.abs(f) < 1e-8) break;
   }
   return isFinite(r) ? r : 0;
+}
+
+function computeXNPV(rate, cashflows, dates) {
+  if (!Array.isArray(cashflows) || !Array.isArray(dates)) return 0;
+  const cfs = cashflows.flat().map(v => +v || 0);
+  const ds = dates.flat().map(d => typeof d === 'number' ? d : Date.parse(d) / 86400000 + 25569);
+  const d0 = ds[0];
+  let npv = 0;
+  for (let t = 0; t < cfs.length; t++) {
+    const years = (ds[t] - d0) / 365; // Excel XNPV uses a 365-day basis
+    npv += cfs[t] / Math.pow(1 + rate, years);
+  }
+  return npv;
 }
 
 function computePMT(rate, nper, pv) {

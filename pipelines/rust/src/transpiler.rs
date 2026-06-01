@@ -300,6 +300,22 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
             format!("Math.max(...[{}].flat())", parts.join(","))
         }
 
+        "MINIFS" | "MAXIFS" => {
+            // MINIFS/MAXIFS(value_range, criteria_range1, criteria1, ...) —
+            // mirrors SUMIFS criteria-pair handling, reducing to min/max instead of sum.
+            let value_range = transpile(&args[0], config);
+            let mut pairs = Vec::new();
+            let mut i = 1;
+            while i + 1 < args.len() {
+                let cr = transpile(&args[i], config);
+                let cv = transpile(&args[i + 1], config);
+                pairs.push(format!("[{}, {}]", cr, cv));
+                i += 2;
+            }
+            let helper = if name_upper == "MINIFS" { "_minifs" } else { "_maxifs" };
+            format!("{}({}, [{}])", helper, value_range, pairs.join(", "))
+        }
+
         "ABS" => format!("Math.abs({})", arg(0)),
         "SQRT" => format!("Math.sqrt({})", arg(0)),
         "EXP" => format!("Math.exp({})", arg(0)),
@@ -530,6 +546,13 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "FV" => format!("computeFV({}, {}, {})", arg(0), arg(1), arg(2)),
         "RATE" => format!("computeRATE({}, {}, {})", arg(0), arg(1), arg(2)),
         "NPER" => format!("computeNPER({}, {}, {})", arg(0), arg(1), arg(2)),
+        "XNPV" => {
+            // XNPV(rate, values, dates) — date-aware NPV (Excel 365-day basis)
+            let rate = arg(0);
+            let vals = transpile(args.get(1).unwrap_or(&Expr::Number(0.0)), config);
+            let dates = transpile(args.get(2).unwrap_or(&Expr::Number(0.0)), config);
+            format!("computeXNPV({}, {}, {})", rate, vals, dates)
+        }
 
         // ----------------------------------------------------------------
         // Statistical
@@ -609,6 +632,16 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "TYPE" => format!("/* TYPE */ 1"),
         "N" => format!("(+({}) || 0)", arg(0)),
         "T" => format!("(typeof ({}) === 'string' ? ({}) : ``)", arg(0), arg(0)),
+
+        "FILTER" => {
+            // FILTER(array, include, [if_empty]) — subset of `array` where the
+            // parallel `include` mask is truthy. Single-cell array value (this
+            // engine has no multi-cell spill); replaces the _fn stub with real math.
+            let array = transpile(&args[0], config);
+            let include = transpile(args.get(1).unwrap_or(&Expr::Number(1.0)), config);
+            let if_empty = if args.len() >= 3 { arg(2) } else { "0".to_string() };
+            format!("_filter({}, {}, {})", array, include, if_empty)
+        }
 
         // ----------------------------------------------------------------
         // Unknown function — emit a runtime placeholder call
