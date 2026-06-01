@@ -44,6 +44,10 @@ const SAMPLE_SIZE = parseInt(getFlag('sample', process.env.SAMPLE_SIZE || '2000'
 const SKIP_CLUSTERS = args.includes('--skip-clusters');
 const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '8192');
 const MAX_SHEET_SIZE_MB = parseInt(process.env.MAX_SHEET_SIZE_MB || '150');
+// Per-task child timeout. A real cross-sheet cluster (17 sheets, millions of
+// formulas, seeded from a multi-GB ground truth) needs more than the per-sheet
+// default — raise EVAL_TIMEOUT_MS for the single-pass cone measurement.
+const EVAL_TIMEOUT_MS = parseInt(process.env.EVAL_TIMEOUT_MS || '300000');
 
 // ── Validate inputs ────────────────────────────────────────────────────────
 const gtPath = join(chunkedDir, '_ground-truth.json');
@@ -370,7 +374,7 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
       const { stdout: evalOut } = await execAsync(
         'node',
         [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript],
-        { timeout: 300000, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
+        { timeout: EVAL_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
       );
       const result = JSON.parse(evalOut);
       completed++;
@@ -520,7 +524,7 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
       const { stdout: evalOut } = await execAsync(
         'node',
         [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript],
-        { timeout: 300000, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
+        { timeout: EVAL_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
       );
       const out = JSON.parse(evalOut);
       const elapsed = Date.now() - evalStart;
