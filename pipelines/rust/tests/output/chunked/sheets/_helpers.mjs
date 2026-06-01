@@ -186,6 +186,40 @@ export function _countifs(criteriaPairs) {
   return count;
 }
 
+export function _minifs(valueRange, criteriaPairs) {
+  if (!Array.isArray(valueRange)) return 0;
+  const matched = [];
+  for (let i = 0; i < valueRange.length; i++) {
+    let ok = true;
+    for (const [cr, cv] of criteriaPairs) {
+      if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { ok = false; break; }
+    }
+    if (ok && typeof valueRange[i] === 'number' && isFinite(valueRange[i])) matched.push(valueRange[i]);
+  }
+  return matched.length ? Math.min(...matched) : 0; // Excel MINIFS: 0 when no match
+}
+
+export function _maxifs(valueRange, criteriaPairs) {
+  if (!Array.isArray(valueRange)) return 0;
+  const matched = [];
+  for (let i = 0; i < valueRange.length; i++) {
+    let ok = true;
+    for (const [cr, cv] of criteriaPairs) {
+      if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { ok = false; break; }
+    }
+    if (ok && typeof valueRange[i] === 'number' && isFinite(valueRange[i])) matched.push(valueRange[i]);
+  }
+  return matched.length ? Math.max(...matched) : 0; // Excel MAXIFS: 0 when no match
+}
+
+export function _filter(array, include, ifEmpty) {
+  if (!Array.isArray(array)) return array;
+  const arr = array.flat();
+  const inc = Array.isArray(include) ? include.flat() : arr.map(() => include);
+  const out = arr.filter((_, i) => { const f = inc[i]; return f === true || (typeof f === 'number' && f !== 0); });
+  return out.length ? out : (ifEmpty !== undefined ? ifEmpty : 0);
+}
+
 export function _colNum(col) {
   let n = 0;
   for (const ch of col) n = n * 26 + ch.charCodeAt(0) - 64;
@@ -266,6 +300,19 @@ export function computeXIRR(cashflows, dates, guess) {
     if (Math.abs(dr) < 1e-10 && Math.abs(f) < 1e-8) break;
   }
   return isFinite(r) ? r : 0;
+}
+
+export function computeXNPV(rate, cashflows, dates) {
+  if (!Array.isArray(cashflows) || !Array.isArray(dates)) return 0;
+  const cfs = cashflows.flat().map(v => +v || 0);
+  const ds = dates.flat().map(d => typeof d === 'number' ? d : Date.parse(d) / 86400000 + 25569);
+  const d0 = ds[0];
+  let npv = 0;
+  for (let t = 0; t < cfs.length; t++) {
+    const years = (ds[t] - d0) / 365; // Excel XNPV uses a 365-day basis
+    npv += cfs[t] / Math.pow(1 + rate, years);
+  }
+  return npv;
 }
 
 export function computePMT(rate, nper, pv) {

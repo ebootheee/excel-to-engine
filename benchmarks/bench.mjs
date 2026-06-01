@@ -66,12 +66,13 @@ async function benchModel(model) {
   const t = Date.now();
   let evalError = null;
   try {
-    // --skip-clusters by default: circular-cluster sheets need the single-pass
-    // orchestrator eval (a follow-up); evaluating them per-sheet is infeasible on
-    // big models. Pass --with-clusters once that lands. Standalone sheets give a
-    // fast, real accuracy number; skipped sheets are reported with their reason.
+    // Clusters are MEASURED by default now: per-sheet-eval's single-pass
+    // orchestrator converges each cross-sheet cluster once and scores all members,
+    // so the returns/MIP cone is no longer skipped. Pass --skip-clusters to bench
+    // for the fast standalone-only number. (--with-clusters is the default and is
+    // accepted as a no-op for back-compat.)
     const evalArgs = ['--max-old-space-size=8192', EVAL_SCRIPT, model.chunked, '--output', reportPath, '--concurrency', String(CONCURRENCY)];
-    if (!process.argv.includes('--with-clusters')) evalArgs.push('--skip-clusters');
+    if (process.argv.includes('--skip-clusters')) evalArgs.push('--skip-clusters');
     await execFileAsync('node', evalArgs, { maxBuffer: 64 * 1024 * 1024 });
   } catch (e) {
     evalError = (e.stderr || e.message || String(e)).slice(0, 200);
@@ -94,6 +95,7 @@ async function benchModel(model) {
     summary: report.summary,
     skipped: report.skipped || [],
     sheets,
+    namedOutputs: report.namedOutputs || [],
     efficacy: { wallMs, gtSizeMB },
   };
 }
@@ -136,14 +138,16 @@ function renderBaseline(stamp, results) {
   const L = [];
   L.push('# model benchmark — baseline & history');
   L.push('');
-  L.push('Real accuracy: each standalone sheet recomputed live vs ground truth via');
+  L.push('Real accuracy: each sheet recomputed live vs ground truth via');
   L.push('`eval/per-sheet-eval.mjs` (numbers within 1% rel. tol, strings exact).');
-  L.push('Circular-cluster sheets and oversized sheets are **skipped** for now (see');
-  L.push('the Skipped column + blockers below) pending the single-pass orchestrator');
-  L.push('eval; run with `--with-clusters` once that lands. Aggregate-only — no cell');
+  L.push('Cross-sheet circular clusters are now **measured** — the single-pass');
+  L.push('orchestrator converges each cluster once and scores every member, so the');
+  L.push('returns/MIP cone is included (see the Returns cone section). Only oversized');
+  L.push('sheets (> module-size limit) remain skipped. Aggregate-only — no cell');
   L.push('values or full sheet inventory. Regenerate:');
-  L.push('`node benchmarks/bench.mjs --root <engines>`. Full per-sheet detail');
-  L.push('lands in the gitignored `benchmarks/results/`.');
+  L.push('`node benchmarks/bench.mjs --root <engines>` (add --skip-clusters for the');
+  L.push('fast standalone-only number). Full per-sheet detail lands in the gitignored');
+  L.push('`benchmarks/results/`.');
   L.push('');
   L.push(`_Last run: ${stamp}_`);
   L.push('');
@@ -171,6 +175,25 @@ function renderBaseline(stamp, results) {
       `blockers: ${blockers.join('; ') || 'none surfaced'}`);
   }
   L.push('');
+
+  // Returns / MIP cone — accuracy % ONLY (never the value; proprietary).
+  const anyNamed = results.some(r => (r.namedOutputs || []).length);
+  if (anyNamed) {
+    L.push('## Returns / MIP cone (named-output accuracy)');
+    L.push('');
+    L.push('Named outputs whose cell lives in a converged circular cluster — the cone a');
+    L.push('lock-grade artifact must reproduce (MIP Proceeds, hurdle, …). Accuracy %, never the figure.');
+    L.push('');
+    for (const r of results) {
+      if (!r.summary) continue;
+      const named = (r.namedOutputs || []).filter(n => n.measured);
+      const cc = r.summary.clustersConverged ?? 0, ct = r.summary.clustersTotal ?? 0;
+      if (!named.length) { L.push(`- **${r.label}** (${cc}/${ct} clusters converged): no cluster-resident named outputs detected`); continue; }
+      const parts = named.map(n => `${n.name} ${n.accuracy != null ? n.accuracy + '%' : 'n/a'}`);
+      L.push(`- **${r.label}** (${cc}/${ct} clusters converged): ${parts.join(' · ')}`);
+    }
+    L.push('');
+  }
   return L.join('\n');
 }
 const baselinePath = join(__dirname, 'BASELINE.md');

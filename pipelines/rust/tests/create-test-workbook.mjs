@@ -144,11 +144,57 @@ function buildSummarySheet() {
   return ws;
 }
 
+// ── FnTest sheet ──────────────────────────────────────────────────────────────
+// Acyclic sheet exercising the transpiler's date / criteria / array functions
+// (XNPV, MINIFS, MAXIFS, FILTER) end-to-end so they resolve through real helpers
+// instead of the _fn() stub. FILTER's `include` is a numeric FLAG column (an
+// array), not an inline range-comparison — this engine evaluates a bare
+// `range = "x"` as a scalar, so spill masks must come from a precomputed column.
+const XNPV_RATE = 0.1;
+const fnDates = [43831, 44197, 44562, 44927, 45292]; // 2020..2024 Jan-1 Excel serials
+const fnCF    = [-1000, 300, 400, 500, 700];
+const fnCat   = ['A', 'B', 'A', 'B', 'A'];
+const fnVal   = [10, 50, 20, 80, 40];
+const fnFlag  = [1, 0, 1, 0, 1];
+// Expected ground truth, computed with the SAME math the runtime helpers use.
+const XNPV_EXPECTED = fnCF.reduce((acc, cf, i) => acc + cf / Math.pow(1 + XNPV_RATE, (fnDates[i] - fnDates[0]) / 365), 0);
+const MINIFS_A   = Math.min(...fnVal.filter((_, i) => fnCat[i] === 'A')); // 10
+const MAXIFS_A   = Math.max(...fnVal.filter((_, i) => fnCat[i] === 'A')); // 40
+const FILTER_SUM = fnVal.filter((_, i) => fnFlag[i]).reduce((a, b) => a + b, 0); // 70
+
+function buildFnTestSheet() {
+  const ws = {};
+  ws['A1'] = { v: 'Date' }; ws['B1'] = { v: 'CF' }; ws['C1'] = { v: 'Cat' };
+  ws['D1'] = { v: 'Val' };  ws['E1'] = { v: 'Flag' };
+  for (let i = 0; i < 5; i++) {
+    const r = i + 2;
+    ws[`A${r}`] = { v: fnDates[i] };
+    ws[`B${r}`] = { v: fnCF[i] };
+    ws[`C${r}`] = { v: fnCat[i] };
+    ws[`D${r}`] = { v: fnVal[i] };
+    ws[`E${r}`] = { v: fnFlag[i] };
+  }
+  // Formula cells: label in F, formula in G — one per new function.
+  // Rows 2-5 use bare Excel names; rows 6-8 use the `_xlfn.`/`_xlfn._xlws.`
+  // future-function prefixes EXACTLY as Excel stores MINIFS/MAXIFS/FILTER in the
+  // real models (the transpiler must strip the prefix before dispatch).
+  ws['F2'] = { v: 'XNPV' };          ws['G2'] = fv('XNPV(0.1,B2:B6,A2:A6)', XNPV_EXPECTED);
+  ws['F3'] = { v: 'MinValA' };       ws['G3'] = fv('MINIFS(D2:D6,C2:C6,"A")', MINIFS_A);
+  ws['F4'] = { v: 'MaxValA' };       ws['G4'] = fv('MAXIFS(D2:D6,C2:C6,"A")', MAXIFS_A);
+  ws['F5'] = { v: 'FlaggedSum' };    ws['G5'] = fv('SUM(FILTER(D2:D6,E2:E6))', FILTER_SUM);
+  ws['F6'] = { v: 'MinValA_xlfn' };  ws['G6'] = fv('_xlfn.MINIFS(D2:D6,C2:C6,"A")', MINIFS_A);
+  ws['F7'] = { v: 'MaxValA_xlfn' };  ws['G7'] = fv('_xlfn.MAXIFS(D2:D6,C2:C6,"A")', MAXIFS_A);
+  ws['F8'] = { v: 'FlaggedSum_xlfn' }; ws['G8'] = fv('SUM(_xlfn._xlws.FILTER(D2:D6,E2:E6))', FILTER_SUM);
+  ws['!ref'] = 'A1:G8';
+  return ws;
+}
+
 // ── Write workbook ─────────────────────────────────────────────────────────────
 const wb = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(wb, buildAssumptionsSheet(), 'Assumptions');
 XLSX.utils.book_append_sheet(wb, buildCashflowsSheet(), 'Cashflows');
 XLSX.utils.book_append_sheet(wb, buildSummarySheet(), 'Summary');
+XLSX.utils.book_append_sheet(wb, buildFnTestSheet(), 'FnTest');
 
 const outPath = join(__dir, 'test-model.xlsx');
 // Write via buffer (the SheetJS ESM build has no fs binding, so writeFile throws).

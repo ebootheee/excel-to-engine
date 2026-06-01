@@ -1,5 +1,23 @@
 # excel-to-engine — Plan
 
+## Status: Lock-grade engine — Outpost A-1 MIP cone (2026-06-01, branch `feat/lockgrade-cone`)
+
+Closing the two gaps that block lock-grade for the Outpost A-1 MIP (a legal
+reproducibility artifact). **Both gaps' code is done and confirmed against the real
+model:** (1) the returns no longer resolve through `_fn()` stubs — XNPV/FILTER/MINIFS/
+MAXIFS transpiled (with `_xlfn.`/`_xlfn._xlws.` prefix-stripping); a fresh real parse
+shows **0** stubs of the four in the returns cone. (2) a single-pass cluster orchestrator
+converges the 17-sheet returns cluster once and scores all members, so the cone can be
+measured (was `--skip-clusters`'d). Plus a convergence **NaN-guard** (honest
+non-convergence contract) for the T-076 cold-probe — diagnosed as waterfall fragility, NOT
+the override-convergence bug PR #37 addresses. Remaining before flipping
+`MIPPY_LOCK_GRADE_CONFIRMED` / moving ADR-026 off Proposed: measure the real cone
+end-to-end (a single convergence over 5.8M seeded cells does NOT finish even at 12 GB /
+900 s — needs **GT-seed scoping**, the scoped-subgraph #22/T-078 approach, not just more
+resources) and regenerate the contract so the formal `--assert-no-fallbacks` gate runs on
+the rebuilt real engine. Posture HOLDS — parametric `v1_1_outpost_a1` keeps shipping. See
+CHANGELOG 2026-06-01.
+
 ## Status: Analyst-UX gate at **12/12** (Wave 7 measured 2026-05-31 — first clean sweep)
 
 The persona-journey gate has moved 2/12 → 3/12 → 7/12 (Wave 5) → 8/12 (Wave 6) → **12/12
