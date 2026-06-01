@@ -1,5 +1,29 @@
 # excel-to-engine — Roadmap
 
+## Now — Lock-grade engine for the Outpost A-1 MIP cone (2026-06-01)
+
+Make the converted engine a legal reproducibility artifact for the Outpost A-1 MIP.
+Two gaps, both closed in code on `feat/lockgrade-cone` and confirmed on the real model:
+- **Returns transpiled (no `_fn` stubs):** XNPV / FILTER / MINIFS / MAXIFS + `_xlfn.` /
+  `_xlfn._xlws.` prefix-stripping; a fresh real parse → **0** stubs of the four in the
+  returns cone (`Lease Amortization!AO87`, `Equity!AN234`, `GPP Promote!G24`, …).
+- **Single-pass cluster orchestrator:** the 17-sheet returns cluster converges once and
+  every member is scored (was `--skip-clusters`'d → cone unmeasured).
+- **NaN-guard** convergence (T-076 honest non-convergence contract); diagnosis: waterfall
+  fragility, not the override bug PR #37 fixes.
+
+**Next (to actually flip lock-grade):**
+- **GT-seed scoping** — the cone measurement is now blocked on this, not on the orchestrator:
+  a single convergence over 5.8M seeded cells doesn't finish even at 12 GB / 900 s, so seed
+  only the cluster's external reads (the scoped-subgraph #22/T-078 lane). This same scoped
+  engine is what makes the {exitYear, exit value, hurdle} → MIP grid sampleable (full eager
+  `run()` is infeasible).
+- Regenerate `named-outputs.json` on the rebuilt engine so the formal `--assert-no-fallbacks`
+  gate runs (function-level AFTER already proven: 0 stubs of the four in the returns cone).
+- Transpile `AVERAGEIFS` (stubbed ×3101, outside the returns cone — same SUMIFS pattern).
+- Sample the scoped grid for clean convergence; the NaN-guard already makes any residual
+  non-convergence honest (`converged:false` + `meta.nonFiniteCell`).
+
 ## Now — Analyst usability + coding-agent handoff (2026-05-29)
 
 Make the toolkit genuinely usable by a non-technical finance analyst (PE/VC/RE/

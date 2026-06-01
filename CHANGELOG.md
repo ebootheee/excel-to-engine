@@ -1,5 +1,66 @@
 # excel-to-engine — Changelog
 
+## 2026-06-01 — Lock-grade engine: returns transpiled (no _fn stubs) + single-pass cluster cone + NaN-guard
+
+Closing the two named gaps that kept the Outpost A-1 MIP cone from being lock-grade
+(branch `feat/lockgrade-cone`, off origin/main Wave 7 `7e103b9`). Both gaps confirmed
+against the **real** model, not just synthetics.
+
+**Gap 2 — the returns no longer resolve through `_fn()` stubs.** The golden gate on the
+real `outpost-a1`/`a2` builds showed the returns cone (grossMOIC / grossIRR / netMOIC /
+netIRR / equityBasis) resolving through exactly four unimplemented functions: `XNPV`,
+`_XLFN._XLWS.FILTER`, `_XLFN.MINIFS`, `_XLFN.MAXIFS`. Added transpiler arms + runtime
+helpers for all four (`transpiler.rs`, `chunked_emitter.rs`): `computeXNPV` (Excel
+365-day basis), `_minifs`/`_maxifs` (numeric-matched, blank/text-ignoring like Excel),
+`_filter` (single-cell array value; `include` = a precomputed flag column, since the
+engine evaluates a bare `range = x` as a scalar — no spill). **Critical:** Excel stores
+newer functions with future-function prefixes (`_xlfn.`, `_xlfn._xlws.`) —
+`transpile_function` now strips them before dispatch, or FILTER/MINIFS/MAXIFS would still
+stub on the real model (only XNPV is stored bare; a bare-name fixture gave a false green).
+Re-parsing the real `Outpost-A-1.xlsx` (76 MB, 5.8M cells) with the fixed parser: **0**
+`_fn` stubs of the four functions remain; the exact flagged cells now compute for real
+(`Lease Amortization!AO87 → computeXNPV`, `Equity!AN234 → computeXIRR(_filter(…))`,
+`GPP Promote!G24 → _minifs`). Helper usage on the real model: computeXNPV ×7921,
+_minifs ×644, _maxifs ×148, _filter ×81. Synthetic `FnTest` fixture exercises all four
+(bare + `_xlfn`-prefixed); smoke 122/122. (`AVERAGEIFS` is also stubbed ×3101 but is NOT
+in the returns cone — the obvious next add.)
+
+**Gap 1 — single-pass cluster orchestrator measures the MIP cone.** `eval/per-sheet-eval.mjs`
+re-ran the full convergence loop once per cluster member (O(cluster²)), so the real
+models' 17-sheet circular returns cluster was `--skip-clusters`'d and the cone went
+unmeasured. Now a cross-sheet cluster is ONE task: import every member, converge once,
+score all members from the shared fixed point (one result row per member; standalone path
+untouched; membership from `_graph.json` SCC). `--skip-clusters` flips to OPT-OUT;
+`bench.mjs` renders a "Returns / MIP cone" section (named-output accuracy %, never the
+figure). Fixture test: 1 convergence, 2 members, 100% (test:per-sheet-eval 10/10). On the
+REAL cone this eliminates the 17× redundancy but surfaces a SECOND wall: a SINGLE
+convergence over 16 large modules seeded from all 5.8M ground-truth cells does NOT complete
+even at 12 GB / 900 s (confirmed — ran the full 900 s then was killed). The bottleneck is
+the seed-everything-per-child design, so measuring the cone needs **GT-seed scoping** (seed
+only the cluster's external reads — the scoped-subgraph #22/T-078 approach), NOT just more
+resources. `EVAL_TIMEOUT_MS` is now configurable; standalone sheets re-baseline at
+**99.94%** (1767/1768); the 17-sheet returns cluster is not yet measured.
+
+**T-076 cold-probe diagnosis + NaN-guard.** The grid-sample NaN is **waterfall/convergence
+fragility, NOT the override-convergence bug PR #37 fixes**: an override cold-starts the
+cluster from 0 (`ctx.get → 0`), a waterfall/coverage formula divides by a not-yet-converged
+0 → Inf/NaN, and the convergence loop had no finite-check so NaN was sticky (ran to
+MAX_ITER, `converged:false`, poisoned values). PR #37's override lock pins the override
+cell but does nothing about the OTHER cluster cells seeding from 0. Added a NaN-guard to
+the convergence loop (`chunked_emitter.rs`): a non-finite cell is recorded
+(`meta.nonFiniteCell`) and stops the loop with `converged:false` — the honest
+non-convergence contract (refuse to lock on `converged:false`). Healthy clusters unchanged.
+Full eager `run()` is infeasible on the 5.8M-cell model (confirmed — climbs past 3 GB with
+no output), so the grid samples via the scoped/lazy path.
+
+Posture unchanged: `MIPPY_LOCK_GRADE_CONFIRMED` stays unflipped / ADR-026 stays Proposed
+until the cone is measured end-to-end and the no-fallback gate is green on the rebuilt real
+engine. This wave closes both engine-side gaps; the remaining lock-grade work is the
+cone-measurement resourcing (heap / GT-seed scoping) and regenerating the contract
+(named-outputs) so the formal `--assert-no-fallbacks` gate runs on the rebuilt real engine.
+Tests green: cargo 18/18, smoke 122/122, test:engine 21, test:runnable 20, test:lazy-engine
+19, test:per-sheet-eval 10, npm test.
+
 ## 2026-05-31 — Wave 7 MEASURED: schedule semantics + dial/format + model-type labeling → **12/12 (first clean sweep)**
 
 Re-ran the full hardened 12-persona journey after the Wave-7 wave. **pass/12: 8 → 12** — the
