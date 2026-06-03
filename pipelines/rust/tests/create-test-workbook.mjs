@@ -161,6 +161,8 @@ const XNPV_EXPECTED = fnCF.reduce((acc, cf, i) => acc + cf / Math.pow(1 + XNPV_R
 const MINIFS_A   = Math.min(...fnVal.filter((_, i) => fnCat[i] === 'A')); // 10
 const MAXIFS_A   = Math.max(...fnVal.filter((_, i) => fnCat[i] === 'A')); // 40
 const FILTER_SUM = fnVal.filter((_, i) => fnFlag[i]).reduce((a, b) => a + b, 0); // 70
+const _avgMatch = fnVal.filter((_, i) => fnCat[i] === 'A');
+const AVGIFS_A   = _avgMatch.reduce((a, b) => a + b, 0) / _avgMatch.length; // (10+20+40)/3 = 23.333…
 
 function buildFnTestSheet() {
   const ws = {};
@@ -185,7 +187,11 @@ function buildFnTestSheet() {
   ws['F6'] = { v: 'MinValA_xlfn' };  ws['G6'] = fv('_xlfn.MINIFS(D2:D6,C2:C6,"A")', MINIFS_A);
   ws['F7'] = { v: 'MaxValA_xlfn' };  ws['G7'] = fv('_xlfn.MAXIFS(D2:D6,C2:C6,"A")', MAXIFS_A);
   ws['F8'] = { v: 'FlaggedSum_xlfn' }; ws['G8'] = fv('SUM(_xlfn._xlws.FILTER(D2:D6,E2:E6))', FILTER_SUM);
-  ws['!ref'] = 'A1:G8';
+  // AVERAGEIFS / AVERAGEIF — stored bare (2007-era, like SUMIFS/COUNTIFS); the
+  // returns cone on the real A-2 model resolves net MOIC/IRR through AVERAGEIFS.
+  ws['F9'] = { v: 'AvgValA' };       ws['G9'] = fv('AVERAGEIFS(D2:D6,C2:C6,"A")', AVGIFS_A);
+  ws['F10'] = { v: 'AvgValA_if' };   ws['G10'] = fv('AVERAGEIF(C2:C6,"A",D2:D6)', AVGIFS_A);
+  ws['!ref'] = 'A1:G10';
   return ws;
 }
 

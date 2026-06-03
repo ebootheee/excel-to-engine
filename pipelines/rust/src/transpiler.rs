@@ -327,6 +327,33 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
             format!("{}({}, [{}])", helper, value_range, pairs.join(", "))
         }
 
+        "AVERAGEIF" | "AVERAGEIFS" => {
+            if name_upper == "AVERAGEIF" {
+                // AVERAGEIF(criteria_range, criteria, [average_range])
+                let range = transpile(&args[0], config);
+                let criteria = arg(1);
+                let avg_range = if args.len() >= 3 {
+                    transpile(&args[2], config)
+                } else {
+                    range.clone()
+                };
+                format!("_averageif({}, {}, {})", range, criteria, avg_range)
+            } else {
+                // AVERAGEIFS(average_range, criteria_range1, criteria1, ...) —
+                // mirrors SUMIFS criteria-pair handling, reducing to the mean of matches.
+                let value_range = transpile(&args[0], config);
+                let mut pairs = Vec::new();
+                let mut i = 1;
+                while i + 1 < args.len() {
+                    let cr = transpile(&args[i], config);
+                    let cv = transpile(&args[i + 1], config);
+                    pairs.push(format!("[{}, {}]", cr, cv));
+                    i += 2;
+                }
+                format!("_averageifs({}, [{}])", value_range, pairs.join(", "))
+            }
+        }
+
         "ABS" => format!("Math.abs({})", arg(0)),
         "SQRT" => format!("Math.sqrt({})", arg(0)),
         "EXP" => format!("Math.exp({})", arg(0)),
