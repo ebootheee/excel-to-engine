@@ -736,6 +736,9 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             // All slots undefined -> Infinity delta on this build pass, so the first
             // pass (every cell newly computed) can never falsely "converge".
             _before = new Array(_sampleKeys.length);
+            // No observable cluster cells: we can't confirm a fixed point, so don't
+            // let an empty scan read maxDelta=0 and falsely converge on pass 0.
+            if (_sampleKeys.length === 0) break; // converged stays false (honest)
           }
           let maxDelta = 0;
           let _badCell = null;
@@ -761,6 +764,13 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             _nonFiniteStreak++;
             _lastDelta = Infinity;
             _prevClusterDelta = Infinity;
+            // The mid-scan break above left _before STALE for every sample cell
+            // ordered after the non-finite one. Invalidate the whole baseline so the
+            // next finite pass recomputes it (-> maxDelta=Infinity once) instead of
+            // diffing across two iterations — otherwise a recovering oscillator could
+            // be compared to a same-phase stale value and falsely report converged.
+            // A non-finite pass can't converge anyway, so this costs <=1 iteration.
+            _before = new Array(_sampleKeys.length);
             if (_nonFiniteStreak >= 3) break; // not recovering — stop churning to MAX_ITER
             continue;
           }

@@ -124,6 +124,27 @@ console.log('Testing: cross-sheet circular model — cluster convergence telemet
 }
 
 // ---------------------------------------------------------------------------
+// Non-contractive cross-sheet cluster: must NOT false-converge (stale guard)
+// ---------------------------------------------------------------------------
+console.log('Testing: oscillating cross-sheet cluster reports converged=false');
+{
+  // A!B1 = 30 - B!B1 ; B!B1 = A!B1 → fixed point 15, but the iteration has
+  // eigenvalue -1: it oscillates (30,0,30,0...) and never reaches a fixed point.
+  // The sampled convergence loop must catch this via the staleness guard and
+  // report converged=false rather than locking a non-converged result.
+  const A = { '!ref': 'A1:B1', A1: { t: 's', v: 'A' }, B1: { t: 'n', v: 0, f: '30-SheetB!B1' } };
+  const B = { '!ref': 'A1:B1', A1: { t: 's', v: 'B' }, B1: { t: 'n', v: 0, f: 'SheetA!B1' } };
+  const { eng, cleanup } = await buildEngine({ SheetA: A, SheetB: B });
+
+  const r = eng.run();
+  assert(r.meta?.clusters?.length >= 1, 'oscillating cross-sheet cycle forms a cluster');
+  assert(r.meta?.converged === false, 'oscillating cluster is NOT reported converged');
+  assert(r.meta.iterations < 200, `staleness guard breaks early, not MAX_ITER (got ${r.meta.iterations})`);
+
+  cleanup();
+}
+
+// ---------------------------------------------------------------------------
 console.log('');
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
 process.exit(failed > 0 ? 1 : 0);
