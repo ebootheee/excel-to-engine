@@ -212,6 +212,29 @@ export function _maxifs(valueRange, criteriaPairs) {
   return matched.length ? Math.max(...matched) : 0; // Excel MAXIFS: 0 when no match
 }
 
+export function _averageif(range, criteria, avgRange) {
+  if (!Array.isArray(range)) return 0;
+  if (!Array.isArray(avgRange)) avgRange = range;
+  let sum = 0, n = 0;
+  for (let i = 0; i < range.length; i++) {
+    if (_matchesCriteria(range[i], criteria) && typeof avgRange[i] === 'number' && isFinite(avgRange[i])) { sum += avgRange[i]; n++; }
+  }
+  return n ? sum / n : 0; // Excel AVERAGEIF: #DIV/0! when no match; engine convention is 0
+}
+
+export function _averageifs(valueRange, criteriaPairs) {
+  if (!Array.isArray(valueRange)) return 0;
+  let sum = 0, n = 0;
+  for (let i = 0; i < valueRange.length; i++) {
+    let ok = true;
+    for (const [cr, cv] of criteriaPairs) {
+      if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { ok = false; break; }
+    }
+    if (ok && typeof valueRange[i] === 'number' && isFinite(valueRange[i])) { sum += valueRange[i]; n++; }
+  }
+  return n ? sum / n : 0; // Excel AVERAGEIFS: #DIV/0! when no match; engine convention is 0
+}
+
 export function _filter(array, include, ifEmpty) {
   if (!Array.isArray(array)) return array;
   const arr = array.flat();
