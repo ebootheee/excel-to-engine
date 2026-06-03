@@ -1,5 +1,53 @@
 # excel-to-engine — Changelog
 
+## 2026-06-03 — Lock-grade wave 2: cone-rebuild enablers (sampled-delta, GT-seed scoping, FoF NAV, #25) + adversarial review
+
+Branch `feat/lockgrade-wave2` (off origin/main `e259296`, the PR #38 merge). Four lanes that
+unblock rebuilding the Outpost A-2 artifact off the post-#38 transpiler and measuring the
+17-sheet returns cone, plus the data-correctness items an equity platform needs. Every lane
+shipped with a synthetic smoke test; the whole diff then went through a 4-reviewer adversarial
+pass (one verifier per finding) — **9 confirmed-real findings, all fixed**.
+
+**Sampled-delta cluster convergence (perf).** The chunked orchestrator's convergence loop
+`JSON.stringify`'d the entire (up to 5.8M-cell) ctx every iteration (~8.8 min/pass on the real
+model). Replaced with a sampled delta — every numeric cell on the cluster's own sheets + a bounded
+strided safety net, diffed by direct numeric reads (O(sample)/iter). NaN-guard, the undefined→number
+first-pass guard, staleness, and `_clusterMeta` telemetry preserved. **Review fix:** a non-finite
+pass left the sampled baseline stale, which could false-report `converged=true` on an oscillating
+cluster with a transient non-finite cell (reproduced) — the baseline is now invalidated after a NaN
+pass (strictly stricter, ≤1 extra iteration), plus an empty-sample guard and an oscillating-cluster
+regression test (the non-contractive path had no coverage). test:engine 24/24, smoke 122/122.
+
+**GT-seed scoping for the single-pass cone (#33).** The cluster orchestrator seeded all ~5.8M GT
+cells into every cluster child (8 GB+ OOM — the wall that blocked measuring the cone). Added
+`computeClusterSeed` (lib/manifest-maps.mjs): seed only the cluster's external reads (upstream
+inputs; range refs expanded lazily via the #32 `buildCellIndex`/`forEachCellInRange`) + a warm
+start for its own cells; the non-cluster bulk is excluded. Wired into `per-sheet-eval` with
+`GT_SEED_SCOPE` (`cluster` default / `external` / `full`) and a per-cluster scoped GT file; falls
+back to full-seed (logged) when edges are absent — **the cone rebuild needs `ete init --emit-debug`**
+since `dependency-graph.json` is slimmed from the default build. **Review fixes:** clusters using
+OFFSET/INDIRECT keep the full seed (their runtime-addressed reads aren't in the static edge map);
+an empty edge map normalizes to the full-seed fallback; documented that the default scope reports an
+**upper bound** on cone accuracy (use `GT_SEED_SCOPE=external` for the cold-start honest number).
+
+**FoF headline NAV (correctness).** `detectFundLevelMetrics` bound `residualValue` first-match-wins
+to a cashflow row label "Net CF to LP (incl. residual NAV)" — a terminal cash flow (`Cash Flows!K7`
+= $184.8M, +14.8% over the scalar NAV `IR Cheat Sheet!B12` = $161M), and self-inconsistent with the
+RVPI on the line above. Resolved by `pickFundNav`: scalar-over-series (timeline-column count) + RVPI
+reconciliation (NAV = RVPI × paid-in) + NAV-label preference. **Review fixes:** anchor to the
+label-adjacent cell (`{ labelCol }`, not the rightmost — a trailing column would hijack it); make
+scalar-over-series dominant over the reconciliation bonus; gate the broadened NAV match on a
+fund-shaped model (no spurious binding on non-fund models). NAV $184.8M → $161.0M, reconciles with
+RVPI × Called.
+
+**Per-class value-bearing named-outputs (#25).** `enumerateOutputCells` **and** `resolveBaseCaseOutputs`
+now pin per-class `proceeds`/`valuation`/`hurdle` when the manifest carries them (set by a detector
+or `ete manifest set`); `inferFormat` maps proceeds/valuation→currency, hurdle→fraction. Auto-detecting
+those cells is a follow-up; this lands the pinning support, kept in sync across both resolvers.
+
+All green: `npm test` (use-case 132/132, manifest-maps 102/102, manifest-improvements 61/61),
+test:engine 24/24, smoke 122/122, cargo 18/18.
+
 ## 2026-06-01 — Lock-grade engine: returns transpiled (no _fn stubs) + single-pass cluster cone + NaN-guard
 
 Closing the two named gaps that kept the Outpost A-1 MIP cone from being lock-grade
