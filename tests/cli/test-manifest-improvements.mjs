@@ -347,6 +347,42 @@ console.log('Testing: ete carry --irr solves hold period');
 }
 
 // ---------------------------------------------------------------------------
+// FoF headline NAV — scalar Net Asset Value cell, not a terminal cashflow row
+// (familyoffice-fof-ir regression: residualValue bound to "Net CF to LP (incl.
+//  residual NAV)" K7 = $184.8M instead of the scalar NAV B12 = $161M, +14.8%)
+// ---------------------------------------------------------------------------
+console.log('Testing: FoF residualValue prefers the scalar NAV cell over a cashflow "residual NAV" row');
+{
+  // The decoy label "...incl. residual NAV)" matches /residual.*nav/ and its
+  // rightmost timeline column is a terminal cash flow (NAV harvest folded in) —
+  // the bug. The true NAV is the scalar "Net Asset Value (NAV)" cell, which
+  // reconciles with RVPI x paid-in.
+  const gt = {
+    // Timeline header so the scalar-vs-series gate has columns to count.
+    'Cash Flows!A5': 'Year',
+    'Cash Flows!B5': 2024, 'Cash Flows!C5': 2025, 'Cash Flows!D5': 2026, 'Cash Flows!E5': 2027, 'Cash Flows!F5': 2028,
+    // Decoy: a cashflow SERIES whose label contains "residual NAV".
+    'Cash Flows!A7': 'Net CF to LP (incl. residual NAV)',
+    'Cash Flows!B7': -20_000_000, 'Cash Flows!C7': 10_000_000, 'Cash Flows!D7': 15_000_000,
+    'Cash Flows!E7': 20_000_000, 'Cash Flows!F7': 184_820_000, // terminal: net CF + NAV harvest
+    // The scalar NAV (the correct answer).
+    'IR Cheat Sheet!A12': 'Net Asset Value (NAV)', 'IR Cheat Sheet!B12': 161_000_000,
+    // RVPI + paid-in so the reconciliation NAV = RVPI x paid-in fires decisively.
+    'IR Cheat Sheet!A19': 'Blended RVPI', 'IR Cheat Sheet!B19': 1.110345,
+    'IR Cheat Sheet!A6': 'Total Capital Called', 'IR Cheat Sheet!B6': 145_000_000,
+  };
+  const { manifest } = generateManifest(gt, { source: 'fof.xlsx' });
+  const fl = manifest.fundLevel || {};
+  assert(fl.residualValue === 'IR Cheat Sheet!B12',
+    `FoF NAV resolves to the scalar cell (got ${fl.residualValue}, want IR Cheat Sheet!B12)`);
+  assert(fl.residualValue !== 'Cash Flows!F7',
+    'FoF NAV did NOT bind to the terminal cashflow "residual NAV" row');
+  const nav = gt[fl.residualValue], rvpi = gt[fl.rvpi], paidIn = gt[fl.paidIn];
+  assert(typeof rvpi === 'number' && typeof paidIn === 'number' && Math.abs(nav - rvpi * paidIn) / nav < 0.02,
+    `headline NAV reconciles with RVPI x paid-in (NAV ${nav}, RVPIxpaidIn ${rvpi * paidIn})`);
+}
+
+// ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
 console.log('');
