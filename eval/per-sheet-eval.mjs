@@ -130,12 +130,20 @@ async function main() {
   if (existsSync(depGraphPath)) {
     try { clusterEdges = loadDependencyEdges(depGraphPath); } catch { clusterEdges = null; }
   }
-  if (!clusterEdges && graphInlineEdges) clusterEdges = graphInlineEdges;
+  if ((!clusterEdges || Object.keys(clusterEdges).length === 0) && graphInlineEdges) clusterEdges = graphInlineEdges;
+  // A present-but-EMPTY edge map (malformed/old-schema dependency-graph.json, or a
+  // dep-graph vs _graph.json mismatch) must fall through to the logged 'full' path,
+  // not silently scope a cluster with ZERO external reads.
+  if (clusterEdges && Object.keys(clusterEdges).length === 0) clusterEdges = null;
 
   // GT_SEED_SCOPE: how much ground truth each cluster child receives.
   //   'cluster'  (default when edges exist) — cluster-sheet cells (warm-start) +
   //              external reads; excludes the non-cluster bulk. Avoids the OOM and
-  //              the cold-start divide-by-zero NaN.
+  //              the cold-start divide-by-zero NaN. NOTE: warm-starting a cluster's
+  //              own cells means a scored cell that no compute fn overwrites keeps
+  //              its GT seed and counts as "correct" — so the default reports an
+  //              UPPER BOUND on cone accuracy. Run GT_SEED_SCOPE=external for the
+  //              cold-start (honest) number and treat the gap as the optimism band.
   //   'external' — external reads + cluster raw-inputs only (minimal; cold-starts
   //              computed cells, relies on the NaN-guard if a coverage ratio /0s).
   //   'full'     — legacy: seed the entire ground truth.
@@ -253,6 +261,21 @@ async function main() {
     } else {
       const allGtKeys = new Set(Object.keys(allGt));
       for (const ct of clusterTasks.values()) {
+        // OFFSET / dynamic-INDIRECT reach cells at runtime-computed addresses the
+        // static edge map can't see — scoping would drop those external boundary
+        // reads and the cluster would read 0 (a silently wrong, still-finite value).
+        // Detect them in the member modules and keep the FULL seed for that cluster.
+        let _dynamicRead = false;
+        for (const m of ct.members) {
+          try {
+            const src = await readFile(m.modulePath, 'utf8');
+            if (src.includes('_offset(') || src.includes('ctx.get(String(')) { _dynamicRead = true; break; }
+          } catch { _dynamicRead = true; break; } // unreadable -> be safe, don't scope
+        }
+        if (_dynamicRead) {
+          console.log(`  ! Cluster [${ct.clusterSheets.join(', ')}] uses OFFSET/INDIRECT (runtime-addressed reads) — keeping FULL GT seed (scoping would drop boundary reads); may OOM.`);
+          continue; // leave ct.gtTmpPath at the full path
+        }
         const seed = computeClusterSeed(ct.clusterSheets, clusterEdges, allGtKeys,
           { warmStartCluster: GT_SEED_SCOPE !== 'external' });
         const scoped = {};
