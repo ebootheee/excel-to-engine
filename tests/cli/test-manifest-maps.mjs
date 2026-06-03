@@ -89,6 +89,37 @@ console.log('Testing: defined-name enrichment and override');
 }
 
 // ---------------------------------------------------------------------------
+// Issue #25: value-bearing per-class cells (proceeds / valuation / hurdle)
+// ---------------------------------------------------------------------------
+console.log('Testing: per-class value-bearing outputs (proceeds/valuation/hurdle)');
+{
+  const m = {
+    equity: { classes: [
+      { id: 'class-a', basisCell: 'Eq!B2', proceeds: 'WF!C10', valuation: 'WF!C12', hurdle: 'WF!C14' },
+      { id: 'class-b', basisCell: 'Eq!B3', proceeds: 'WF!D10' }, // only proceeds for class B
+    ] },
+  };
+  const g = {
+    'Eq!B2': 100e6, 'Eq!B3': 50e6,
+    'WF!C10': 40e6, 'WF!C12': 140e6, 'WF!C14': 0.08, 'WF!D10': 18e6,
+  };
+  const no = collectNamedOutputs(m, g);
+
+  // Multi-class → id-prefixed keys, value-bearing cells now cross into the contract.
+  assert(no['class-a.proceeds']?.cell === 'WF!C10', 'class-a proceeds pinned');
+  assert(no['class-a.proceeds']?.baseCaseValue === 40e6, 'class-a proceeds baseCaseValue resolved');
+  assert(no['class-a.proceeds']?.format === 'currency', 'proceeds formats as currency');
+  assert(no['class-a.valuation']?.format === 'currency', 'valuation formats as currency');
+  assert(no['class-a.hurdle']?.cell === 'WF!C14', 'class-a hurdle pinned');
+  assert(no['class-a.hurdle']?.baseCaseValue === 0.08, 'class-a hurdle baseCaseValue resolved');
+  assert(no['class-a.hurdle']?.format === 'fraction', 'hurdle formats as fraction');
+  assert(no['class-b.proceeds']?.cell === 'WF!D10', 'class-b proceeds pinned');
+  // Classes that don't carry the optional fields don't emit phantom keys.
+  assert(no['class-b.valuation'] === undefined, 'no phantom valuation for class-b');
+  assert(no['class-b.hurdle'] === undefined, 'no phantom hurdle for class-b');
+}
+
+// ---------------------------------------------------------------------------
 // schedules: balance vs flow baseCaseValue aggregation
 // ---------------------------------------------------------------------------
 console.log('Testing: schedule baseCaseValue — balances use terminal, flows sum');
