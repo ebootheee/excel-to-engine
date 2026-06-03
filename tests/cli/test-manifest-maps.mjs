@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { resolveBaseCaseOutputs } from '../../lib/manifest.mjs';
 import {
   collectNamedOutputs, collectNamedInputs, collectCellTypes, enumerateOutputCells,
-  emitManifestMaps, attachDependencyClosures, loadDependencyEdges,
+  emitManifestMaps, attachDependencyClosures, loadDependencyEdges, computeClusterSeed,
 } from '../../lib/manifest-maps.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -375,6 +375,41 @@ console.log('Testing: emitManifestMaps with .xlsx (full set)');
   assert(ni.namedInputs?.Exit_Year?.cell === 'Assumptions!B1', 'emitted inputs include Exit_Year');
   assert(res.stats.inputs >= 2, `at least 2 inputs emitted (got ${res.stats.inputs})`);
   rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// computeClusterSeed — GT-seed scoping for cluster convergence (#33)
+// ---------------------------------------------------------------------------
+console.log('Testing: computeClusterSeed scopes the cluster GT seed (#33)');
+{
+  // Cluster {SheetA, SheetB}. SheetA!b reads Upstream!X1 (an external input).
+  // Far!Z9/Y9 are bulk the cluster never touches. The scoped seed must include
+  // the external read, warm-start the cluster's own cells, and EXCLUDE the bulk.
+  const edges = {
+    'SheetA!b': ['SheetB!d', 'Upstream!X1'],
+    'SheetB!c': ['SheetA!a', 'SheetA!b'],
+    'SheetB!d': ['SheetB!c'],
+    'Far!Z9': ['Far!Y9'],
+  };
+  const gtKeys = new Set(['SheetA!a', 'SheetA!b', 'SheetB!c', 'SheetB!d', 'Upstream!X1', 'Far!Z9', 'Far!Y9']);
+  const seed = computeClusterSeed(['SheetA', 'SheetB'], edges, gtKeys);
+  assert(seed.has('Upstream!X1'), 'external read Upstream!X1 is seeded');
+  assert(seed.has('SheetA!a') && seed.has('SheetB!d'), 'cluster own cells warm-started');
+  assert(!seed.has('Far!Z9') && !seed.has('Far!Y9'), 'non-cluster bulk excluded');
+  assert(seed.size === 5, `seed = 4 cluster + 1 external = 5 (got ${seed.size})`);
+
+  // A cluster formula reading a cross-sheet RANGE seeds only the GT cells in it.
+  const seed2 = computeClusterSeed(['SheetA'], { 'SheetA!b': ['Upstream!A1:A3'] },
+    new Set(['SheetA!b', 'Upstream!A1', 'Upstream!A2', 'Upstream!A3', 'Upstream!A4']));
+  assert(seed2.has('Upstream!A1') && seed2.has('Upstream!A3'), 'range external read expanded');
+  assert(!seed2.has('Upstream!A4'), 'range stops at its bound (A4 not seeded)');
+
+  // warmStartCluster:false (the 'external' scope) cold-starts computed cells:
+  // only raw-input cluster cells + external reads are seeded.
+  const seedExt = computeClusterSeed(['SheetA', 'SheetB'], edges, gtKeys, { warmStartCluster: false });
+  assert(!seedExt.has('SheetA!b'), 'external scope omits the computed cell SheetA!b');
+  assert(seedExt.has('SheetA!a'), 'external scope keeps raw-input SheetA!a');
+  assert(seedExt.has('Upstream!X1'), 'external scope keeps the external read');
 }
 
 // ---------------------------------------------------------------------------

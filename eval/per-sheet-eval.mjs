@@ -19,6 +19,7 @@ import { join, resolve, basename, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { loadDependencyEdges, computeClusterSeed } from '../lib/manifest-maps.mjs';
 
 const execAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
@@ -102,11 +103,13 @@ async function main() {
   let topoOrder = null;
   let sheetClusters = [];  // arrays of sheet names that form circular deps
   let clusterSheetSet = new Set();  // flat set of all sheets in any cluster
+  let graphInlineEdges = null;      // inline cell edges (synthetic fixtures only)
   if (existsSync(graphPath)) {
     try {
       const graph = JSON.parse(await readFile(graphPath, 'utf8'));
       topoOrder = graph.topoOrder || graph.sheets?.map(s => s.name) || null;
       sheetClusters = graph.sheetClusters || [];
+      graphInlineEdges = graph.edges || null;
       for (const cluster of sheetClusters) {
         for (const s of cluster) clusterSheetSet.add(s);
       }
@@ -116,6 +119,27 @@ async function main() {
       }
     } catch { /* ignore */ }
   }
+
+  // Cell-level forward edges for GT-seed scoping (#33). Prefer the streamed
+  // dependency-graph.json (real models — note it is slimmed out of the DEFAULT
+  // build, so the cone measurement needs `ete init --emit-debug`); fall back to
+  // inline _graph.json.edges (synthetic fixtures). Without edges we cannot scope,
+  // so each cluster child seeds the full GT (the OOM path) — logged loudly below.
+  let clusterEdges = null;
+  const depGraphPath = join(chunkedDir, 'dependency-graph.json');
+  if (existsSync(depGraphPath)) {
+    try { clusterEdges = loadDependencyEdges(depGraphPath); } catch { clusterEdges = null; }
+  }
+  if (!clusterEdges && graphInlineEdges) clusterEdges = graphInlineEdges;
+
+  // GT_SEED_SCOPE: how much ground truth each cluster child receives.
+  //   'cluster'  (default when edges exist) — cluster-sheet cells (warm-start) +
+  //              external reads; excludes the non-cluster bulk. Avoids the OOM and
+  //              the cold-start divide-by-zero NaN.
+  //   'external' — external reads + cluster raw-inputs only (minimal; cold-starts
+  //              computed cells, relies on the NaN-guard if a coverage ratio /0s).
+  //   'full'     — legacy: seed the entire ground truth.
+  const GT_SEED_SCOPE = process.env.GT_SEED_SCOPE || (clusterEdges ? 'cluster' : 'full');
 
   // Named outputs whose cell lives in a circular cluster — surfaced with accuracy
   // (no values) so the returns/MIP cone (MIP Proceeds, hurdle, ...) is reported
@@ -218,6 +242,30 @@ async function main() {
   // Append one task per cluster (after standalone sheets, so the largest
   // standalone sheets still start first under the concurrency window).
   for (const ct of clusterTasks.values()) tasks.push(ct);
+
+  // GT-seed scoping (#33): give each cluster child only the GT it needs — its
+  // external reads (+ a warm start for its own cells) — instead of the whole
+  // ~5.8M-cell ground truth, which OOMs an 8GB heap. Write a per-cluster scoped
+  // GT file and repoint the task at it (the child's seed loop is unchanged).
+  if (GT_SEED_SCOPE !== 'full' && clusterTasks.size > 0) {
+    if (!clusterEdges) {
+      console.log(`  ! GT-seed scoping unavailable (no dependency-graph.json / inline edges) — cluster children seed the FULL ground truth and may OOM. Rebuild with \`ete init --emit-debug\` to enable scoping.`);
+    } else {
+      const allGtKeys = new Set(Object.keys(allGt));
+      for (const ct of clusterTasks.values()) {
+        const seed = computeClusterSeed(ct.clusterSheets, clusterEdges, allGtKeys,
+          { warmStartCluster: GT_SEED_SCOPE !== 'external' });
+        const scoped = {};
+        for (const cell of seed) { const v = allGt[cell]; if (v !== undefined) scoped[cell] = v; }
+        const clusterKey = ct.clusterSheets.join('_').replace(/[^a-zA-Z0-9]/g, '_').slice(0, 40);
+        const scopedPath = join(tmpDir, `_gt_cluster_${clusterKey}.json`);
+        await writeFile(scopedPath, JSON.stringify(scoped));
+        ct.gtTmpPath = resolve(scopedPath);
+        const pct = allGtKeys.size > 0 ? (100 * seed.size / allGtKeys.size).toFixed(1) : '0';
+        console.log(`  Cluster [${ct.clusterSheets.join(', ')}] seed: ${seed.size}/${allGtKeys.size} GT cells (${pct}%, scope=${GT_SEED_SCOPE})`);
+      }
+    }
+  }
 
   if (skipped.length > 0) {
     console.log(`  Skipped ${skipped.length} sheets:`);
