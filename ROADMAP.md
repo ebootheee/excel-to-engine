@@ -12,17 +12,25 @@ Two gaps, both closed in code on `feat/lockgrade-cone` and confirmed on the real
 - **NaN-guard** convergence (T-076 honest non-convergence contract); diagnosis: waterfall
   fragility, not the override bug PR #37 fixes.
 
+**Wave 2 (2026-06-03, branch `feat/lockgrade-wave2`) — cone-rebuild enablers BUILT:**
+- **GT-seed scoping — DONE.** `computeClusterSeed` + `GT_SEED_SCOPE` seed only the cluster's
+  external reads (range refs expanded via the #32 index), so the cone converges without the
+  8 GB / 900 s OOM. Default `cluster` scope warm-starts own cells (avoids the cold-start NaN);
+  `external` is the strict cold-start; OFFSET/INDIRECT clusters keep the full seed.
+- **Sampled-delta convergence — DONE.** Dropped the per-iteration full-ctx `JSON.stringify`
+  (~8.8 min/pass → O(sample)/iter). Adversarially reviewed (9 findings fixed); FoF NAV (#)
+  + #25 per-class value-bearing outputs shipped alongside.
+
 **Next (to actually flip lock-grade):**
-- **GT-seed scoping** — the cone measurement is now blocked on this, not on the orchestrator:
-  a single convergence over 5.8M seeded cells doesn't finish even at 12 GB / 900 s, so seed
-  only the cluster's external reads (the scoped-subgraph #22/T-078 lane). This same scoped
-  engine is what makes the {exitYear, exit value, hurdle} → MIP grid sampleable (full eager
-  `run()` is infeasible).
+- **Rebuild the Outpost A-2 artifact off this branch with `ete init --emit-debug`** — GT-seed
+  scoping needs `dependency-graph.json`, which is slimmed from the default build.
+- Measure the 17-sheet cone end-to-end on the rebuilt engine (the {exitYear, exit value, hurdle}
+  → MIP grid is sampleable once scoping converges; full eager `run()` is infeasible). Use
+  `GT_SEED_SCOPE=external` for the honest cold-start accuracy number; the NaN-guard makes any
+  residual non-convergence honest (`converged:false` + `meta.nonFiniteCell`).
 - Regenerate `named-outputs.json` on the rebuilt engine so the formal `--assert-no-fallbacks`
   gate runs (function-level AFTER already proven: 0 stubs of the four in the returns cone).
 - Transpile `AVERAGEIFS` (stubbed ×3101, outside the returns cone — same SUMIFS pattern).
-- Sample the scoped grid for clean convergence; the NaN-guard already makes any residual
-  non-convergence honest (`converged:false` + `meta.nonFiniteCell`).
 
 ## Now — Analyst usability + coding-agent handoff (2026-05-29)
 

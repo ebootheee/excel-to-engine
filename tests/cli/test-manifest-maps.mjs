@@ -21,7 +21,7 @@ import { tmpdir } from 'os';
 import { resolveBaseCaseOutputs } from '../../lib/manifest.mjs';
 import {
   collectNamedOutputs, collectNamedInputs, collectCellTypes, enumerateOutputCells,
-  emitManifestMaps, attachDependencyClosures, loadDependencyEdges,
+  emitManifestMaps, attachDependencyClosures, loadDependencyEdges, computeClusterSeed,
 } from '../../lib/manifest-maps.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -86,6 +86,46 @@ console.log('Testing: defined-name enrichment and override');
   assert(override.grossMOIC.cell === 'Equity!Q5', 'defined-name overrides heuristic cell');
   assert(override.grossMOIC.baseCaseValue === 2.90, 'override resolves the defined cell value');
   assert(override.grossMOIC.manifestCell === 'Equity!Z9', 'override records the displaced manifest cell');
+}
+
+// ---------------------------------------------------------------------------
+// Issue #25: value-bearing per-class cells (proceeds / valuation / hurdle)
+// ---------------------------------------------------------------------------
+console.log('Testing: per-class value-bearing outputs (proceeds/valuation/hurdle)');
+{
+  const m = {
+    equity: { classes: [
+      { id: 'class-a', basisCell: 'Eq!B2', proceeds: 'WF!C10', valuation: 'WF!C12', hurdle: 'WF!C14' },
+      { id: 'class-b', basisCell: 'Eq!B3', proceeds: 'WF!D10' }, // only proceeds for class B
+    ] },
+  };
+  const g = {
+    'Eq!B2': 100e6, 'Eq!B3': 50e6,
+    'WF!C10': 40e6, 'WF!C12': 140e6, 'WF!C14': 0.08, 'WF!D10': 18e6,
+  };
+  const no = collectNamedOutputs(m, g);
+
+  // Multi-class → id-prefixed keys, value-bearing cells now cross into the contract.
+  assert(no['class-a.proceeds']?.cell === 'WF!C10', 'class-a proceeds pinned');
+  assert(no['class-a.proceeds']?.baseCaseValue === 40e6, 'class-a proceeds baseCaseValue resolved');
+  assert(no['class-a.proceeds']?.format === 'currency', 'proceeds formats as currency');
+  assert(no['class-a.valuation']?.format === 'currency', 'valuation formats as currency');
+  assert(no['class-a.hurdle']?.cell === 'WF!C14', 'class-a hurdle pinned');
+  assert(no['class-a.hurdle']?.baseCaseValue === 0.08, 'class-a hurdle baseCaseValue resolved');
+  assert(no['class-a.hurdle']?.format === 'fraction', 'hurdle formats as fraction');
+  assert(no['class-b.proceeds']?.cell === 'WF!D10', 'class-b proceeds pinned');
+  // Classes that don't carry the optional fields don't emit phantom keys.
+  assert(no['class-b.valuation'] === undefined, 'no phantom valuation for class-b');
+  assert(no['class-b.hurdle'] === undefined, 'no phantom hurdle for class-b');
+
+  // resolveBaseCaseOutputs (the CLI base-case layer) must stay in sync with the
+  // named-outputs contract for these new keys — the drift guard is one-directional,
+  // so assert the value-bearing keys explicitly here.
+  const bco = resolveBaseCaseOutputs(m, g);
+  for (const k of ['class-a.proceeds', 'class-a.valuation', 'class-a.hurdle', 'class-b.proceeds']) {
+    assert(bco[k] === no[k].baseCaseValue, `${k} agrees between resolveBaseCaseOutputs and named-outputs (bco ${bco[k]}, no ${no[k].baseCaseValue})`);
+  }
+  assert(bco['class-b.valuation'] === undefined && bco['class-b.hurdle'] === undefined, 'no phantom base-case keys for class-b');
 }
 
 // ---------------------------------------------------------------------------
@@ -344,6 +384,41 @@ console.log('Testing: emitManifestMaps with .xlsx (full set)');
   assert(ni.namedInputs?.Exit_Year?.cell === 'Assumptions!B1', 'emitted inputs include Exit_Year');
   assert(res.stats.inputs >= 2, `at least 2 inputs emitted (got ${res.stats.inputs})`);
   rmSync(tmp, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// computeClusterSeed — GT-seed scoping for cluster convergence (#33)
+// ---------------------------------------------------------------------------
+console.log('Testing: computeClusterSeed scopes the cluster GT seed (#33)');
+{
+  // Cluster {SheetA, SheetB}. SheetA!b reads Upstream!X1 (an external input).
+  // Far!Z9/Y9 are bulk the cluster never touches. The scoped seed must include
+  // the external read, warm-start the cluster's own cells, and EXCLUDE the bulk.
+  const edges = {
+    'SheetA!b': ['SheetB!d', 'Upstream!X1'],
+    'SheetB!c': ['SheetA!a', 'SheetA!b'],
+    'SheetB!d': ['SheetB!c'],
+    'Far!Z9': ['Far!Y9'],
+  };
+  const gtKeys = new Set(['SheetA!a', 'SheetA!b', 'SheetB!c', 'SheetB!d', 'Upstream!X1', 'Far!Z9', 'Far!Y9']);
+  const seed = computeClusterSeed(['SheetA', 'SheetB'], edges, gtKeys);
+  assert(seed.has('Upstream!X1'), 'external read Upstream!X1 is seeded');
+  assert(seed.has('SheetA!a') && seed.has('SheetB!d'), 'cluster own cells warm-started');
+  assert(!seed.has('Far!Z9') && !seed.has('Far!Y9'), 'non-cluster bulk excluded');
+  assert(seed.size === 5, `seed = 4 cluster + 1 external = 5 (got ${seed.size})`);
+
+  // A cluster formula reading a cross-sheet RANGE seeds only the GT cells in it.
+  const seed2 = computeClusterSeed(['SheetA'], { 'SheetA!b': ['Upstream!A1:A3'] },
+    new Set(['SheetA!b', 'Upstream!A1', 'Upstream!A2', 'Upstream!A3', 'Upstream!A4']));
+  assert(seed2.has('Upstream!A1') && seed2.has('Upstream!A3'), 'range external read expanded');
+  assert(!seed2.has('Upstream!A4'), 'range stops at its bound (A4 not seeded)');
+
+  // warmStartCluster:false (the 'external' scope) cold-starts computed cells:
+  // only raw-input cluster cells + external reads are seeded.
+  const seedExt = computeClusterSeed(['SheetA', 'SheetB'], edges, gtKeys, { warmStartCluster: false });
+  assert(!seedExt.has('SheetA!b'), 'external scope omits the computed cell SheetA!b');
+  assert(seedExt.has('SheetA!a'), 'external scope keeps raw-input SheetA!a');
+  assert(seedExt.has('Upstream!X1'), 'external scope keeps the external read');
 }
 
 // ---------------------------------------------------------------------------

@@ -347,6 +347,75 @@ console.log('Testing: ete carry --irr solves hold period');
 }
 
 // ---------------------------------------------------------------------------
+// FoF headline NAV — scalar Net Asset Value cell, not a terminal cashflow row
+// (familyoffice-fof-ir regression: residualValue bound to "Net CF to LP (incl.
+//  residual NAV)" K7 = $184.8M instead of the scalar NAV B12 = $161M, +14.8%)
+// ---------------------------------------------------------------------------
+console.log('Testing: FoF residualValue prefers the scalar NAV cell over a cashflow "residual NAV" row');
+{
+  // The decoy label "...incl. residual NAV)" matches /residual.*nav/ and its
+  // rightmost timeline column is a terminal cash flow (NAV harvest folded in) —
+  // the bug. The true NAV is the scalar "Net Asset Value (NAV)" cell, which
+  // reconciles with RVPI x paid-in.
+  const gt = {
+    // Timeline header so the scalar-vs-series gate has columns to count.
+    'Cash Flows!A5': 'Year',
+    'Cash Flows!B5': 2024, 'Cash Flows!C5': 2025, 'Cash Flows!D5': 2026, 'Cash Flows!E5': 2027, 'Cash Flows!F5': 2028,
+    // Decoy: a cashflow SERIES whose label contains "residual NAV".
+    'Cash Flows!A7': 'Net CF to LP (incl. residual NAV)',
+    'Cash Flows!B7': -20_000_000, 'Cash Flows!C7': 10_000_000, 'Cash Flows!D7': 15_000_000,
+    'Cash Flows!E7': 20_000_000, 'Cash Flows!F7': 184_820_000, // terminal: net CF + NAV harvest
+    // The scalar NAV (the correct answer).
+    'IR Cheat Sheet!A12': 'Net Asset Value (NAV)', 'IR Cheat Sheet!B12': 161_000_000,
+    // RVPI + paid-in so the reconciliation NAV = RVPI x paid-in fires decisively.
+    'IR Cheat Sheet!A19': 'Blended RVPI', 'IR Cheat Sheet!B19': 1.110345,
+    'IR Cheat Sheet!A6': 'Total Capital Called', 'IR Cheat Sheet!B6': 145_000_000,
+  };
+  const { manifest } = generateManifest(gt, { source: 'fof.xlsx' });
+  const fl = manifest.fundLevel || {};
+  assert(fl.residualValue === 'IR Cheat Sheet!B12',
+    `FoF NAV resolves to the scalar cell (got ${fl.residualValue}, want IR Cheat Sheet!B12)`);
+  assert(fl.residualValue !== 'Cash Flows!F7',
+    'FoF NAV did NOT bind to the terminal cashflow "residual NAV" row');
+  const nav = gt[fl.residualValue], rvpi = gt[fl.rvpi], paidIn = gt[fl.paidIn];
+  assert(typeof rvpi === 'number' && typeof paidIn === 'number' && Math.abs(nav - rvpi * paidIn) / nav < 0.02,
+    `headline NAV reconciles with RVPI x paid-in (NAV ${nav}, RVPIxpaidIn ${rvpi * paidIn})`);
+}
+
+console.log('Testing: FoF NAV anchors to the label-adjacent cell, not a trailing column');
+{
+  // The NAV row carries a trailing in-range numeric (a "# of funds" / "QoQ change"
+  // column). residualValue must bind the value ADJACENT to the label (B12), not the
+  // rightmost in-range cell (C12) — otherwise both the cell and the reconciliation
+  // are corrupted.
+  const gt = {
+    'IR!A5': 'Year', 'IR!B5': 2024, 'IR!C5': 2025, 'IR!D5': 2026,
+    'IR!A12': 'Net Asset Value (NAV)', 'IR!B12': 161_000_000, 'IR!C12': 12_000_000, // C12 = a trailing column
+    'IR!A19': 'Blended RVPI', 'IR!B19': 1.110345,
+    'IR!A6': 'Total Capital Called', 'IR!B6': 145_000_000,
+  };
+  const { manifest } = generateManifest(gt, { source: 'fof.xlsx' });
+  const fl = manifest.fundLevel || {};
+  assert(fl.residualValue === 'IR!B12', `NAV anchors to label-adjacent B12 (got ${fl.residualValue})`);
+  assert(fl.residualValue !== 'IR!C12', 'NAV did not bind the trailing column C12');
+}
+
+console.log('Testing: a stray "NAV" row on a non-fund model does NOT bind residualValue');
+{
+  // A balance-sheet model with a "NAV" label but no fund multiples (no TVPI/DPI/RVPI)
+  // must NOT acquire a residualValue from the broadened NAV regex.
+  const gt = {
+    'Bal!A5': 'Year', 'Bal!B5': 2024, 'Bal!C5': 2025, 'Bal!D5': 2026,
+    'Bal!A8': 'NAV', 'Bal!B8': 100, 'Bal!C8': 110, 'Bal!D8': 130, // a series, not a fund NAV
+    'Bal!A9': 'Total Assets', 'Bal!B9': 500,
+  };
+  const { manifest } = generateManifest(gt, { source: 'bal.xlsx' });
+  const fl = manifest.fundLevel || {};
+  assert(fl.tvpi == null && fl.dpi == null && fl.rvpi == null, 'non-fund model has no fund multiples');
+  assert(fl.residualValue == null, `no spurious residualValue on a non-fund model (got ${fl.residualValue})`);
+}
+
+// ---------------------------------------------------------------------------
 // Results
 // ---------------------------------------------------------------------------
 console.log('');

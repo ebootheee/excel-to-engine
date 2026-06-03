@@ -1,5 +1,19 @@
 # excel-to-engine — Plan
 
+## Status: Lock-grade wave 2 — cone-rebuild enablers BUILT (2026-06-03, branch `feat/lockgrade-wave2`)
+
+The pieces that were "remaining" on 2026-06-01 are now built and adversarially reviewed (9
+confirmed findings, all fixed): **GT-seed scoping** (`computeClusterSeed` + `GT_SEED_SCOPE` —
+seed the cluster's external reads, not all 5.8M cells, so the cone can converge without the
+8 GB OOM) and the **sampled-delta convergence loop** (~8.8 min/pass → O(sample)/iter). Plus
+two data-correctness items: the **FoF NAV** overstatement fix (`pickFundNav` → scalar NAV,
+$184.8M → $161.0M) and **#25** per-class value-bearing named-outputs. All on synthetics + full
+`npm test` green. **Remaining to flip `MIPPY_LOCK_GRADE_CONFIRMED`:** rebuild the Outpost A-2
+artifact off this branch's parser **with `ete init --emit-debug`** (dependency-graph.json is
+slimmed by default and GT-seed scoping needs it), then measure the 17-sheet cone end-to-end on
+the rebuilt engine and regenerate the contract so `--assert-no-fallbacks` runs. Posture HOLDS.
+See CHANGELOG 2026-06-03.
+
 ## Status: Lock-grade engine — Outpost A-1 MIP cone (2026-06-01, branch `feat/lockgrade-cone`)
 
 Closing the two gaps that block lock-grade for the Outpost A-1 MIP (a legal

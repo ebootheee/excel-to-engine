@@ -704,37 +704,73 @@ export function run(inputs = {}, options = {}) {"#.to_string());
         let _prevClusterDelta = Infinity, _clusterStale = 0;
         let _iters = 0, _lastDelta = Infinity, _conv = false;
         let _nonFiniteCell = null, _nonFiniteStreak = 0;
+        // Lock-grade convergence via a SAMPLED delta — diff only a fixed subset of
+        // cells each iteration instead of JSON.stringify-ing the whole (up to 5.8M-
+        // cell) ctx every pass (~8.8min/pass -> ~1min/pass on the real model). The
+        // sample = every numeric cell on the cluster's OWN sheets (exactly the cells
+        // the cluster solves) plus a bounded strided safety net over the rest of ctx
+        // (catches a cell the cluster writes onto a non-member sheet). Built ONCE,
+        // after the first compute pass, when the cluster's cells exist as numbers.
+        const _clusterSet = new Set(cluster);
+        const _SAMPLE_SAFETY_CAP = 4000;
+        let _sampleKeys = null, _before = null;
         for (let iter = 0; iter < MAX_ITER; iter++) {
           _iters = iter + 1;
-          const snapshot = JSON.stringify(ctx.values);
           for (const s of cluster) {
             const fn = SHEET_COMPUTE[s];
             if (fn) fn(ctx);
           }
-          const after = ctx.values;
-          const before = JSON.parse(snapshot);
+          const v = ctx.values;
+          if (_sampleKeys === null) {
+            // First pass done: the cluster's cells now exist. Capture the sample.
+            _sampleKeys = [];
+            for (const key in v) {
+              const _bang = key.indexOf('!');
+              if (_bang > 0 && _clusterSet.has(key.slice(0, _bang)) && typeof v[key] === 'number') _sampleKeys.push(key);
+            }
+            const _allKeys = Object.keys(v);
+            const _stride = Math.max(1, Math.floor(_allKeys.length / _SAMPLE_SAFETY_CAP));
+            for (let i = 0; i < _allKeys.length; i += _stride) {
+              if (typeof v[_allKeys[i]] === 'number') _sampleKeys.push(_allKeys[i]);
+            }
+            // All slots undefined -> Infinity delta on this build pass, so the first
+            // pass (every cell newly computed) can never falsely "converge".
+            _before = new Array(_sampleKeys.length);
+            // No observable cluster cells: we can't confirm a fixed point, so don't
+            // let an empty scan read maxDelta=0 and falsely converge on pass 0.
+            if (_sampleKeys.length === 0) break; // converged stays false (honest)
+          }
           let maxDelta = 0;
           let _badCell = null;
-          for (const key in after) {
-            if (typeof after[key] !== 'number') continue;
+          for (let i = 0; i < _sampleKeys.length; i++) {
+            const _cur = v[_sampleKeys[i]];
+            if (typeof _cur !== 'number') continue;
             // Lock-grade NaN-guard: a non-finite cell (Inf/NaN — typically a
             // waterfall/coverage formula dividing by a cold-started 0) must never
             // look like convergence. Record it; a persistent non-finite fixed point
             // is reported converged=false rather than silently poisoning the result.
-            if (!Number.isFinite(after[key])) { _badCell = key; break; }
-            const _b = before[key];
+            if (!Number.isFinite(_cur)) { _badCell = _sampleKeys[i]; break; }
+            const _b = _before[i];
             // A cell going undefined -> number is a change, not convergence.
-            // (The original loop skipped these, so the first pass — where every
-            // cluster cell is newly computed — looked like maxDelta=0 and
-            // falsely "converged" after one iteration.)
-            if (typeof _b !== 'number') { maxDelta = Infinity; break; }
-            maxDelta = Math.max(maxDelta, Math.abs(after[key] - _b));
+            // (Skipping these would let the first pass — every cluster cell newly
+            // computed — look like maxDelta=0 and falsely "converge". Keep updating
+            // _before so the next iteration still has a full baseline.)
+            if (typeof _b !== 'number') { maxDelta = Infinity; _before[i] = _cur; continue; }
+            maxDelta = Math.max(maxDelta, Math.abs(_cur - _b));
+            _before[i] = _cur;
           }
           if (_badCell !== null) {
             _nonFiniteCell = _badCell;
             _nonFiniteStreak++;
             _lastDelta = Infinity;
             _prevClusterDelta = Infinity;
+            // The mid-scan break above left _before STALE for every sample cell
+            // ordered after the non-finite one. Invalidate the whole baseline so the
+            // next finite pass recomputes it (-> maxDelta=Infinity once) instead of
+            // diffing across two iterations — otherwise a recovering oscillator could
+            // be compared to a same-phase stale value and falsely report converged.
+            // A non-finite pass can't converge anyway, so this costs <=1 iteration.
+            _before = new Array(_sampleKeys.length);
             if (_nonFiniteStreak >= 3) break; // not recovering — stop churning to MAX_ITER
             continue;
           }
