@@ -117,6 +117,15 @@ console.log('Testing: per-class value-bearing outputs (proceeds/valuation/hurdle
   // Classes that don't carry the optional fields don't emit phantom keys.
   assert(no['class-b.valuation'] === undefined, 'no phantom valuation for class-b');
   assert(no['class-b.hurdle'] === undefined, 'no phantom hurdle for class-b');
+
+  // resolveBaseCaseOutputs (the CLI base-case layer) must stay in sync with the
+  // named-outputs contract for these new keys — the drift guard is one-directional,
+  // so assert the value-bearing keys explicitly here.
+  const bco = resolveBaseCaseOutputs(m, g);
+  for (const k of ['class-a.proceeds', 'class-a.valuation', 'class-a.hurdle', 'class-b.proceeds']) {
+    assert(bco[k] === no[k].baseCaseValue, `${k} agrees between resolveBaseCaseOutputs and named-outputs (bco ${bco[k]}, no ${no[k].baseCaseValue})`);
+  }
+  assert(bco['class-b.valuation'] === undefined && bco['class-b.hurdle'] === undefined, 'no phantom base-case keys for class-b');
 }
 
 // ---------------------------------------------------------------------------
