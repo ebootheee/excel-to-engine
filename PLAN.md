@@ -1,5 +1,16 @@
 # excel-to-engine — Plan
 
+## Status: cone/cycle MEASURED + scoped-subgraph DESIGNED (2026-06-03, branch `feat/engine-perf`)
+
+The module wall now has a measured, designed remedy. On the real A-1 cell graph
+(`benchmarks/analyze-cone.mjs`): the true largest cell cycle is **2,992 cells (0.054%)** and output
+cones are **median 0.38% / max 66%** of 5.58M formula cells — so the 17-sheet convergence cluster is
+**99.8% artifact** and the active subgraph for a MIP what-if is tiny. `runScoped` was confirmed
+**sheet-level** (can't beat the 776 MB wall; cell-level is required). Design + build plan:
+**`docs/adr/ADR-026-scoped-subgraph-transpile.md`** (scoped cone module = fwdCone(inputs) ∩
+backCone(outputs), boundary-pinned) and **`docs/PLAN-engine-speed.md`** (parallel lanes L0–L4 +
+rapid-iteration efficacy harness). Next: execute the lanes (L4 harness + L0 scope-plan first).
+
 ## Status: A-2 returns cone STUB-FREE; remaining wall = monster modules, not the seed (2026-06-03, branch `feat/transpile-averageifs`)
 
 Rebuilt + measured the Outpost A-2 cone on the post-wave-2 engine. Two results:

@@ -1,0 +1,133 @@
+# Engine-speed plan — parallel lanes + rapid-iteration harness
+
+**Goal:** make the converted engine fast enough to *use* — full recompute in ~one pass and targeted what-ifs in ms — by exploiting the measured structural headroom. Design rationale + correctness proof live in `docs/adr/ADR-026-scoped-subgraph-transpile.md`. Measured numbers from `benchmarks/analyze-cone.mjs` (real A-1):
+
+- true largest cell cycle = **2,992 cells (0.054%)**; all cycles = 10,684 (0.19%) → the 17-sheet cluster is 99.8% artifact.
+- median output cone = **0.38%**, p90 = 8.5%, max = 66% → typical/intermediate queries need ~0.4% of cells; even the heaviest needs ≤66%.
+- the 17-sheet cluster is **776 MB of monolithic modules**; `runScoped` is **sheet-level** so it can’t shrink that (ADR-026 §Context).
+
+**Three wins, mapped to lanes:**
+- **Tier 1 (certain, load/memory):** drop the double return-clone; compile cache; lazy-by-default. → Lane 3.
+- **Tier 2 (full-run speed + feasibility):** iterate the **~3K-cell true cycle**, not all 5.5M, in the in-engine cluster loop. → Lane 1.
+- **Tier 3 (targeted/what-if, the Mippy case):** the **scoped cone module** (ADR-026). → Lane 2 (design done; code next).
+
+---
+
+## Frozen contracts (freeze these BEFORE parallel coding starts)
+
+These are the seams that let lanes proceed independently. Land them first (Lane 0 + Lane 4), then L1/L2/L3 code against them.
+
+### C1 — Scope plan (Lane 0 output; Lane 1 & 2 input)
+`lib/scope-plan.mjs → buildScopePlan({ edges, inputs, outputs, gtKeys }) → ScopePlan`
+```jsonc
+ScopePlan = {
+  scopeId: "mip-grid",                 // stable id (hash of inputs+outputs+modelHash)
+  modelHash: "sha256:…",
+  inputs:  ["Valuation!AA54", …],      // the levers
+  outputs: ["GPP Promote!G24", …],     // requested cells (named-output cells)
+  activeAcyclic: ["Sheet!X", …],       // in fwdCone(inputs) ∩ backCone(outputs), no cycle, TOPO ORDER
+  activeCycles:  [["A!1","B!2",…], …], // SCCs within the active set (iterate as units)
+  boundary:      ["Sheet!Y", …],       // read by an active cell, NOT in fwdCone → pin to base const
+  stats: { activeCells, cycleCells, boundaryCells, totalFormulaCells }
+}
+```
+Reuses `loadDependencyEdges`, `buildCellIndex`/`forEachCellInRange`/`parseRefToken` (EXPORT these from `lib/manifest-maps.mjs` — currently module-private), and a new range-aware Tarjan over the compact graph.
+
+### C2 — Fixture + golden oracle (Lane 4 output; all lanes consume)
+- A fixture is a `chunked/` dir + `golden.json = { "<namedOutput>": <value>, … }`.
+- Golden source: full `run()` for synthetic fixtures (correct & fast there) or `_ground-truth.json` for outpost.
+- `--bless` records/refreshes golden for a fixture.
+
+### C3 — `run()` return contract (already frozen; ALL lanes preserve)
+`{ values, kpis, meta:{converged,iterations,maxDelta,convergenceTolerance,clusters,perSheetIterations,elapsedMs}, unknownOverrides }` + override pinning (`_locked`) + `strict` + honest `meta.converged` + baseCaseValue reproducibility within 1e-6 rel/abs (`lib/verify-engine.mjs`).
+
+---
+
+## Lanes (codeable in parallel once C1/C2 are frozen)
+
+### Lane 0 — Scope-plan library  *(foundation; pure JS; no Rust)*
+- **Files:** new `lib/scope-plan.mjs`; export the 4 graph helpers from `lib/manifest-maps.mjs`.
+- **Do:** cell-level range-aware **Tarjan** over `Keep` edges; `forwardCone(inputs)`; `backwardCone(outputs)` (reverse edges — build once); intersect; topo-order the acyclic active set; collect boundary cells + their base values.
+- **Out:** C1 ScopePlan.
+- **Accept:** on `mini-cyclic`, plan’s active set == hand-derived; cone/cycle sizes match `analyze-cone.mjs`; runs in <2 s on the 535 MB A-1 graph (lazy expansion, integer-id CSR like analyze-cone).
+- **Risk:** med (reverse-graph memory on A-1 — reuse the CSR/typed-array approach from `analyze-cone.mjs`). **Depends on:** nothing (uses existing graph). **Unblocks:** L1, L2.
+
+### Lane 1 — Cell-level cycle resolution in the engine (Tier 2)  *(Rust emitter)*
+- **Files:** `pipelines/rust/src/chunked_emitter.rs` (`emit_run_function`, cluster loop); new range-aware Tarjan over the compact cross-sheet edges (or consume an emitted cycle-set).
+- **Do:** for a cross-sheet cluster, compute acyclic members **once** in cell topo order, then **iterate only the true cycle cells** (≤2,992) to convergence — instead of re-running 17 whole sheets each pass.
+- **Out:** faster default `engine.js`; same contract.
+- **Accept:** full `run()` == GT within 1e-6; convergence passes unchanged or fewer; **cells-iterated/pass drops ~500×** (measure via the harness on `midi` + outpost gate).
+- **Risk:** HIGH (per-cell execution within a cluster; preserve sampled-delta + NaN-guard). **Depends on:** C2 (oracle), L0 SCC (or its own Rust Tarjan). **Unblocks:** lock-grade full-run.
+
+### Lane 2 — Scoped cone-module transpile (Tier 3, #22/T-078)  *(DESIGN DONE — see ADR-026; code next)*
+- **Files:** new emitter `generate_cone_module` (or a JS post-emit step consuming C1 + per-cell transpiled exprs); wire into `init` while the graph is in memory; register the MIP-grid scope.
+- **Do:** emit `chunked/cones/<scopeId>.mjs` = boundary constants + active acyclic (topo) + active cycle loop, exposing the C3 `run()` contract for the scoped outputs.
+- **Accept:** `coneRun(inputs) == fullRun(inputs)` for scoped outputs within 1e-6; module is few-MB; **no 190 MB sheet module imported** (assert bytes-loaded); what-if pass touches ~10³ cells.
+- **Risk:** med-high. **Depends on:** L0 (ScopePlan), C2. **Unblocks:** MIP grid, Mippy targeted queries.
+
+### Lane 3 — Tier 1 quick wins  *(independent; ship first)*
+- **Files:** `chunked_emitter.rs` return (drop `kpis: ctx.kpis()` second clone → alias/getter; keep shape); CLI engine loader (`module.enableCompileCache()` / `NODE_COMPILE_CACHE`); evaluate `--lazy-engine` default for `init`.
+- **Accept:** byte-identical outputs; −~400 MB alloc/run; repeat import amortized; harness shows no correctness regression.
+- **Risk:** LOW. **Depends on:** nothing. **Unblocks:** immediate UX.
+
+### Lane 4 — Efficacy harness + fixtures  *(foundation; ship first, with L0)*
+- See next section. **Unblocks:** every lane’s acceptance check.
+
+### Parallelization map
+```
+        ┌──────────────── Lane 3 (Tier 1)  ── independent, ship now
+start ──┤
+        ├── Lane 4 (harness+fixtures) ─┐
+        └── Lane 0 (scope-plan) ───────┼── then ─┬── Lane 1 (Tier 2, Rust)
+                                        │         └── Lane 2 (Tier 3, cone module)
+                                        └── C1/C2 frozen here
+```
+Critical path: **L4 + L0 → L1/L2**. L3 runs fully in parallel from t0.
+
+---
+
+## Rapid-iteration test loop (the efficacy harness)
+
+**Principle:** the inner loop must be **seconds** and must **prove correctness against an oracle** every run, with speed/memory/structure tracked over time. The real model is the *gate*, not the inner loop.
+
+### Fixtures (tiered)
+1. **`mini-cyclic`** (inner loop, <1 s) — synthetic, built with the real parser via the `build(sheets,{lazy})` pattern in `pipelines/rust/tests/test-lazy-engine.mjs`. Must reproduce the pathology: ≥3 sheets, a **cross-sheet cycle** (e.g. `Debt!interest → CF!cash → Debt!balance → Debt!interest`), one **big acyclic schedule** sheet (few-thousand cells), and ≥1 **named output downstream of the cycle**. Golden = full `run()` (correct & instant here). This is where L0/L1/L2 logic is debugged.
+2. **`midi-cyclic`** (seconds–~1 min) — same shape, ~50–200K cells, to measure **speedup curves** and stress lazy range expansion. Golden = full `run()`.
+3. **`outpost-a1` / `outpost-a2`** (minutes, **gated** — pre-merge/nightly) — the real models. Golden = `_ground-truth.json`. Validates on the actual 776 MB / 5.8M-cell case. Never the inner loop.
+
+Fixtures live under `benchmarks/fixtures/` (synthetic, committed) and `engines/…` (real, gitignored).
+
+### Harness — `benchmarks/efficacy.mjs`
+```
+node benchmarks/efficacy.mjs --fixture mini-cyclic --variant scoped [--compare baseline] [--bless]
+```
+Per run, measure + record:
+- **Correctness (gate):** each named output vs golden, % within 1e-6 rel+abs (reuse `verify-engine.mjs` `close()`); max rel err. **Exit non-zero if any output drifts** (CI gate).
+- **Speed:** scope-plan build ms, scoped/cycle run ms, full-run ms, convergence passes, cells-iterated/pass.
+- **Memory:** peak RSS; **bytes of sheet/cone modules imported** (proves no 190 MB load).
+- **Structure:** active cells, cycle cells, cone size (from the ScopePlan / `analyze-cone`).
+- **A/B (`--compare`):** run baseline + variant on the same fixture, **assert value parity**, print speedup× and memory×.
+
+Outputs:
+- `benchmarks/results/<ts>-<fixture>-<variant>.json` — full detail, **gitignored** (may carry real cell counts; never values).
+- `benchmarks/efficacy-history.jsonl` — one sanitized line/run (timings, sizes, %correct).
+- `benchmarks/EFFICACY.md` — committed aggregate table (no cell values/labels), regenerated each run; diff it to see the needle move. Mirrors the privacy rules already in `benchmarks/bench.mjs`.
+- `benchmarks/fixtures/<fixture>/golden.json` — blessed oracle values.
+
+### The loop
+1. Make a change in a lane.
+2. `efficacy.mjs --fixture mini-cyclic --variant <lane> --compare baseline` → **seconds** → PASS/FAIL + speedup×.
+3. Iterate on `mini` (then `midi` for the curve) until green + target speedup.
+4. **Gate:** `--fixture outpost-a1` (minutes) before merge — confirms on the real 776 MB case.
+5. `efficacy-history.jsonl` / `EFFICACY.md` show the trend per commit.
+
+### Targets (acceptance, measured on outpost gate)
+- Tier 1: −~400 MB/run; repeat import → ~0; **0 output drift**.
+- Tier 2: full run cells-iterated/pass **÷ ~500**; full run feasible at default heap; **0 output drift** vs GT.
+- Tier 3: MIP-grid what-if **no 190 MB module loaded**, pass touches ~10³ cells, **scoped == full within 1e-6**; ≥100× vs a full pass for the grid.
+
+### Reuse (don’t reinvent)
+- `pipelines/rust/tests/test-lazy-engine.mjs` `build()` — construct fixtures with the real parser.
+- `lib/verify-engine.mjs` `close()` / `resolveOutput()` — correctness oracle + schedule aggregation.
+- `benchmarks/analyze-cone.mjs` — structural metrics (cone/cycle) + the CSR/typed-array pattern for big graphs.
+- `benchmarks/bench.mjs` — existing per-sheet accuracy + the privacy/anonymization pattern for committed summaries.

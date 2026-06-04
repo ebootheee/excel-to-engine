@@ -1,5 +1,33 @@
 # excel-to-engine — Changelog
 
+## 2026-06-03 — Cell-level cone/cycle MEASURED + scoped-subgraph design (ADR-026) + parallel-lane plan
+
+Branch `feat/engine-perf` (off `main@9ef55c5`). **Design + measurement only — no engine code changed.**
+
+**Measured the real A-1 cell graph** (`benchmarks/analyze-cone.mjs`, new): emitted the compact
+`dependency-graph.json` (535 MB, `--emit-debug`) and ran a range-aware CSR/Tarjan over all
+**5,579,816 formula cells** (1.76B expanded edges). Results: the true largest cell-level cycle is
+**2,992 cells (0.054%)**; all cycles together 10,684 (0.19%); output cones are **median 0.38%, p90
+8.5%, max 66%**; distinct cross-sheet target cells 1.30M (23%). Conclusion: **the 17-sheet
+convergence cluster is 99.8% artifact** — real circularity ≤0.19% of cells — because chunked mode
+clusters at SHEET granularity (`main.rs:252` skips cell-level cycle detection).
+
+**Confirmed the scoping gap** (4-lane research): `--lazy-engine` `runScoped`/`load` is **sheet-level**
+(extracts the sheet prefix, walks `SHEET_DEPS`, and any cluster cell pulls all 17 modules) and sheet
+modules are **monolithic** (one `compute()` each), so a single needed cell forces a 190 MB import.
+Sheet-level scoping therefore cannot beat the **776 MB module wall**; only cell-level can.
+
+**Authored the design + plan:**
+- `docs/adr/ADR-026-scoped-subgraph-transpile.md` — the scoped-subgraph (cone-module) design:
+  recompute only the **active subgraph = fwdCone(inputs) ∩ backCone(outputs)** and constant-fold the
+  rest (boundary cells pinned to base values). Correctness proof, artifact shape, reuse of the
+  existing cone primitives (`computeOutputClosures`, `loadDependencyEdges`, lazy range expansion),
+  preserved `run()` contract invariants, alternatives, risks.
+- `docs/PLAN-engine-speed.md` — parallel coding lanes (L0 scope-plan lib · L1 in-engine cell-level
+  cycle resolution · L2 cone-module transpile · L3 Tier-1 quick wins · L4 efficacy harness) with
+  frozen inter-lane contracts and a tiered rapid-iteration test harness (mini/midi synthetic inner
+  loop + outpost gate, golden-value oracle, A/B speedup, sanitized history).
+
 ## 2026-06-03 — AVERAGEIFS transpiled (A-2 returns cone stub-free) + cone-measurement findings
 
 Branch `feat/transpile-averageifs` (off `main`). Two outcomes from rebuilding and measuring the

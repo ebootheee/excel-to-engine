@@ -37,6 +37,13 @@ Two gaps, both closed in code on `feat/lockgrade-cone` and confirmed on the real
   so each pass touches thousands of cells across a few-MB module, not 776 MB of 17 sheets. This is
   the remaining unblock for both the cone measurement AND the {exit year, exit value, hurdle} → MIP
   grid.
+  - **MEASURED (2026-06-03, `benchmarks/analyze-cone.mjs` on the real A-1 cell graph):** true largest
+    cell cycle **2,992 cells (0.054%)**, all cycles 10,684 (0.19%), output cones median **0.38%** /
+    max 66% — the 17-sheet cluster is **99.8% artifact**, so the active subgraph for a MIP what-if is
+    tiny. **Design now written:** `docs/adr/ADR-026-scoped-subgraph-transpile.md` (active subgraph =
+    fwdCone(inputs) ∩ backCone(outputs), boundary-pinned) + parallel-lane build plan & rapid-iteration
+    harness in `docs/PLAN-engine-speed.md`. Confirmed: `runScoped` is sheet-level (can't beat the
+    776 MB wall) → cell-level is required.
 - Row-chunk the monster cluster sheets (#33) as the complementary lever (Owned Asset PP&E 190MB,
   Future Owned Acquisitions 144MB, Technology 114MB, Debt 100MB).
 
