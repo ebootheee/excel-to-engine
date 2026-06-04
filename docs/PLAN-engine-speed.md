@@ -131,3 +131,32 @@ Outputs:
 - `lib/verify-engine.mjs` `close()` / `resolveOutput()` — correctness oracle + schedule aggregation.
 - `benchmarks/analyze-cone.mjs` — structural metrics (cone/cycle) + the CSR/typed-array pattern for big graphs.
 - `benchmarks/bench.mjs` — existing per-sheet accuracy + the privacy/anonymization pattern for committed summaries.
+
+---
+
+## Wave 2 — handoff for the pickup agent (L1 + L2)
+
+Wave 1 (L0/L3/L4) is **landed on `feat/engine-perf`** (read the tip with `git rev-parse --short feat/engine-perf`). L1/L2 build ON Wave 1.
+
+**Branching.** Fork L1/L2 off the **`feat/engine-perf` tip, NOT `origin/main`** — `lib/scope-plan.mjs` (L0) and `benchmarks/efficacy.mjs` (L4) are not on main yet. Suggested: `feat/engine-perf-wave2` off `feat/engine-perf`. Test + benchmark there; merge only after Wave 1 + Wave 2 are green together (or rebase once Wave 1 reaches main). Small PRs per CLAUDE.md git discipline.
+
+**How to benchmark your lane (the point of L4).** `benchmarks/efficacy.mjs` exposes pluggable variant hooks: `VARIANTS = { baseline, scoped, cycle }`. `baseline` is the full eager `run()` (the oracle). Fill your lane's hook — signature `async (chunkedDir, inputs) => ({ values, meta, runMs, moduleBytes })` — then:
+```
+node benchmarks/efficacy.mjs --fixture mini-cyclic --variant cycle  --compare baseline   # L1
+node benchmarks/efficacy.mjs --fixture midi-cyclic --variant scoped --compare baseline   # L2
+```
+`--compare baseline` asserts **value parity** (variant == full run within 1e-6 — the correctness gate, exit-nonzero on drift) and prints **speedup× / module-bytes×**. `--bless` records goldens. `midi-cyclic` (100K cells) builds on first use; it is the speedup-curve fixture.
+
+**Measured Wave-1 baselines (targets to beat):** mini full `run()` ≈ 1.7 ms / 14 passes; midi ≈ 205 ms / 15 passes / 100,011 cells; midi sheet modules ≈ 5.3 MB on disk (the "no 190 MB module loaded" proxy a scoped variant must shrink).
+
+### L1 — cell-level cycle resolution (Tier 2, `chunked_emitter.rs`)
+- Iterate ONLY the true cycle cells (≤2,992 on the real model), not all 17 cluster sheets/pass. **Preserve** the sampled-delta convergence + NaN-guard + honest `meta.converged` already in `emit_run_function` (~L694–793) and the full C3 return shape.
+- SCC source: compute the cell-level SCC in Rust at emit (range-aware Tarjan over `Keep` edges — leaning this so the *default* engine improves with no JS post-step), or consume L0's `buildScopePlan().activeCycles` (ADR-026 open question #3).
+- Accept: full `run()` == GT within 1e-6; cells-iterated/pass ÷ ~500 (measure on midi; gate on outpost).
+
+### L2 — scoped cone-module transpile (Tier 3, #22 / T-078 — the keystone)
+- Emit `chunked/cones/<scopeId>.mjs` per ADR-026: BOUNDARY base-constants + active-acyclic (topo) + active-cycle loop, exposing the C3 `run()` for the scoped outputs. Reuse `transpile()` per active cell + `ComputeContext` + the intra-sheet cycle-loop emitter + `_helpers.mjs`.
+- **CRITICAL (from the L0 review):** call `buildScopePlan({ edges, inputs, outputs, gtKeys })` **WITH `gtKeys`** (the `_ground-truth.json` map). Without it, range-member RAW-LEAF boundary cells drop from `boundary` → they'd hit missing-cell-reads-0 and violate ADR-026 invariant #6. When `gtKeys` is a `{cell:value}` map, L0 attaches those base values as the additive `plan.boundaryBase` sidecar — bake them into the cone's BOUNDARY block (or read GT directly; ADR-026 open question #2).
+- **L0 is UNVALIDATED at A-1 scale** — `buildScopePlan` has run only on synthetic fixtures, not the real 535 MB `dependency-graph.json` (the <2 s target is unverified). Run it on the real graph EARLY. A scratch graph may exist at `engines/_scratch_probe/oa1-dbg/chunked/` (gitignored, ~535 MB); else regenerate with `rust-parser <xlsx> <out> --chunked --emit-debug`.
+- Register the first scope = the MIP grid `{exit year, exit value, hurdle} → MIP/returns`; seed scopes from `named-inputs.affectsOutputs` ∩ `named-outputs.dependsOnNamedInputs`. Build cones in `init` while the graph is in memory.
+- Accept: `coneRun(inputs) == fullRun(inputs)` within 1e-6; module few-MB; assert **no 190 MB sheet module imported** (`moduleBytes` ≪ baseline); what-if pass touches ~10³ cells; ≥100× vs a full pass for the grid.
