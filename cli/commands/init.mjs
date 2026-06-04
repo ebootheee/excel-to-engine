@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
 import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
+import { buildConesFromManifest } from '../../lib/cone-emit.mjs';
 import { emitIntegrationDoc } from '../../lib/integration-doc.mjs';
 import { emitBuildManifest } from '../../lib/build-manifest.mjs';
 import { loadLabelIndex } from '../../lib/manifest.mjs';
@@ -411,6 +412,31 @@ export function runInit(excelPath, args) {
     }
   } catch (e) {
     lines.push(`  (Integration doc skipped: ${e.message})`);
+  }
+
+  // Step 5d: Emit scoped cone module(s) (ADR-026 L2) — opt-in via --emit-cones.
+  // MUST run BEFORE slimming (the dependency graph has to still be on disk). The
+  // MIP-grid scope is seeded from the named maps (levers → driven outputs); the
+  // cone recomputes only that active subgraph and folds the rest to base constants,
+  // so a targeted what-if loads a few-KB module instead of the whole sheet set.
+  // Best-effort: a failure here never blocks init (cones are an optional accelerator).
+  if (args.emitCones) {
+    lines.push('');
+    lines.push('Step 5d: Emitting scoped cone module(s)...');
+    try {
+      const res = buildConesFromManifest(chunkedDir, { write: true });
+      if (res.skipped) {
+        lines.push(`  Skipped: ${res.skipped}`);
+      } else {
+        for (const s of res.scopes) {
+          lines.push(`  Wrote cones/${s.scopeId}.mjs — ${s.stats.activeCells} active cell(s), ${s.stats.boundaryCells} folded (${s.inputs.length} lever(s) → ${s.outputs.length} output(s))`);
+          if (s.missingBoundary) lines.push(`    ⚠ ${s.missingBoundary} boundary cell(s) lacked a base value (read 0)`);
+        }
+        if (res.indexPath) lines.push('  Index: cones/_index.json');
+      }
+    } catch (e) {
+      lines.push(`  (Cone emission skipped: ${e.message})`);
+    }
   }
 
   // Step 5b: Slim the default chunked/ output. The cell-level

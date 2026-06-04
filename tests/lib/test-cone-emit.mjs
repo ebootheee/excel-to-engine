@@ -25,9 +25,11 @@ import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
 import { performance } from 'perf_hooks';
 
-import { buildCone, buildFullExecutor } from '../../lib/cone-emit.mjs';
+import { buildCone, buildFullExecutor, buildConesFromManifest } from '../../lib/cone-emit.mjs';
 import { extractCellExprs } from '../../lib/cell-exprs.mjs';
 import { close } from '../../lib/verify-engine.mjs';
+
+const setEq = (a, b) => { const A = new Set(a), B = new Set(b); if (A.size !== B.size) return false; for (const x of A) if (!B.has(x)) return false; return true; };
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dir, '..', '..');
@@ -157,6 +159,42 @@ console.log('Testing: full executor reproduces ALL cells while iterating only th
   // what-if through the full executor too
   const fw = fullRun({ [LEVER]: 9 }), bw = baselineRun({ [LEVER]: 9 });
   for (const c of NAMED) assert(close(fw.values[c], bw.values[c]), `full what-if ${LEVER}=9 ${c}: full==baseline`);
+}
+
+// ── init integration: buildConesFromManifest ─────────────────────────────────
+console.log('Testing: buildConesFromManifest derives + emits the MIP-grid cone from named maps');
+{
+  // Author named maps with explicit lever→output coupling (independent of the
+  // manifest output-detection heuristics) — the shape emitManifestMaps produces.
+  writeFileSync(join(chunked, 'named-inputs.json'), JSON.stringify({ namedInputs: {
+    Lever: { cell: LEVER, label: 'lever', affectsOutputs: ['MIP', 'Total'] },
+  } }, null, 2));
+  writeFileSync(join(chunked, 'named-outputs.json'), JSON.stringify({ namedOutputs: {
+    MIP: { cell: 'Out!B1', label: 'MIP', dependsOnNamedInputs: ['Lever'] },
+    Total: { cell: 'Out!B2', label: 'Total', dependsOnNamedInputs: ['Lever'] },
+  } }, null, 2));
+  // Inject the engine base run as base values (the synthetic fixture's GT cache is
+  // a 0-placeholder; real models' _ground-truth.json IS the gated base case).
+  const res = buildConesFromManifest(chunked, { write: true, baseValues: baseVals });
+  assert(!res.skipped, `cone emitted from named maps (skipped=${res.skipped || 'no'})`);
+  assert(res.scopes.length === 1, 'one combined MIP-grid scope');
+  assert(res.indexPath && existsSync(res.indexPath), 'cones/_index.json written');
+  const s = res.scopes[0];
+  assert(setEq(s.inputs, [LEVER]) && setEq(s.outputs, ['Out!B1', 'Out!B2']), 'scope = lever → MIP/Total cells');
+  const coneRun = await loadRun(s.path);
+  const cb = coneRun({}), bb = baselineRun({});
+  for (const c of ['Out!B1', 'Out!B2']) assert(close(cb.values[c], bb.values[c]), `manifest cone base ${c}: cone==engine`);
+  // and a what-if
+  const cw = coneRun({ [LEVER]: 11 }), bw = baselineRun({ [LEVER]: 11 });
+  for (const c of ['Out!B1', 'Out!B2']) assert(close(cw.values[c], bw.values[c]), `manifest cone what-if ${c}: cone==engine`);
+}
+
+console.log('Testing: buildConesFromManifest skips cleanly when there is no coupling');
+{
+  writeFileSync(join(chunked, 'named-inputs.json'), JSON.stringify({ namedInputs: {} }, null, 2));
+  writeFileSync(join(chunked, 'named-outputs.json'), JSON.stringify({ namedOutputs: {} }, null, 2));
+  const res = buildConesFromManifest(chunked, { write: true });
+  assert(res.skipped && res.scopes.length === 0, `no-coupling → skipped (${res.skipped})`);
 }
 
 built.cleanup();

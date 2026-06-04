@@ -267,7 +267,10 @@ Commands:
                                     _graph.json, model-map.json for offline analysis),
                                     --lazy-engine (engine.js loads sheet modules on
                                     demand via async load()/runScoped() + output-cone
-                                    scoping; run() stays sync — await load() first)
+                                    scoping; run() stays sync — await load() first),
+                                    --emit-cones (emit chunked/cones/<id>.mjs scoped
+                                    cone module(s) for the MIP-grid what-if surface;
+                                    ADR-026 L2 — a few-KB targeted-query accelerator)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   verify <modelDir>          Check the engine reproduces the model's base case
   query <modelDir> [args]    Query ground truth cells
