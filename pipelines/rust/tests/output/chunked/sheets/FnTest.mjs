@@ -4,7 +4,7 @@
 export const SHEET_NAME = "FnTest";
 export const SHEET_DEPENDENCIES = [];
 
-import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _filter } from './_helpers.mjs';
+import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter } from './_helpers.mjs';
 
 /**
  * Compute all cells for sheet "FnTest".
@@ -49,6 +49,8 @@ export function compute(ctx) {
   ctx.set("FnTest!F6", `MinValA_xlfn`);
   ctx.set("FnTest!F7", `MaxValA_xlfn`);
   ctx.set("FnTest!F8", `FlaggedSum_xlfn`);
+  ctx.set("FnTest!F9", `AvgValA`);
+  ctx.set("FnTest!F10", `AvgValA_if`);
 
   // ── Formula cells ──
   ctx.set("FnTest!G2", computeXNPV(0.1, ctx.range("FnTest!B2:B6"), ctx.range("FnTest!A2:A6")));
@@ -58,4 +60,6 @@ export function compute(ctx) {
   ctx.set("FnTest!G6", _minifs(ctx.range("FnTest!D2:D6"), [[ctx.range("FnTest!C2:C6"), `A`]]));
   ctx.set("FnTest!G7", _maxifs(ctx.range("FnTest!D2:D6"), [[ctx.range("FnTest!C2:C6"), `A`]]));
   ctx.set("FnTest!G8", [_filter(ctx.range("FnTest!D2:D6"), ctx.range("FnTest!E2:E6"), 0)].flat().reduce((a,b)=>a+(+b||0),0));
+  ctx.set("FnTest!G9", _averageifs(ctx.range("FnTest!D2:D6"), [[ctx.range("FnTest!C2:C6"), `A`]]));
+  ctx.set("FnTest!G10", _averageif(ctx.range("FnTest!C2:C6"), `A`, ctx.range("FnTest!D2:D6")));
 }

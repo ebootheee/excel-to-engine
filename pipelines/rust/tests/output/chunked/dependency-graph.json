@@ -32,5 +32,7 @@
 "FnTest!G5":["FnTest!D2:D6","FnTest!E2:E6"],
 "FnTest!G6":["FnTest!D2:D6","FnTest!C2:C6"],
 "FnTest!G7":["FnTest!D2:D6","FnTest!C2:C6"],
-"FnTest!G8":["FnTest!D2:D6","FnTest!E2:E6"]
-},"edgeCount":34}
+"FnTest!G8":["FnTest!D2:D6","FnTest!E2:E6"],
+"FnTest!G9":["FnTest!D2:D6","FnTest!C2:C6"],
+"FnTest!G10":["FnTest!C2:C6","FnTest!D2:D6"]
+},"edgeCount":36}
