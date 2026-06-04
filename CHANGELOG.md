@@ -1,5 +1,64 @@
 # excel-to-engine — Changelog
 
+## 2026-06-04 — Engine-speed Wave 2 landed: scoped cone module (L2) + cell-level full executor (L1)
+
+Branch `feat/engine-perf-wave2` (off `origin/main`). The ADR-026 keystone. One JS post-emit
+generator serves both lanes by **lifting each cell's transpiled expression straight out of the
+emitted sheet modules** (the `ctx.set("addr", <expr>)` lines) and recomputing only the active
+subgraph — no Rust rewrite, exact reproduction of the default engine by construction.
+
+- **L0 extension — `lib/scope-plan.mjs`.** Added the additive `plan.activeOrder`: the unified
+  reads-first order of the active subgraph (acyclic cells + cycle-unit arrays **interleaved**), so
+  a consumer can emit cells in the exact order it must evaluate them. This was the missing piece —
+  an output that *reads* a cycle is acyclic but must be set *after* the cycle converges, which the
+  acyclic-only `activeAcyclic` list cannot express. Added `buildFullPlan({edges,gtKeys})` (every
+  formula cell active, cell-level SCCs, leaves as boundary) for L1, and `plan.inputBase` so a cone
+  reproduces the base case when a lever is not overridden. Behaviour-preserving refactor of the
+  shared boundary collection; `activeAcyclic` stays byte-identical.
+- **L1/L2 core — `lib/cell-exprs.mjs` + `lib/cone-emit.mjs`.** `extractCellExprs` (streaming, robust
+  on the 190 MB monster modules) lifts the per-cell expressions. `generateConeSource` renders a
+  standalone module = BOUNDARY/INPUT_BASE constants + active-acyclic (topo) + active-cycle loops
+  (the intra-sheet convergence pattern + lock-grade NaN-guard), exposing the **C3 `run()` contract**
+  (override pinning, strict, honest `meta.converged`). `buildCone` (L2 scoped) passes base values as
+  `gtKeys` so range-member leaf boundary cells are not dropped (**ADR-026 invariant #6** — the L0
+  review landmine). `buildFullExecutor` (L1) runs the same generator over `buildFullPlan`: each
+  acyclic cell once in topo order, only the true cycle cells iterate.
+- **Harness + fixtures — `benchmarks/`.** Reshaped the synthetic fixtures so the big acyclic
+  schedule lives **on a cluster sheet** — the real pathology (the Wave-1 fixture put it on its own
+  acyclic sheet, so L1 had nothing to optimise). Wired the `scoped` + `cycle` variants + a
+  cells-iterated/pass metric into `efficacy.mjs`; `--compare baseline` gates value parity and prints
+  speedup× / module-bytes× / ÷cells-ratio.
+- **Init integration — `cli ... init --emit-cones`.** Opt-in: emits `chunked/cones/<scopeId>.mjs` +
+  `cones/_index.json` for the MIP-grid surface (seeded from the named maps), before graph slimming,
+  best-effort.
+
+**Measured (`--compare baseline`, value parity OK):**
+
+| Fixture (cells) | Variant | Correct | Cells/pass | Speedup | Module |
+|---|---|---|---|---|---|
+| midi (50,005) | scoped (L2) | 5/5 @1e-6 | 3 vs 100,004 → **÷33,334** | **855×** | **898× smaller** |
+| midi (50,005) | cycle (L1)  | 5/5 @1e-6 | 3 vs 100,004 → **÷33,334** | 1.59× wall | ~1× |
+| mini (605)    | scoped (L2) | 5/5 @1e-6 | 3 vs 1,204 → ÷401 | 13.4× | 12.5× smaller |
+
+L2 smashes the Tier-3 targets (≥100× for the grid; no big module loaded). L1's cells-iterated/pass
+÷33,334 far exceeds the ÷500 target; its modest wall-clock on midi reflects midi's 15 cluster passes
+(the per-pass reduction dominates on the real cluster's ~200 passes). The L1 full-executor module is
+sheet-module-sized on the real model (active=everything), so it is the **midi-scale proof + reference
+implementation**; making it the *default* engine is the Rust-emitter follow-on (Wave 3).
+
+**Scale finding (honest):** L0 `buildScopePlan` was validated on the real 535 MB A-1 graph (5.58 M
+cells / 1.76 B edges) for the first time — it COMPLETES correctly, but the PLAN's "<2 s" target was
+wrong: graph-load ≈14 s, `buildScopePlan` ≈**20 min**, peak ≈**16 GB** (off-heap CSR). The cost is
+intrinsic full-graph processing, independent of cone size. This is a one-time **BUILD** cost (the cone
+is emitted once at `init --emit-cones`; the runtime `cone.run()` what-if stays ms) and amortizes over
+the MIP grid, but `--emit-cones` on the largest models needs ~16 GB and minutes. **Wave-3 fix:** build
+the CSR once and limit per-scope work to the cone (CSR cache / streaming extraction). The synthetic
+fixtures prove the RUNTIME thesis; the at-scale BUILD is the next optimization.
+
+Tests: `tests/lib/test-scope-plan.mjs` 47/47 (+14: activeOrder incl. multi-cycle topo, buildFullPlan),
+new `tests/lib/test-cone-emit.mjs` 59/59 (scoped/full/manifest cones == engine for base + what-ifs, C3
+contract, strict, cell-exprs round-trip). Both wired into `npm test`; full suite green.
+
 ## 2026-06-04 — Engine-speed Wave 1 landed: scope-plan lib (C1) + efficacy harness (C2) + Tier-1 quick wins
 
 Branch `feat/engine-perf`. First code wave off the ADR-026 plan — three independent lanes, each

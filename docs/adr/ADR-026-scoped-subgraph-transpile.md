@@ -86,7 +86,36 @@ chunked/cones/<scope-id>.mjs
 - **Risk: drift.** A cone is only valid for its `modelHash`; stamp it and fail the consumer check on mismatch (same pattern as named-maps).
 - **Win:** unblocks the cone *measurement* and the MIP grid; each what-if pass touches ~10³ cells in a few-MB module, not 776 MB — the targeted-query path goes from infeasible/minutes to ms (≈100×+ for the grid; see measured cones).
 
-## Open questions (for the build agents)
-1. Cone module per scope vs. one parameterized module keyed by scope-id?
-2. Where to source boundary constants — bake into the cone module, or load a small `cone-<id>-boundary.json`?
-3. Cell-level SCC for Lane 1 (full-run convergence): compute in Rust at emit (range-aware Tarjan over `Keep` edges) or reuse Lane 0’s JS plan? (Leaning Rust-at-emit so the default engine improves without a JS post-step.)
+## Open questions — RESOLVED in Wave 2 (2026-06-04, `feat/engine-perf-wave2`)
+1. **Cone module per scope vs. one parameterized module?** → **Per-scope module**:
+   `chunked/cones/<scopeId>.mjs`, with a `cones/_index.json` registry. Each is standalone and stamped
+   with its `modelHash`. (`lib/cone-emit.mjs`.)
+2. **Where to source boundary constants?** → **Baked into the module** as a `BOUNDARY = {...}` literal
+   (+ a `INPUT_BASE` literal for un-overridden levers), sourced from the base-case value map —
+   `_ground-truth.json` for real models (the verify-engine-gated base case), injectable when GT can't
+   be trusted. No separate boundary file.
+3. **Cell-level SCC for Lane 1: Rust-at-emit or reuse L0's JS plan?** → **Wave 2 reused L0's JS plan**
+   (`buildFullPlan` → `buildFullExecutor`): proves cells-iterated/pass ÷33,334 on midi and is the
+   reference implementation. Because the full-executor module is sheet-module-sized on the real model,
+   making the *default* `engine.js` cell-level (the Rust-at-emit port in `chunked_emitter.rs`) is the
+   **Wave 3** follow-on; the JS executor is its oracle.
+
+### Wave-2 implementation notes (beyond the original design)
+- **One generator, two consumers.** The cone emitter and the full executor are the SAME renderer
+  (`generateConeSource`) over a `ScopePlan`; L2 feeds it `buildScopePlan` (small active set), L1 feeds
+  it `buildFullPlan` (active = everything).
+- **No new Rust.** Per-cell transpiled expressions are lifted from the already-emitted sheet modules
+  (`ctx.set("addr", <expr>)` lines, `lib/cell-exprs.mjs`) — so the cone runs byte-identical expressions
+  to the default engine, reproducing it by construction.
+- **`activeOrder` (new C1 sidecar).** The cone must emit acyclic cells and cycle units **interleaved**
+  in one reads-first order (an output reading a cycle is set after the cycle converges). `buildScopePlan`
+  now returns `activeOrder` for this; `activeAcyclic` is unchanged.
+- **Invariant #6 confirmed load-bearing.** `buildCone` passes base values as `gtKeys` so range-member
+  RAW-LEAF boundary cells are not dropped — without it, those cells would hit missing-cell-reads-0.
+- **At-scale BUILD cost (measured Wave 2, real A-1 graph).** `buildScopePlan` over the full 5.58 M-cell /
+  1.76 B-edge graph is **~20 min, ~16 GB peak** (intrinsic forward+reverse CSR + reachability + Tarjan,
+  independent of cone size). So a cone is a **one-time build artifact** (emitted at `init`), not a
+  per-call interactive operation; the runtime `cone.run()` what-if is ms. This vindicates the
+  build-time-cone choice (alternative B, the runtime cell-executor, would pay this per query). **Wave-3:**
+  cache the CSR so a second scope doesn't re-pay the 20 min; or a streaming cone-extraction that never
+  materializes the full reverse CSR.

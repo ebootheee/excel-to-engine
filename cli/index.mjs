@@ -270,7 +270,9 @@ Commands:
                                     scoping; run() stays sync — await load() first),
                                     --emit-cones (emit chunked/cones/<id>.mjs scoped
                                     cone module(s) for the MIP-grid what-if surface;
-                                    ADR-026 L2 — a few-KB targeted-query accelerator)
+                                    ADR-026 L2 — a few-KB targeted-query accelerator.
+                                    One-time build: on the largest models the scope
+                                    plan is ~minutes / ~16 GB; the runtime what-if is ms)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   verify <modelDir>          Check the engine reproduces the model's base case
   query <modelDir> [args]    Query ground truth cells

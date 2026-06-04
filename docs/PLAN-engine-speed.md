@@ -49,17 +49,35 @@ Reuses `loadDependencyEdges`, `buildCellIndex`/`forEachCellInRange`/`parseRefTok
 - **Files:** new `lib/scope-plan.mjs`; export the 4 graph helpers from `lib/manifest-maps.mjs`.
 - **Do:** cell-level range-aware **Tarjan** over `Keep` edges; `forwardCone(inputs)`; `backwardCone(outputs)` (reverse edges — build once); intersect; topo-order the acyclic active set; collect boundary cells + their base values.
 - **Out:** C1 ScopePlan.
-- **Accept:** on `mini-cyclic`, plan’s active set == hand-derived; cone/cycle sizes match `analyze-cone.mjs`; runs in <2 s on the 535 MB A-1 graph (lazy expansion, integer-id CSR like analyze-cone).
+- **Accept:** on `mini-cyclic`, plan’s active set == hand-derived; cone/cycle sizes match `analyze-cone.mjs`. ⚠️ **The "<2 s on the 535 MB A-1 graph" target was WRONG** — measured Wave 2 (real graph, 5.58 M cells / 1.76 B edges): graph-load ≈14 s, `buildScopePlan` ≈**20 min**, peak ≈**16 GB** (off-heap typed-array CSR). The cost is intrinsic full-graph processing (forward+reverse CSR + 2 reachability scans + Tarjan over ALL cells), **independent of cone size**, rebuilt per call. This is acceptable as a **one-time BUILD** (the cone is emitted once at `init`; the runtime `cone.run()` what-if is ms). **Wave-3 fix:** build the CSR once and limit per-scope work to the cone (CSR cache / streaming cone extraction), so a second scope isn't another 20 min.
 - **Risk:** med (reverse-graph memory on A-1 — reuse the CSR/typed-array approach from `analyze-cone.mjs`). **Depends on:** nothing (uses existing graph). **Unblocks:** L1, L2.
 
-### Lane 1 — Cell-level cycle resolution in the engine (Tier 2)  *(Rust emitter)*
+### Lane 1 — Cell-level cycle resolution in the engine (Tier 2)  — ✅ LANDED as JS full-executor reference (Wave 2); Rust default-engine port = Wave 3
+> **Wave 2 result:** delivered as `buildFullExecutor` (`lib/cone-emit.mjs`) + the efficacy `cycle`
+> variant — the same generator as L2, over `buildFullPlan` (active = every formula cell). It sets each
+> acyclic cell once in topo order and iterates ONLY the true cycle cells, proving **cells-iterated/pass
+> ÷33,334 on midi** (target ÷500), parity OK. Because active=everything, the full-executor *module* is
+> sheet-module-sized on the real model — so this is the midi-scale proof + the reference the Rust port
+> mirrors; making the *default* `engine.js` cell-level (no big module) is the `chunked_emitter.rs`
+> follow-on (Wave 3). Below = the original Rust-emitter spec for that port.
+
 - **Files:** `pipelines/rust/src/chunked_emitter.rs` (`emit_run_function`, cluster loop); new range-aware Tarjan over the compact cross-sheet edges (or consume an emitted cycle-set).
 - **Do:** for a cross-sheet cluster, compute acyclic members **once** in cell topo order, then **iterate only the true cycle cells** (≤2,992) to convergence — instead of re-running 17 whole sheets each pass.
 - **Out:** faster default `engine.js`; same contract.
 - **Accept:** full `run()` == GT within 1e-6; convergence passes unchanged or fewer; **cells-iterated/pass drops ~500×** (measure via the harness on `midi` + outpost gate).
 - **Risk:** HIGH (per-cell execution within a cluster; preserve sampled-delta + NaN-guard). **Depends on:** C2 (oracle), L0 SCC (or its own Rust Tarjan). **Unblocks:** lock-grade full-run.
 
-### Lane 2 — Scoped cone-module transpile (Tier 3, #22/T-078)  *(DESIGN DONE — see ADR-026; code next)*
+### Lane 2 — Scoped cone-module transpile (Tier 3, #22/T-078)  — ✅ LANDED (Wave 2, 2026-06-04)
+> **Wave 2 result:** `buildCone` (`lib/cone-emit.mjs`) emits `chunked/cones/<scopeId>.mjs` = boundary
+> constants + active-acyclic (topo) + active-cycle loops, C3 `run()` contract. Wired into `ete init
+> --emit-cones` (seeded from the named maps). Measured on midi: **scoped == full within 1e-6, ÷33,334
+> cells/pass, 855× faster, 898× smaller module** — beats the Tier-3 targets (≥100×, no big module
+> loaded). Implemented as a JS post-emit step (lifts per-cell exprs from the sheet modules) rather than
+> a new Rust `generate_cone_module`, per the "or a JS post-emit step" option below.
+> **Build cost caveat (measured):** emitting the cone at A-1 scale is a ~20 min / ~16 GB one-time step
+> (dominated by `buildScopePlan` over the full graph — see Lane 0 accept). The RUNTIME what-if is ms;
+> the build is folded into `init` and amortized over the grid. Speeding the build = Wave 3.
+
 - **Files:** new emitter `generate_cone_module` (or a JS post-emit step consuming C1 + per-cell transpiled exprs); wire into `init` while the graph is in memory; register the MIP-grid scope.
 - **Do:** emit `chunked/cones/<scopeId>.mjs` = boundary constants + active acyclic (topo) + active cycle loop, exposing the C3 `run()` contract for the scoped outputs.
 - **Accept:** `coneRun(inputs) == fullRun(inputs)` for scoped outputs within 1e-6; module is few-MB; **no 190 MB sheet module imported** (assert bytes-loaded); what-if pass touches ~10³ cells.
@@ -134,7 +152,17 @@ Outputs:
 
 ---
 
-## Wave 2 — handoff for the pickup agent (L1 + L2)
+## Wave 2 — ✅ LANDED (2026-06-04, branch `feat/engine-perf-wave2`)
+
+**L1 (full-executor reference + `cycle` variant) and L2 (scoped cone module + `ete init --emit-cones`)
+are implemented, tested, and benchmarked** — see the CHANGELOG "Wave 2 landed" entry and the lane
+notes above. Measured (midi, `--compare baseline`, parity OK): L2 scoped ÷33,334 cells/pass · 855× ·
+898× smaller module; L1 cycle ÷33,334 cells/pass. Tests: scope-plan 45/45, cone-emit 59/59.
+**Next (Wave 3):** port L1 into `chunked_emitter.rs` so the *default* `engine.js` resolves cycles
+cell-level (the JS full executor is the reference); optional runtime cell-executor for arbitrary
+scopes (ADR-026 alt B); row-chunk the monster sheets (#33). The original handoff follows for context.
+
+---
 
 Wave 1 (L0/L3/L4) is **landed on `feat/engine-perf`** (read the tip with `git rev-parse --short feat/engine-perf`). L1/L2 build ON Wave 1.
 

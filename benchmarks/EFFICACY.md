@@ -19,12 +19,12 @@ Variants: `baseline` (full run, implemented) · `scoped` (Lane 2 cone module —
 |---------|---------|--------:|----------:|-------:|---------:|-----------:|-------:|----------:|-----:|:---------:|
 | midi-cyclic | baseline | 100% | 0 | 205.18 | — | — | — | 5.72 | — | yes |
 | midi-cyclic | cycle | 100% | 0 | 165.67 | 1.587 | 3 | ÷33334.7 | 5.06 | 1.13× | yes |
-| midi-cyclic | scoped | 100% | 0 | 0.31 | 855.846 | 3 | ÷33334.7 | 0.01 | 898.297× | yes |
-| mini-cyclic | baseline | 100% | 0 | 3.81 | — | — | — | 0.08 | — | yes |
-| mini-cyclic | cycle | 100% | 0 | 1.74 | 2.23 | 3 | ÷401.3 | 0.06 | 1.282× | yes |
-| mini-cyclic | scoped | 100% | 0 | 0.26 | 13.396 | 3 | ÷401.3 | 0.01 | 12.549× | yes |
+| midi-cyclic | scoped | 100% | 0 | 0.32 | 1075.414 | 3 | ÷33334.7 | 0.01 | 895.203× | yes |
+| mini-cyclic | baseline | 100% | 0 | 5.88 | 0.812 | — | — | 0.08 | 1× | yes |
+| mini-cyclic | cycle | 100% | 0 | 1.71 | 2.353 | 3 | ÷401.3 | 0.06 | 1.282× | yes |
+| mini-cyclic | scoped | 100% | 0 | 0.38 | 9.834 | 3 | ÷401.3 | 0.01 | 12.549× | yes |
 
-_Last run: 2026-06-04T21:35:36.939Z · 8 run(s) recorded._
+_Last run: 2026-06-04T22:12:59.653Z · 15 run(s) recorded._
 
 ## Recent runs
 
@@ -38,3 +38,10 @@ _Last run: 2026-06-04T21:35:36.939Z · 8 run(s) recorded._
 | 2026-06-04T21:35:24.658Z | midi-cyclic | baseline | ✓ | 100% | 205.18 | — |
 | 2026-06-04T21:35:35.258Z | midi-cyclic | scoped | ✓ | 100% | 0.31 | 855.846 |
 | 2026-06-04T21:35:36.939Z | midi-cyclic | cycle | ✓ | 100% | 165.67 | 1.587 |
+| 2026-06-04T22:02:34.747Z | mini-cyclic | scoped | ✓ | 100% | 0.29 | 12.585 |
+| 2026-06-04T22:02:42.720Z | mini-cyclic | cycle | ✓ | 100% | 2.36 | 1.943 |
+| 2026-06-04T22:02:49.852Z | midi-cyclic | scoped | ✓ | 100% | 0.54 | 773.896 |
+| 2026-06-04T22:05:10.498Z | mini-cyclic | baseline | ✓ | 100% | 5.88 | 0.812 |
+| 2026-06-04T22:05:10.869Z | mini-cyclic | scoped | ✓ | 100% | 0.38 | 9.834 |
+| 2026-06-04T22:05:11.359Z | mini-cyclic | cycle | ✓ | 100% | 1.71 | 2.353 |
+| 2026-06-04T22:12:59.653Z | midi-cyclic | scoped | ✓ | 100% | 0.32 | 1075.414 |

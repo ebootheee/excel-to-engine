@@ -223,6 +223,23 @@ console.log('Testing: buildFullPlan makes every formula cell active with cell-le
   assert(full.scopeId !== plan.scopeId, 'full-plan scopeId differs from a scoped plan');
 }
 
+// (i) activeOrder with TWO dependent cycles (pure edges, no parser) — the multi-
+// cycle topo case a cone emitter must get right.
+console.log('Testing: activeOrder orders two dependent cycles correctly (cycle1 → mid → cycle2 → out)');
+{
+  const e2 = {
+    'S!A': ['S!B', 'S!L'], 'S!B': ['S!A'],   // cycle1 (reads lever S!L)
+    'S!M': ['S!A'],                            // acyclic, reads cycle1
+    'S!C': ['S!D', 'S!M'], 'S!D': ['S!C'],   // cycle2, reads M
+    'S!O': ['S!C'],                            // output, reads cycle2
+  };
+  const p2 = buildScopePlan({ edges: e2, inputs: ['S!L'], outputs: ['S!O'], gtKeys: { 'S!L': 1 } });
+  assert(p2.activeCycles.length === 2, 'two distinct active cycles found');
+  const pos = (x) => p2.activeOrder.findIndex((u) => Array.isArray(u) ? u.includes(x) : u === x);
+  const c1 = pos('S!A'), m = pos('S!M'), c2 = pos('S!C'), o = pos('S!O');
+  assert(c1 >= 0 && c1 < m && m < c2 && c2 < o, `topo order valid: cycle1(${c1}) < M(${m}) < cycle2(${c2}) < O(${o})`);
+}
+
 built.cleanup();
 
 console.log('');
