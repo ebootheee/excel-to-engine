@@ -45,7 +45,7 @@ Reuses `loadDependencyEdges`, `buildCellIndex`/`forEachCellInRange`/`parseRefTok
 
 ## Lanes (codeable in parallel once C1/C2 are frozen)
 
-### Lane 0 — Scope-plan library  *(foundation; pure JS; no Rust)*
+### Lane 0 — Scope-plan library  *(foundation; pure JS; no Rust)* — ✅ LANDED (Wave 1, 2026-06-04)
 - **Files:** new `lib/scope-plan.mjs`; export the 4 graph helpers from `lib/manifest-maps.mjs`.
 - **Do:** cell-level range-aware **Tarjan** over `Keep` edges; `forwardCone(inputs)`; `backwardCone(outputs)` (reverse edges — build once); intersect; topo-order the acyclic active set; collect boundary cells + their base values.
 - **Out:** C1 ScopePlan.
@@ -65,12 +65,12 @@ Reuses `loadDependencyEdges`, `buildCellIndex`/`forEachCellInRange`/`parseRefTok
 - **Accept:** `coneRun(inputs) == fullRun(inputs)` for scoped outputs within 1e-6; module is few-MB; **no 190 MB sheet module imported** (assert bytes-loaded); what-if pass touches ~10³ cells.
 - **Risk:** med-high. **Depends on:** L0 (ScopePlan), C2. **Unblocks:** MIP grid, Mippy targeted queries.
 
-### Lane 3 — Tier 1 quick wins  *(independent; ship first)*
+### Lane 3 — Tier 1 quick wins  *(independent; ship first)* — ✅ LANDED (Wave 1, 2026-06-04)
 - **Files:** `chunked_emitter.rs` return (drop `kpis: ctx.kpis()` second clone → alias/getter; keep shape); CLI engine loader (`module.enableCompileCache()` / `NODE_COMPILE_CACHE`); evaluate `--lazy-engine` default for `init`.
 - **Accept:** byte-identical outputs; −~400 MB alloc/run; repeat import amortized; harness shows no correctness regression.
 - **Risk:** LOW. **Depends on:** nothing. **Unblocks:** immediate UX.
 
-### Lane 4 — Efficacy harness + fixtures  *(foundation; ship first, with L0)*
+### Lane 4 — Efficacy harness + fixtures  *(foundation; ship first, with L0)* — ✅ LANDED (Wave 1, 2026-06-04)
 - See next section. **Unblocks:** every lane’s acceptance check.
 
 ### Parallelization map
@@ -95,7 +95,7 @@ Critical path: **L4 + L0 → L1/L2**. L3 runs fully in parallel from t0.
 2. **`midi-cyclic`** (seconds–~1 min) — same shape, ~50–200K cells, to measure **speedup curves** and stress lazy range expansion. Golden = full `run()`.
 3. **`outpost-a1` / `outpost-a2`** (minutes, **gated** — pre-merge/nightly) — the real models. Golden = `_ground-truth.json`. Validates on the actual 776 MB / 5.8M-cell case. Never the inner loop.
 
-Fixtures live under `benchmarks/fixtures/` (synthetic, committed) and `engines/…` (real, gitignored).
+Fixtures live under `benchmarks/fixtures/` and `engines/…` (real, gitignored). **Wave-1 decision:** commit only the fixture SPEC (`_build.mjs`) + `golden.json`; the generated `chunked/` dir is gitignored and regenerated on demand by the harness (it is parser-version-dependent, so committing it would drift from the emitter). `mini-cyclic` is built + blessed; `midi-cyclic` is defined in `_build.mjs` and built on first `--fixture midi-cyclic` use (deferred to Wave 2, when the speedup curve needs it).
 
 ### Harness — `benchmarks/efficacy.mjs`
 ```

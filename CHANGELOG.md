@@ -1,5 +1,38 @@
 # excel-to-engine — Changelog
 
+## 2026-06-04 — Engine-speed Wave 1 landed: scope-plan lib (C1) + efficacy harness (C2) + Tier-1 quick wins
+
+Branch `feat/engine-perf`. First code wave off the ADR-026 plan — three independent lanes, each
+implemented and adversarially reviewed, then integrated green.
+
+- **Lane 0 — `lib/scope-plan.mjs` (contract C1).** `buildScopePlan({edges,inputs,outputs,gtKeys})`
+  → `ScopePlan` { scopeId, modelHash, inputs, outputs, activeAcyclic (reads-first topo), activeCycles
+  (SCC units), boundary, stats }. Cell-level: active = `forwardCone(inputs)` (reverse-edge reach) ∩
+  `backwardCone(outputs)` (forward-edge reach); boundary = cells an active cell reads that are constant
+  under the levers → pinned to base. Range-aware iterative Tarjan + integer-id CSR (lifted from
+  `analyze-cone.mjs`, no recursion). Exported `parseRefToken`/`expandRange`/`buildCellIndex`/
+  `forEachCellInRange` from `lib/manifest-maps.mjs` (behaviour-preserving). New
+  `tests/lib/test-scope-plan.mjs` (33/33). Foundation for L1/L2.
+- **Lane 4 — `benchmarks/efficacy.mjs` + fixtures (contract C2).** Seconds-fast inner loop that PROVES
+  every named output against a blessed `golden.json` within 1e-6 (reuses `verify-engine.mjs`
+  `close()`/`resolveOutput()`) — any drift exits non-zero. Synthetic `mini-cyclic` fixture
+  (`benchmarks/fixtures/_build.mjs`, built with the real parser) reproduces the pathology: a cross-sheet
+  cycle (Debt↔CF) + a big acyclic schedule + named outputs downstream of the cycle. `--bless` records
+  golden; `--compare` asserts variant parity + speedup×/memory×. `baseline` variant implemented;
+  `scoped` (L2) / `cycle` (L1) are pluggable hooks for Wave 2. Sanitized `efficacy-history.jsonl` +
+  committed `EFFICACY.md`; full detail → gitignored `benchmarks/results/`. Generated `chunked/` dirs are
+  gitignored and regenerated on demand (committed fixture = spec + golden, never stale).
+- **Lane 3 — Tier-1 quick wins.** Dropped the double return-clone in the emitted `run()`
+  (`chunked_emitter.rs`): `values` and `kpis` now share ONE `{...ctx.values}` snapshot instead of cloning
+  the (up to ~5.8M-entry) map twice — `kpis()` was already `{...this.values}`, so content + shape are
+  unchanged (≈−400 MB alloc/run on the real model). Enabled the V8 compile cache in `cli/index.mjs`
+  (`module.enableCompileCache()`, guarded; honors `NODE_COMPILE_CACHE`) to amortize repeat engine
+  imports. `--lazy-engine`-as-default deferred (conservative). Byte-correct outputs: smoke 126/126,
+  lazy-engine 19/19, engine-runtime 24/24.
+
+Full `npm test` green. Next (Wave 2, gated on C1/C2): **L1** cell-level cycle resolution in the engine
+and **L2 / #22 / T-078** scoped cone-module transpile (the ADR-026 keystone).
+
 ## 2026-06-03 — Cell-level cone/cycle MEASURED + scoped-subgraph design (ADR-026) + parallel-lane plan
 
 Branch `feat/engine-perf` (off `main@9ef55c5`). **Design + measurement only — no engine code changed.**
