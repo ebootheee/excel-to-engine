@@ -21,16 +21,24 @@ Two gaps, both closed in code on `feat/lockgrade-cone` and confirmed on the real
   (~8.8 min/pass → O(sample)/iter). Adversarially reviewed (9 findings fixed); FoF NAV (#)
   + #25 per-class value-bearing outputs shipped alongside.
 
-**Next (to actually flip lock-grade):**
-- **Rebuild the Outpost A-2 artifact off this branch with `ete init --emit-debug`** — GT-seed
-  scoping needs `dependency-graph.json`, which is slimmed from the default build.
-- Measure the 17-sheet cone end-to-end on the rebuilt engine (the {exitYear, exit value, hurdle}
-  → MIP grid is sampleable once scoping converges; full eager `run()` is infeasible). Use
-  `GT_SEED_SCOPE=external` for the honest cold-start accuracy number; the NaN-guard makes any
-  residual non-convergence honest (`converged:false` + `meta.nonFiniteCell`).
-- Regenerate `named-outputs.json` on the rebuilt engine so the formal `--assert-no-fallbacks`
-  gate runs (function-level AFTER already proven: 0 stubs of the four in the returns cone).
-- Transpile `AVERAGEIFS` (stubbed ×3101, outside the returns cone — same SUMIFS pattern).
+**Wave 2b (2026-06-03, branch `feat/transpile-averageifs`) — rebuilt + measured A-2:**
+- **AVERAGEIFS transpiled — DONE.** A-2 rebuild showed net MOIC/IRR still resolving through
+  `AVERAGEIFS` (×3103 — last fn after wave 1; outside the cone on A-1, inside it on A-2).
+  Transpiled it → A-2 rebuild now has **0 `_fn()` fallback cells** and **no output through a
+  stub** (function-level `--assert-no-fallbacks` AFTER green on the real A-2).
+- **GT-seed scoping measured on the real model — validated but not sufficient.** Cut the cluster
+  seed 23.6× (6.06M → 257K), but the cone still OOMs at 600s: the 17 cluster sheets are **776 MB
+  of JS modules**, so loading them exceeds the 8 GB heap before any seed. The seed was never the
+  binding constraint for this dominant cluster.
+
+**Next (to actually flip lock-grade — the wall is now the modules, not seed or stubs):**
+- **Scoped-subgraph transpile (#22 / T-078, ADR-026)** — emit/run ONLY the input→output cone
+  (the cells between {exit year, exit value, hurdle} and MIP/returns), constant-folding the rest,
+  so each pass touches thousands of cells across a few-MB module, not 776 MB of 17 sheets. This is
+  the remaining unblock for both the cone measurement AND the {exit year, exit value, hurdle} → MIP
+  grid.
+- Row-chunk the monster cluster sheets (#33) as the complementary lever (Owned Asset PP&E 190MB,
+  Future Owned Acquisitions 144MB, Technology 114MB, Debt 100MB).
 
 ## Now — Analyst usability + coding-agent handoff (2026-05-29)
 

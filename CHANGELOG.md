@@ -1,5 +1,34 @@
 # excel-to-engine — Changelog
 
+## 2026-06-03 — AVERAGEIFS transpiled (A-2 returns cone stub-free) + cone-measurement findings
+
+Branch `feat/transpile-averageifs` (off `main`). Two outcomes from rebuilding and measuring the
+Outpost A-2 returns cone on the post-wave-2 engine.
+
+**AVERAGEIFS/AVERAGEIF transpiled — the A-2 returns cone is now stub-free.** Rebuilding A-2 off the
+wave-2 parser (`ete init --emit-debug`) showed the net-returns outputs (`class-1.netMOIC`,
+`class-1.netIRR`) still resolving through an `_fn()` stub — `AVERAGEIFS` (×3103), the one function
+left after the wave-1 XNPV/FILTER/MINIFS/MAXIFS work. On A-1 it sat OUTSIDE the cone; on A-2 it's
+inside it. Added the transpiler arm (`transpiler.rs`, mirroring SUMIFS/MINIFS criteria-pair
+handling) + runtime helpers `_averageif`/`_averageifs` (`chunked_emitter.rs`; mean of matching
+numeric+finite values, 0 on no-match per the engine's IFS convention; stored bare — no `_xlfn`
+prefix). A fresh A-2 rebuild reports **0 `_fn()` fallback cells** (was 3103) and **no output
+resolves through a stub** — the function-level `--assert-no-fallbacks` AFTER is green on the real
+A-2 model. FnTest fixture exercises both (smoke 126/126, test:engine 24/24, cargo 18/18).
+
+**Cone-measurement finding — GT-seed scoping is validated, but the wall is the MODULES, not the
+seed.** Measured the 17-sheet returns cluster on the rebuilt A-2 engine. GT-seed scoping (#33, wave
+2) cut the cluster seed **23.6×** (6.06M → 257K cells, `GT_SEED_SCOPE=external`) — a real reduction
+that worked on the real model. But the cluster still failed at the 600s ceiling under BOTH `cluster`
+and `external` scope, because the 17 cluster sheets total **776 MB of JS modules** (Owned Asset PP&E
+190MB, Future Owned Acquisitions 144MB, Technology 114MB, Debt 100MB, …) — loading them into one
+process exceeds the 8 GB heap before any seed is applied. So the seed was never the binding
+constraint for this dominant cluster; the remedy is the **scoped-subgraph transpile (#22 / T-078,
+ADR-026)** — emit/run ONLY the input→output cone, not all 776 MB of 17 sheets. Standalone sheets
+re-baseline at 99.5% (Term SOFR 100%, UW Comparison 100%, Version Tracker 99.8%, Cheat Sheet 96.8%).
+Lock-grade posture HOLDS: the function-level stub gate is now green on A-2, but the convergence
+measurement remains blocked on the module wall.
+
 ## 2026-06-03 — Lock-grade wave 2: cone-rebuild enablers (sampled-delta, GT-seed scoping, FoF NAV, #25) + adversarial review
 
 Branch `feat/lockgrade-wave2` (off origin/main `e259296`, the PR #38 merge). Four lanes that

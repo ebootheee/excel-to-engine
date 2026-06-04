@@ -1,5 +1,23 @@
 # excel-to-engine — Plan
 
+## Status: A-2 returns cone STUB-FREE; remaining wall = monster modules, not the seed (2026-06-03, branch `feat/transpile-averageifs`)
+
+Rebuilt + measured the Outpost A-2 cone on the post-wave-2 engine. Two results:
+- **AVERAGEIFS transpiled → A-2 cone is stub-free.** The A-2 rebuild showed net MOIC/IRR still
+  resolving through `AVERAGEIFS` (×3103 — the one fn left after wave 1; outside the cone on A-1,
+  inside it on A-2). Transpiled it (mirrors SUMIFS/MINIFS). Fresh A-2 rebuild: **0 `_fn()`
+  fallback cells**, no output through a stub → the function-level `--assert-no-fallbacks` AFTER is
+  green on the real A-2.
+- **GT-seed scoping validated but NOT sufficient.** It cut the cluster seed 23.6× (6.06M → 257K),
+  but the cone still OOMs at 600s because the 17 cluster sheets are **776 MB of JS modules**
+  (loading them exceeds the 8 GB heap before any seed). The seed was never the binding constraint
+  for this cluster.
+
+**Remaining to flip `MIPPY_LOCK_GRADE_CONFIRMED`:** the convergence measurement is now blocked on
+the module wall, NOT the seed or stubs. The remedy is the **scoped-subgraph transpile (#22 / T-078,
+ADR-026)** — emit/run ONLY the input→output cone, not all 776 MB of 17 sheets. Posture HOLDS. See
+CHANGELOG 2026-06-03.
+
 ## Status: Lock-grade wave 2 — cone-rebuild enablers BUILT (2026-06-03, branch `feat/lockgrade-wave2`)
 
 The pieces that were "remaining" on 2026-06-01 are now built and adversarially reviewed (9
