@@ -189,12 +189,51 @@ console.log('Testing: buildConesFromManifest derives + emits the MIP-grid cone f
   for (const c of ['Out!B1', 'Out!B2']) assert(close(cw.values[c], bw.values[c]), `manifest cone what-if ${c}: cone==engine`);
 }
 
+console.log('Testing: buildConesFromManifest expands AGGREGATE cell refs (multi-class carry/debt)');
+{
+  // A multi-class output uses aggregate syntax { cells:[...], op }. The cone must
+  // seed the COMPONENT cells, not the aggregate object (QA must-fix; mirrors the
+  // "multi-class understatement" failure class in CLAUDE.md).
+  writeFileSync(join(chunked, 'named-inputs.json'), JSON.stringify({ namedInputs: {
+    Lever: { cell: LEVER, label: 'lever', affectsOutputs: ['AggOut'] },
+  } }, null, 2));
+  writeFileSync(join(chunked, 'named-outputs.json'), JSON.stringify({ namedOutputs: {
+    AggOut: { cell: { cells: ['Out!B1', 'Out!B2'], op: 'sum' }, label: 'aggregate total', dependsOnNamedInputs: ['Lever'] },
+  } }, null, 2));
+  const res = buildConesFromManifest(chunked, { write: true, baseValues: baseVals });
+  assert(!res.skipped, `aggregate cone emitted (skipped=${res.skipped || 'no'})`);
+  const s = res.scopes[0];
+  assert(setEq(s.outputs, ['Out!B1', 'Out!B2']), `aggregate expanded to component cells (got ${JSON.stringify(s.outputs)})`);
+  assert(s.stats.activeCells > 0, `aggregate cone has a non-empty active set (${s.stats.activeCells}) — the bug made it 0`);
+  const coneRun = await loadRun(s.path);
+  const cb = coneRun({}), bb = baselineRun({});
+  for (const c of ['Out!B1', 'Out!B2']) assert(close(cb.values[c], bb.values[c]), `aggregate cone base ${c}: cone==engine`);
+}
+
 console.log('Testing: buildConesFromManifest skips cleanly when there is no coupling');
 {
   writeFileSync(join(chunked, 'named-inputs.json'), JSON.stringify({ namedInputs: {} }, null, 2));
   writeFileSync(join(chunked, 'named-outputs.json'), JSON.stringify({ namedOutputs: {} }, null, 2));
-  const res = buildConesFromManifest(chunked, { write: true });
+  const res = buildConesFromManifest(chunked, { write: true, baseValues: baseVals });
   assert(res.skipped && res.scopes.length === 0, `no-coupling → skipped (${res.skipped})`);
+}
+
+console.log('Testing: NaN-guard sets maxDelta=Infinity on a non-finite cycle pass (mirrors the engine)');
+{
+  // The emitted cycle loop must signal hard non-convergence in meta.maxDelta, not
+  // just meta.converged (QA finding #4). Assert the emitted source carries it.
+  const cone = await buildCone(chunked, { inputs: [LEVER], outputs: SCOPE_OUT, baseValues: baseVals });
+  assert(cone.source.includes('_maxDelta = Infinity'), 'cycle loop sets _maxDelta = Infinity on a non-finite pass');
+}
+
+console.log('Testing: resolveBaseValues fails loud when no base values AND no ground truth');
+{
+  // Removing GT and omitting baseValues must THROW, not silently drop range-leaf
+  // boundary cells (the latent null-gtIdx trio; QA hardening). Last test — mutates GT.
+  rmSync(join(chunked, '_ground-truth.json'), { force: true });
+  let threw = false;
+  try { await buildCone(chunked, { inputs: [LEVER], outputs: SCOPE_OUT }); } catch { threw = true; }
+  assert(threw, 'buildCone with no baseValues and no _ground-truth.json throws (fail-loud)');
 }
 
 built.cleanup();

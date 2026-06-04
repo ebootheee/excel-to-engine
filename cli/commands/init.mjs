@@ -424,7 +424,10 @@ export function runInit(excelPath, args) {
     lines.push('');
     lines.push('Step 5d: Emitting scoped cone module(s)...');
     try {
-      const res = buildConesFromManifest(chunkedDir, { write: true });
+      // Pass the in-memory ground truth as base values: under --reuse-parse the
+      // on-disk _ground-truth.json could be stale, and sharedGt is the value map
+      // already validated for this build (avoids silent boundary-fold drift — QA).
+      const res = buildConesFromManifest(chunkedDir, { write: true, baseValues: sharedGt });
       if (res.skipped) {
         lines.push(`  Skipped: ${res.skipped}`);
       } else {
