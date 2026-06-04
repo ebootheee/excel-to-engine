@@ -33,6 +33,11 @@ engines/
 # is committed; raw per-run detail stays local.
 benchmarks/results/
 
+# Efficacy fixtures: commit the SPEC (_build.mjs) + golden.json only. The generated
+# chunked/ engine is parser-version-dependent (drifts when the emitter changes), so
+# the harness regenerates it on demand from _build.mjs — never commit the artifact.
+benchmarks/fixtures/*/chunked/
+
 # per-sheet-eval scratch dir (transient child-process scripts + per-sheet GT)
 _eval_tmp/
 
