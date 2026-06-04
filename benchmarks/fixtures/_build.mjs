@@ -47,54 +47,58 @@ const num = (v, f) => (f ? { t: 'n', v, f } : { t: 'n', v });
 const str = (v) => ({ t: 's', v });
 
 /**
- * Build the workbook for a fixture. `scale` is the schedule sheet length (rows
- * of the big acyclic schedule); mini ~1.2K cells, midi tens of thousands.
+ * Build the workbook for a fixture. `scale` is the length of the big acyclic
+ * schedule, which lives ON A CLUSTER SHEET — this is the crux that reproduces the
+ * REAL pathology: the convergence cluster spans sheets that ALSO carry millions of
+ * acyclic schedule cells, so the default sheet-level cluster loop re-runs the whole
+ * schedule every pass even though the true cycle is a handful of cells. (The Wave-1
+ * fixture put the schedule on its own ACYCLIC sheet, so L1 had nothing to optimize.)
  *
  * Shape (identical across tiers; only `scale` differs):
- *   Sched  — big ACYCLIC running schedule. Sched!Bn = Sched!B(n-1) + An (const).
- *            Its terminal cell Sched!B{scale} feeds the cycle via CF.
- *   Debt   — interest = balance * rate ; balance = CF!cash + principal-floor.
- *   CF     — cash = Debt!interest * payout + Sched!terminal      <-- closes cycle
- *            CF!cash -> Debt!balance -> Debt!interest -> CF!cash
- *   Out    — MIP (NAMED OUTPUT, downstream of the cycle) = CF!cash * 2 + Debt!interest
- *            Total                                          = MIP + Sched!terminal
+ *   Assets (CLUSTER member) — big ACYCLIC running schedule in column C
+ *            (C1=A1, Cn=C(n-1)+An) PLUS two cycle cells:
+ *              B1 (interest) = B2 * 0.05
+ *              B2 (balance)  = CF!B2 + C{scale}     <- reads schedule terminal + cash
+ *   CF     (CLUSTER member) — B2 (cash) = Assets!B1 * 0.30 + 100000
+ *            Cycle: Assets!B1 -> Assets!B2 -> CF!B2 -> Assets!B1  (3 cells, 2 sheets)
+ *            => engine clusters {Assets, CF}; Assets.compute() re-runs all `scale`
+ *               schedule cells every pass (the pathology L1 fixes).
+ *   Out    — MIP   (NAMED OUTPUT, downstream of cycle) = CF!B2 * 2 + Assets!B1
+ *            Total                                       = Out!B1 + Assets!C{scale}
+ *
+ * L2 scope (see fixtureScope): lever = Assets!A{scale} (the LAST schedule driver).
+ * Its forward cone is just {C{scale}, the 3-cell cycle, Out!B1, Out!B2}; the entire
+ * rest of the schedule folds to ONE boundary constant (Assets!C{scale-1}). So a
+ * scoped what-if recomputes ~6 cells regardless of `scale` — the MIP-grid analog.
  */
 function workbook(scale) {
-  const schedRef = `B${scale}`; // terminal schedule cell, e.g. B1200
-  // Big acyclic schedule: A column constants, B column running cumulative sum.
-  const Sched = { '!ref': `A1:B${scale}` };
+  const termC = `C${scale}`; // terminal of the running-sum schedule
+
+  // CLUSTER sheet: big acyclic schedule (A constants, C running sum) + cycle cells.
+  const Assets = { '!ref': `A1:C${scale}` };
   for (let r = 1; r <= scale; r++) {
     // deterministic synthetic constants — a gentle ramp, no real data
-    Sched[`A${r}`] = num(1 + ((r * 7) % 13) * 0.5);
-    Sched[`B${r}`] = r === 1
-      ? num(0, `A1`)
-      : num(0, `B${r - 1}+A${r}`);
+    Assets[`A${r}`] = num(1 + ((r * 7) % 13) * 0.5);
+    Assets[`C${r}`] = r === 1 ? num(0, `A1`) : num(0, `C${r - 1}+A${r}`);
   }
+  Assets.B1 = num(0, 'Assets!B2*0.05');            // interest = balance * 5%   (cycle)
+  Assets.B2 = num(0, `CF!B2+Assets!${termC}`);     // balance  = cash + schedule (cycle)
 
-  // Cross-sheet cycle (damped so it converges): the classic debt<->cashflow loop.
-  const Debt = {
-    '!ref': 'A1:B2',
-    A1: str('interest'), B1: num(0, 'Debt!B2*0.05'),         // interest = balance * 5%
-    A2: str('balance'),  B2: num(0, 'CF!B2+100000'),         // balance = cash + principal floor
-  };
   const CF = {
     '!ref': 'A1:B2',
     A1: str('cash'),
-    // cash = interest * payout + schedule terminal  -> closes Debt<->CF cycle and
-    // pulls the big acyclic schedule in as a boundary input.
-    B1: str('drivers'),
-    B2: num(0, `Debt!B1*0.30+Sched!${schedRef}`),
+    B2: num(0, 'Assets!B1*0.30+100000'),           // cash = interest * payout + floor (cycle)
   };
   // Named outputs, both DOWNSTREAM of the cycle.
   const Out = {
     '!ref': 'A1:B2',
-    A1: str('MIP'),   B1: num(0, 'CF!B2*2+Debt!B1'),
-    A2: str('Total'), B2: num(0, `Out!B1+Sched!${schedRef}`),
+    A1: str('MIP'),   B1: num(0, 'CF!B2*2+Assets!B1'),
+    A2: str('Total'), B2: num(0, `Out!B1+Assets!${termC}`),
   };
 
   return {
-    SheetNames: ['Sched', 'Debt', 'CF', 'Out'],
-    Sheets: { Sched, Debt, CF, Out },
+    SheetNames: ['Assets', 'CF', 'Out'],
+    Sheets: { Assets, CF, Out },
   };
 }
 
@@ -106,10 +110,22 @@ function namedOutputs() {
     namedOutputs: {
       MIP: { cell: 'Out!B1', label: 'synthetic MIP (downstream of cycle)' },
       Total: { cell: 'Out!B2', label: 'synthetic Total (downstream of cycle)' },
-      DebtInterest: { cell: 'Debt!B1', label: 'synthetic cycle interest' },
-      CFCash: { cell: 'CF!B2', label: 'synthetic cycle cash' },
+      Interest: { cell: 'Assets!B1', label: 'synthetic cycle interest' },
+      Cash: { cell: 'CF!B2', label: 'synthetic cycle cash' },
+      Balance: { cell: 'Assets!B2', label: 'synthetic cycle balance' },
     },
   };
+}
+
+/**
+ * The registered L2 what-if scope for a fixture: the late schedule driver lever
+ * (forward cone folds the whole schedule to one constant) → the named outputs.
+ * Mirrors the real MIP grid `{exit, value, hurdle} → MIP/returns`.
+ */
+export function fixtureScope(name) {
+  const spec = FIXTURES[name];
+  if (!spec) throw new Error(`unknown fixture '${name}'`);
+  return { inputs: [`Assets!A${spec.scale}`], outputs: ['Out!B1', 'Out!B2'] };
 }
 
 const FIXTURES = {

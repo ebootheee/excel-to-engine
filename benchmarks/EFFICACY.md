@@ -15,11 +15,16 @@ Variants: `baseline` (full run, implemented) · `scoped` (Lane 2 cone module —
 
 ## Latest per fixture × variant
 
-| Fixture | Variant | Correct | maxRelErr | Run ms | Speedup× | Passes | Converged | Formula cells | Cyc.sheets | Module MB |
-|---------|---------|--------:|----------:|-------:|---------:|-------:|:---------:|--------------:|-----------:|----------:|
-| mini-cyclic | baseline | 100% | 0 | 3.93 | 0.466 | 14 | yes | 605 | 2 | 0.08 |
+| Fixture | Variant | Correct | maxRelErr | Run ms | Speedup× | Cells/pass | ÷ratio | Module MB | Mod× | Converged |
+|---------|---------|--------:|----------:|-------:|---------:|-----------:|-------:|----------:|-----:|:---------:|
+| midi-cyclic | baseline | 100% | 0 | 205.18 | — | — | — | 5.72 | — | yes |
+| midi-cyclic | cycle | 100% | 0 | 165.67 | 1.587 | 3 | ÷33334.7 | 5.06 | 1.13× | yes |
+| midi-cyclic | scoped | 100% | 0 | 0.31 | 855.846 | 3 | ÷33334.7 | 0.01 | 898.297× | yes |
+| mini-cyclic | baseline | 100% | 0 | 3.81 | — | — | — | 0.08 | — | yes |
+| mini-cyclic | cycle | 100% | 0 | 1.74 | 2.23 | 3 | ÷401.3 | 0.06 | 1.282× | yes |
+| mini-cyclic | scoped | 100% | 0 | 0.26 | 13.396 | 3 | ÷401.3 | 0.01 | 12.549× | yes |
 
-_Last run: 2026-06-04T04:39:24.032Z · 2 run(s) recorded._
+_Last run: 2026-06-04T21:35:36.939Z · 8 run(s) recorded._
 
 ## Recent runs
 
@@ -27,3 +32,9 @@ _Last run: 2026-06-04T04:39:24.032Z · 2 run(s) recorded._
 |------------|---------|---------|:--:|--------:|-------:|---------:|
 | 2026-06-04T04:39:23.742Z | mini-cyclic | baseline | ✓ | 100% | 1.67 | — |
 | 2026-06-04T04:39:24.032Z | mini-cyclic | baseline | ✓ | 100% | 3.93 | 0.466 |
+| 2026-06-04T21:30:31.524Z | mini-cyclic | baseline | ✓ | 100% | 3.81 | — |
+| 2026-06-04T21:34:57.898Z | mini-cyclic | scoped | ✓ | 100% | 0.26 | 13.396 |
+| 2026-06-04T21:35:09.790Z | mini-cyclic | cycle | ✓ | 100% | 1.74 | 2.23 |
+| 2026-06-04T21:35:24.658Z | midi-cyclic | baseline | ✓ | 100% | 205.18 | — |
+| 2026-06-04T21:35:35.258Z | midi-cyclic | scoped | ✓ | 100% | 0.31 | 855.846 |
+| 2026-06-04T21:35:36.939Z | midi-cyclic | cycle | ✓ | 100% | 165.67 | 1.587 |

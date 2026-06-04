@@ -42,7 +42,8 @@ import { performance } from 'perf_hooks';
 
 import { close, resolveOutput } from '../lib/verify-engine.mjs';
 import { loadDependencyEdges } from '../lib/manifest-maps.mjs';
-import { buildFixture, FIXTURE_NAMES } from './fixtures/_build.mjs';
+import { buildFixture, FIXTURE_NAMES, fixtureScope } from './fixtures/_build.mjs';
+import { buildCone, buildFullExecutor } from '../lib/cone-emit.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = __dir + '/fixtures';
@@ -67,19 +68,14 @@ const BLESS = has('bless');
 
 // ── variant runners ─────────────────────────────────────────────────────────
 // Each returns { values, meta, runMs, moduleBytes } for a fixture's chunked dir.
-// Wave 2 lights up `scoped` (Lane 2) and `cycle` (Lane 1); they are wired as
-// hooks now so the harness, history, and EFFICACY.md schema are stable.
-function notImplemented(label) {
-  return async () => {
-    const e = new Error(`variant '${label}' is not implemented yet — Wave 2. Run --variant baseline for now.`);
-    e.code = 'VARIANT_NYI';
-    throw e;
-  };
-}
+// Wave 2 lights up `scoped` (Lane 2 cone module) and `cycle` (Lane 1 full
+// executor); `runMs` times only run() (the cone/plan BUILD is the amortized init
+// cost, reported separately as buildMs), and `moduleBytes` is the bytes a what-if
+// actually imports — for `scoped` that's the few-KB cone, which is how we prove
+// "no 190 MB sheet module loaded".
 
 /** Sum the on-disk bytes of the sheet modules an eager engine imports — the
- *  structural memory ceiling. For scoped/cone variants (Wave 2) this is the cone
- *  subset, which is how we prove "no 190 MB sheet module loaded". */
+ *  structural memory ceiling the baseline pays. */
 function sheetModuleBytes(chunked) {
   const dir = join(chunked, 'sheets');
   if (!existsSync(dir)) return 0;
@@ -88,23 +84,73 @@ function sheetModuleBytes(chunked) {
   return bytes;
 }
 
+/** Count the cells the default sheet-level cluster loop re-evaluates EVERY pass:
+ *  every `ctx.set` on a cluster sheet's module (the L1 baseline-to-beat). */
+function baselineCellsPerPass(chunked, meta) {
+  const clusterSheets = new Set();
+  for (const c of (meta.clusters || [])) for (const s of (c.sheets || [])) clusterSheets.add(s);
+  let n = 0;
+  for (const sheet of clusterSheets) {
+    const p = join(chunked, 'sheets', `${sheet}.mjs`);
+    if (!existsSync(p)) continue;
+    const src = readFileSync(p, 'utf-8');
+    let i = 0; while ((i = src.indexOf('ctx.set(', i)) !== -1) { n++; i += 8; }
+  }
+  return n;
+}
+
+/** Fresh import of an emitted module's run() (cache-bust so --compare pays a real
+ *  compile each time). */
+async function loadRun(modulePath) {
+  const m = await import(pathToFileURL(modulePath).href + `?t=${performance.now()}`);
+  const run = m.run || m.default?.run;
+  if (typeof run !== 'function') throw new Error(`${modulePath} has no run() export`);
+  return run;
+}
+
 async function runBaseline(chunked, inputs) {
-  // Fresh import per call (cache-bust) so repeated runs in --compare each pay a
-  // real compile + run, not a cached module hit.
-  const url = pathToFileURL(join(chunked, 'engine.js')).href + `?t=${performance.now()}`;
-  const eng = await import(url);
-  const run = eng.run || eng.default?.run;
-  if (typeof run !== 'function') throw new Error('engine.js has no run() export');
+  const run = await loadRun(join(chunked, 'engine.js'));
   const t0 = performance.now();
   const res = run(inputs || {});
   const runMs = performance.now() - t0;
   return { values: res.values || {}, meta: res.meta || {}, runMs, moduleBytes: sheetModuleBytes(chunked) };
 }
 
+// Lane 2 — scoped cone module (ADR-026). Build the registered fixture scope's cone
+// (folding everything outside fwdCone(lever)∩backCone(outputs) to base constants),
+// then time a what-if run() through it. moduleBytes = the cone .mjs, ≪ the sheet
+// modules — proves no big module is imported for a targeted query.
+async function runScoped(chunked, inputs) {
+  const scope = fixtureScope(FIXTURE);
+  const baseVals = (await runBaseline(chunked, {})).values; // oracle base values; rescues range-leaf boundary
+  const cone = await buildCone(chunked, { ...scope, baseValues: baseVals, write: true, label: `${FIXTURE} scope` });
+  if (cone.missingBoundary.length) console.warn(`  [scoped] WARN ${cone.missingBoundary.length} boundary cell(s) lack a base value (will read 0)`);
+  const run = await loadRun(cone.path);
+  const t0 = performance.now();
+  const res = run(inputs || {});
+  const runMs = performance.now() - t0;
+  return { values: res.values || {}, meta: res.meta || {}, runMs, moduleBytes: Buffer.byteLength(cone.source) };
+}
+
+// Lane 1 — full executor: cell-level cycle resolution over the WHOLE model. Each
+// acyclic cell is set ONCE in topo order; only the true cycle cells iterate to
+// convergence. meta.cellsIteratedPerPass (cycle cells) vs baselineCellsPerPass
+// (all cluster-sheet cells) is the ÷N headline (gate on outpost; midi shows the trend).
+async function runCycle(chunked, inputs) {
+  const baseVals = (await runBaseline(chunked, {})).values;
+  const exe = await buildFullExecutor(chunked, { baseValues: baseVals, write: true });
+  if (exe.missingBoundary.length) console.warn(`  [cycle] WARN ${exe.missingBoundary.length} boundary leaf cell(s) lack a base value (will read 0)`);
+  const run = await loadRun(exe.path);
+  const t0 = performance.now();
+  const res = run(inputs || {});
+  const runMs = performance.now() - t0;
+  return { values: res.values || {}, meta: res.meta || {}, runMs, moduleBytes: Buffer.byteLength(exe.source) };
+}
+
 const VARIANTS = {
   baseline: runBaseline,
-  scoped: notImplemented('scoped (Lane 2 cone module, ADR-026)'),
-  cycle: notImplemented('cycle (Lane 1 cell-level cycle resolution)'),
+  scoped: runScoped,
+  cycle: runCycle,
 };
 
 // ── structure metrics (cheap on the synthetic fixtures) ──────────────────────
@@ -196,10 +242,10 @@ function renderEfficacyMd() {
   for (const e of lines) latest.set(`${e.fixture}::${e.variant}`, e);
   L.push('## Latest per fixture × variant');
   L.push('');
-  L.push('| Fixture | Variant | Correct | maxRelErr | Run ms | Speedup× | Passes | Converged | Formula cells | Cyc.sheets | Module MB |');
-  L.push('|---------|---------|--------:|----------:|-------:|---------:|-------:|:---------:|--------------:|-----------:|----------:|');
+  L.push('| Fixture | Variant | Correct | maxRelErr | Run ms | Speedup× | Cells/pass | ÷ratio | Module MB | Mod× | Converged |');
+  L.push('|---------|---------|--------:|----------:|-------:|---------:|-----------:|-------:|----------:|-----:|:---------:|');
   for (const e of [...latest.values()].sort((a, b) => (a.fixture + a.variant).localeCompare(b.fixture + b.variant))) {
-    L.push(`| ${e.fixture} | ${e.variant} | ${e.pctWithinTol == null ? 'n/a' : e.pctWithinTol + '%'} | ${e.maxRelErr ?? 0} | ${e.runMs} | ${e.speedupX ?? '—'} | ${e.iterations ?? '—'} | ${e.converged === undefined ? '—' : (e.converged ? 'yes' : 'NO')} | ${e.formulaCells ?? '—'} | ${e.cycleSheets ?? '—'} | ${e.moduleMB ?? '—'} |`);
+    L.push(`| ${e.fixture} | ${e.variant} | ${e.pctWithinTol == null ? 'n/a' : e.pctWithinTol + '%'} | ${e.maxRelErr ?? 0} | ${e.runMs} | ${e.speedupX ?? '—'} | ${e.cellsPerPass ?? '—'} | ${e.cellsRatio ? '÷' + e.cellsRatio : '—'} | ${e.moduleMB ?? '—'} | ${e.memoryX ? e.memoryX + '×' : '—'} | ${e.converged === undefined ? '—' : (e.converged ? 'yes' : 'NO')} |`);
   }
   L.push('');
   L.push(`_Last run: ${lines.length ? lines[lines.length - 1].ts : 'n/a'} · ${lines.length} run(s) recorded._`);
@@ -262,6 +308,7 @@ const struct = structure(chunked, primary.meta);
 
 // ── optional A/B compare ────────────────────────────────────────────────────
 let speedupX = null, memoryX = null, parityOk = null;
+let cellsRatio = null, variantCells = null, baselineCells = null;
 if (COMPARE) {
   if (!VARIANTS[COMPARE]) fail(`unknown --compare variant '${COMPARE}'`, 2);
   let cmp;
@@ -277,6 +324,15 @@ if (COMPARE) {
   parityOk = mism === 0;
   speedupX = primary.runMs > 0 ? +(cmp.runMs / primary.runMs).toFixed(3) : null;
   memoryX = primary.moduleBytes > 0 ? +(cmp.moduleBytes / primary.moduleBytes).toFixed(3) : null;
+  // cells-iterated/pass ÷ ratio — the L1 (and structural L2) headline. The variant
+  // reports cellsIteratedPerPass (cycle cells); the baseline re-runs every cell on
+  // its cluster sheets each pass.
+  if (COMPARE === 'baseline' && primary.meta.cellsIteratedPerPass != null) {
+    const baseCells = baselineCellsPerPass(chunked, cmp.meta);
+    cellsRatio = primary.meta.cellsIteratedPerPass > 0 ? +(baseCells / primary.meta.cellsIteratedPerPass).toFixed(1) : null;
+    variantCells = primary.meta.cellsIteratedPerPass;
+    baselineCells = baseCells;
+  }
 }
 
 // ── verdict ───────────────────────────────────────────────────────────────────
@@ -289,6 +345,7 @@ console.log(`  correctness: ${grade.withinTol}/${grade.comparable} within 1e-6  
 console.log(`  speed:       run ${primary.runMs.toFixed(2)} ms · ${primary.meta.iterations ?? 0} cluster pass(es) · converged=${primary.meta.converged}`);
 console.log(`  structure:   ${struct.formulaCells ?? '?'} formula cells · ${struct.clusters} cluster(s) · ${struct.cycleSheets} sheet(s) in cycle`);
 console.log(`  memory:      sheet modules ${mb(primary.moduleBytes)} MB on disk`);
+if (primary.meta.cellsIteratedPerPass != null) console.log(`  cells/pass:  variant iterates ${primary.meta.cellsIteratedPerPass} cell(s)/pass${cellsRatio != null ? ` vs baseline ${baselineCells} → ÷${cellsRatio}` : ''} (active ${primary.meta.activeCells})`);
 if (COMPARE) console.log(`  A/B:         parity=${parityOk ? 'OK' : 'MISMATCH'} · speedup ${speedupX}× · module-bytes ${memoryX}×`);
 if (drift.length) for (const d of drift) console.log(`  DRIFT: ${d.name} computed=${d.computed} expected=${d.expected} relErr=${d.relErr}`);
 
@@ -296,7 +353,7 @@ if (drift.length) for (const d of drift) console.log(`  DRIFT: ${d.name} compute
 mkdirSync(RESULTS_DIR, { recursive: true });
 const stamp = nowStamp().replace(/[:.]/g, '-');
 writeFileSync(join(RESULTS_DIR, `${stamp}-${FIXTURE}-${VARIANT}.json`),
-  JSON.stringify({ ts: nowStamp(), fixture: FIXTURE, variant: VARIANT, compare: COMPARE, ok, grade, struct, primary: { runMs: primary.runMs, meta: primary.meta, moduleBytes: primary.moduleBytes }, speedupX, memoryX, parityOk }, null, 2));
+  JSON.stringify({ ts: nowStamp(), fixture: FIXTURE, variant: VARIANT, compare: COMPARE, ok, grade, struct, primary: { runMs: primary.runMs, meta: primary.meta, moduleBytes: primary.moduleBytes }, speedupX, memoryX, parityOk, cellsRatio, variantCells, baselineCells }, null, 2));
 
 // Sanitized history line (committed). No values, no labels.
 appendHistory({
@@ -306,6 +363,7 @@ appendHistory({
   iterations: primary.meta.iterations ?? null, converged: primary.meta.converged ?? null,
   formulaCells: struct.formulaCells, clusters: struct.clusters, cycleSheets: struct.cycleSheets,
   moduleMB: mb(primary.moduleBytes),
+  cellsPerPass: primary.meta.cellsIteratedPerPass ?? null, cellsRatio, activeCells: primary.meta.activeCells ?? null,
 });
 renderEfficacyMd();
 

@@ -43,7 +43,7 @@ import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
 
-import { buildScopePlan } from '../../lib/scope-plan.mjs';
+import { buildScopePlan, buildFullPlan } from '../../lib/scope-plan.mjs';
 import { loadDependencyEdges } from '../../lib/manifest-maps.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
@@ -183,6 +183,44 @@ console.log('Testing: ScopePlan has the exact C1 field set + stable ids');
   // a different scope ⇒ a different scopeId
   const plan3 = buildScopePlan({ edges, inputs, outputs: ['Sched!B1'], gtKeys: gt });
   assert(plan3.scopeId !== plan.scopeId, 'a different output scope yields a different scopeId');
+}
+
+// (g) activeOrder — the unified reads-first order (cells + cycle units interleaved)
+console.log('Testing: activeOrder interleaves cycle units so downstream readers come AFTER the cycle');
+{
+  assert(Array.isArray(plan.activeOrder), 'plan has activeOrder array');
+  // strings (acyclic cells) filtered out of activeOrder == activeAcyclic, in order
+  const acyclicFromOrder = plan.activeOrder.filter(x => typeof x === 'string');
+  assert(JSON.stringify(acyclicFromOrder) === JSON.stringify(plan.activeAcyclic), 'activeOrder filtered to cells === activeAcyclic (same order)');
+  // one cycle-unit (array) per activeCycle
+  const cycleUnits = plan.activeOrder.filter(x => Array.isArray(x));
+  assert(cycleUnits.length === plan.activeCycles.length, 'activeOrder has one array unit per activeCycle');
+  // Sched!B2 reads Debt!B1 (a cycle cell), so it must appear AFTER the cycle unit.
+  const idxOut = plan.activeOrder.indexOf('Sched!B2');
+  const idxCycle = plan.activeOrder.findIndex(x => Array.isArray(x) && x.includes('Debt!B1'));
+  assert(idxCycle >= 0 && idxOut > idxCycle, 'Sched!B2 (reads the cycle) is ordered after the cycle unit');
+  // Sched!B1 reads only the input, so it precedes Sched!B2.
+  assert(plan.activeOrder.indexOf('Sched!B1') < idxOut, 'Sched!B1 precedes Sched!B2');
+}
+
+// (h) buildFullPlan — every formula cell active; boundary = leaves only
+console.log('Testing: buildFullPlan makes every formula cell active with cell-level cycles');
+{
+  const full = buildFullPlan({ edges, gtKeys: gt });
+  assert(full.full === true, 'full plan is flagged full:true');
+  assert(full.stats.activeCells === full.stats.totalFormulaCells, 'every formula cell is active');
+  // same true cycle as the scoped plan found
+  assert(setEq(full.activeCycles.flat(), ['CF!B1', 'Debt!B1', 'Debt!B2']), 'full plan finds the {CF!B1,Debt!B1,Debt!B2} cycle');
+  // boundary is leaves only (raw inputs/constants), never a formula cell
+  const formulaSet = new Set(Object.keys(edges));
+  assert(full.boundary.every(c => !formulaSet.has(c)), 'full-plan boundary contains only non-formula leaf cells');
+  assert(full.boundary.includes('Assum!B1') && full.boundary.includes('Debt!B3'), 'leaf inputs (Assum!B1, Debt!B3) are boundary');
+  // activeOrder covers every formula cell (as a string or inside a cycle unit)
+  const covered = new Set();
+  for (const u of full.activeOrder) { if (Array.isArray(u)) for (const c of u) covered.add(c); else covered.add(u); }
+  assert(covered.size === formulaSet.size && [...formulaSet].every(c => covered.has(c)), 'activeOrder covers every formula cell exactly once');
+  // a different model graph ⇒ different full scopeId
+  assert(full.scopeId !== plan.scopeId, 'full-plan scopeId differs from a scoped plan');
 }
 
 built.cleanup();
