@@ -138,7 +138,7 @@ Outputs:
 
 Wave 1 (L0/L3/L4) is **landed on `feat/engine-perf`** (read the tip with `git rev-parse --short feat/engine-perf`). L1/L2 build ON Wave 1.
 
-**Branching.** Fork L1/L2 off the **`feat/engine-perf` tip, NOT `origin/main`** — `lib/scope-plan.mjs` (L0) and `benchmarks/efficacy.mjs` (L4) are not on main yet. Suggested: `feat/engine-perf-wave2` off `feat/engine-perf`. Test + benchmark there; merge only after Wave 1 + Wave 2 are green together (or rebase once Wave 1 reaches main). Small PRs per CLAUDE.md git discipline.
+**Branching.** Wave 1 (L0/L3/L4) is **MERGED to `main`** (fast-forward, 2026-06-04, tip `5daeb6e`). Branch L1/L2 off **current `origin/main`** as usual — it now contains `lib/scope-plan.mjs` (L0) and `benchmarks/efficacy.mjs` (L4). `git fetch` first (main drifts fast — the re-baseline rule). Suggested: `feat/engine-perf-wave2` off `origin/main`. Test + benchmark there; small PRs per CLAUDE.md git discipline.
 
 **How to benchmark your lane (the point of L4).** `benchmarks/efficacy.mjs` exposes pluggable variant hooks: `VARIANTS = { baseline, scoped, cycle }`. `baseline` is the full eager `run()` (the oracle). Fill your lane's hook — signature `async (chunkedDir, inputs) => ({ values, meta, runMs, moduleBytes })` — then:
 ```
