@@ -818,9 +818,16 @@ export function run(inputs = {}, options = {}) {"#.to_string());
     throw new Error('engine.run(): unknown override cell(s) not read by any formula: ' + unknownOverrides.join(', '));
   }
 
+  // Clone the computed cell map ONCE. `kpis` is the documented alias of `values`
+  // (see chunked/INTEGRATION.md) — it shares the same snapshot instead of taking a
+  // second full spread of the (up to ~5.8M-entry) ctx.values map, which on the real
+  // model doubled the per-run allocation for no observable difference (the two
+  // objects were already deep-equal). Shape is unchanged: both keys are present and
+  // each is the complete value snapshot.
+  const _snapshot = { ...ctx.values };
   return {
-    values: { ...ctx.values },
-    kpis: ctx.kpis(),
+    values: _snapshot,
+    kpis: _snapshot,
     meta,
     unknownOverrides,
   };

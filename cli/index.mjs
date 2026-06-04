@@ -22,7 +22,23 @@
 import { formatOutput } from './format.mjs';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import module from 'node:module';
 import v8 from 'v8';
+
+/**
+ * Amortize repeated engine.js / command-module imports across CLI invocations by
+ * caching V8's compiled bytecode on disk. A converted model's engine.js can be very
+ * large; compiling it from scratch on every `ete eval`/`verify`/scenario run is pure
+ * overhead. `module.enableCompileCache()` (Node >=22.8) persists the compile cache so
+ * subsequent imports skip recompilation. Guarded for older Node: if the API is absent
+ * we fall through — a user can still opt in via the NODE_COMPILE_CACHE env var, which
+ * Node honors natively. Best-effort: a failure here must never stop the CLI.
+ */
+try {
+  if (typeof module.enableCompileCache === 'function' && !process.env.NODE_COMPILE_CACHE) {
+    module.enableCompileCache();
+  }
+} catch { /* compile cache is an optimization only — ignore if unavailable */ }
 
 /**
  * `ete init` bakes the dependency-graph closures in-process, which means
