@@ -77,6 +77,16 @@ Reuses `loadDependencyEdges`, `buildCellIndex`/`forEachCellInRange`/`parseRefTok
 > **Build cost caveat (measured):** emitting the cone at A-1 scale is a ~20 min / ~16 GB one-time step
 > (dominated by `buildScopePlan` over the full graph — see Lane 0 accept). The RUNTIME what-if is ms;
 > the build is folded into `init` and amortized over the grid. Speeding the build = Wave 3.
+>
+> **⚠ Wave-2 gate finding (real A-1 cone FAILED — `init --emit-cones` is EXPERIMENTAL).** Building a
+> real A-1 cone (UW returns) and diffing vs GT gave `converged=false`, 0/4 match. Root cause is an
+> UPSTREAM transpiler bug, not the cone: thousands of sheet-module cells are emitted as `expr * COL`
+> (multiply by a bare column-letter string → `number * "DB"` = NaN; `* AO` x1467, `* DB` x1204, ...).
+> The named outputs dodge these (lockgrade still passes), but a scoped cone's static backward-cone
+> pulls them in -> the NaN poisons the active cycle. The cone faithfully reproduces the buggy engine.
+> The size thesis held (A-1 cone = 7.8 MB vs 788 MB sheet modules, 101x). **Wave-3 prerequisite for a
+> correct real-model cone: fix the transpiler string-multiply emission, then re-gate.** Seeding the
+> cycle from base values does NOT fix it (confirmed) -- it is a computation-fidelity bug, not convergence.
 
 - **Files:** new emitter `generate_cone_module` (or a JS post-emit step consuming C1 + per-cell transpiled exprs); wire into `init` while the graph is in memory; register the MIP-grid scope.
 - **Do:** emit `chunked/cones/<scopeId>.mjs` = boundary constants + active acyclic (topo) + active cycle loop, exposing the C3 `run()` contract for the scoped outputs.

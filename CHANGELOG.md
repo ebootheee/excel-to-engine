@@ -55,6 +55,19 @@ the MIP grid, but `--emit-cones` on the largest models needs ~16 GB and minutes.
 the CSR once and limit per-scope work to the cone (CSR cache / streaming extraction). The synthetic
 fixtures prove the RUNTIME thesis; the at-scale BUILD is the next optimization.
 
+**Real-model gate finding (honest — the cone is EXPERIMENTAL on real models).** Building a real A-1
+cone (UW returns scope) and diffing vs ground truth FAILED: `converged=false`, 0/4 returns match (the
+cone is honest — the NaN-guard reported non-convergence rather than returning garbage). Root cause is
+**upstream, not the cone**: thousands of cells in the *sheet modules themselves* (the default engine)
+are transpiled as `expr * `COL`` — a multiply by a bare column-letter STRING (`* `AO`` ×1467, `* `DB``
+×1204, …) → `number * "DB"` = **NaN**. The named outputs dodge those cells (so lockgrade base-case
+verification still passes), but a scoped cone's static backward-cone pulls them in and the NaN poisons
+the active cycle. The cone faithfully reproduces the (buggy) engine; the blocker is the transpiler. So
+`init --emit-cones` is shipped **EXPERIMENTAL** (synthetic-validated; verify `cone.run()==engine.run()`
+before production use). Follow-ups: fix the transpiler `* `COL`` emission, then re-gate the cone.
+The cone size/structure thesis DID hold at scale: the A-1 cone module was **7.8 MB vs 788 MB of sheet
+modules (101× smaller)** and imports only `_helpers.mjs`.
+
 Tests: `tests/lib/test-scope-plan.mjs` 47/47 (+14: activeOrder incl. multi-cycle topo, buildFullPlan),
 new `tests/lib/test-cone-emit.mjs` 59/59 (scoped/full/manifest cones == engine for base + what-ifs, C3
 contract, strict, cell-exprs round-trip). Both wired into `npm test`; full suite green.

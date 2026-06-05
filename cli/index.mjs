@@ -268,11 +268,12 @@ Commands:
                                     --lazy-engine (engine.js loads sheet modules on
                                     demand via async load()/runScoped() + output-cone
                                     scoping; run() stays sync — await load() first),
-                                    --emit-cones (emit chunked/cones/<id>.mjs scoped
-                                    cone module(s) for the MIP-grid what-if surface;
-                                    ADR-026 L2 — a few-KB targeted-query accelerator.
-                                    One-time build: on the largest models the scope
-                                    plan is ~minutes / ~16 GB; the runtime what-if is ms)
+                                    --emit-cones ([EXPERIMENTAL] emit chunked/cones/
+                                    <id>.mjs scoped cone module(s) for the MIP-grid
+                                    what-if surface; ADR-026 L2. Synthetic-validated;
+                                    real-model cones are gated on the transpiler
+                                    `* `COL`` bug — verify cone.run()==engine.run()
+                                    first. Build is ~minutes/~16 GB; runtime is ms)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   verify <modelDir>          Check the engine reproduces the model's base case
   query <modelDir> [args]    Query ground truth cells

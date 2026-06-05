@@ -415,14 +415,17 @@ export function runInit(excelPath, args) {
   }
 
   // Step 5d: Emit scoped cone module(s) (ADR-026 L2) — opt-in via --emit-cones.
-  // MUST run BEFORE slimming (the dependency graph has to still be on disk). The
-  // MIP-grid scope is seeded from the named maps (levers → driven outputs); the
-  // cone recomputes only that active subgraph and folds the rest to base constants,
-  // so a targeted what-if loads a few-KB module instead of the whole sheet set.
+  // ⚠ EXPERIMENTAL: validated on synthetic fixtures, but the A-1 real-model gate
+  // exposed an UPSTREAM transpiler bug (cells emitted as `expr * `COL`` → NaN; see
+  // CHANGELOG / docs/PLAN-engine-speed.md "Wave-2 gate finding"). The named outputs
+  // dodge those NaN cells, but a scoped cone's static backward-cone can pull them in
+  // and fail to converge. So a real-model cone is NOT guaranteed correct until that
+  // transpiler bug is fixed — ALWAYS verify cone.run() against engine.run() before
+  // production use. MUST run BEFORE slimming (the dependency graph must be on disk).
   // Best-effort: a failure here never blocks init (cones are an optional accelerator).
   if (args.emitCones) {
     lines.push('');
-    lines.push('Step 5d: Emitting scoped cone module(s)...');
+    lines.push('Step 5d: Emitting scoped cone module(s) [EXPERIMENTAL]...');
     try {
       // Pass the in-memory ground truth as base values: under --reuse-parse the
       // on-disk _ground-truth.json could be stale, and sharedGt is the value map
@@ -435,6 +438,7 @@ export function runInit(excelPath, args) {
           lines.push(`  Wrote cones/${s.scopeId}.mjs — ${s.stats.activeCells} active cell(s), ${s.stats.boundaryCells} folded (${s.inputs.length} lever(s) → ${s.outputs.length} output(s))`);
           if (s.missingBoundary) lines.push(`    ⚠ ${s.missingBoundary} boundary cell(s) lacked a base value (read 0)`);
         }
+        lines.push('  ⚠ EXPERIMENTAL: verify cone.run() == engine.run() before production use (real-model convergence is gated on the transpiler `* `COL`` fix).');
         if (res.indexPath) lines.push('  Index: cones/_index.json');
       }
     } catch (e) {
