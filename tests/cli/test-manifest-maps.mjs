@@ -18,7 +18,7 @@ import { readFileSync, existsSync, mkdtempSync, cpSync, rmSync, writeFileSync, m
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
-import { resolveBaseCaseOutputs } from '../../lib/manifest.mjs';
+import { resolveBaseCaseOutputs, detectEquity, resolveCell } from '../../lib/manifest.mjs';
 import {
   collectNamedOutputs, collectNamedInputs, collectCellTypes, enumerateOutputCells,
   emitManifestMaps, attachDependencyClosures, loadDependencyEdges, computeClusterSeed,
@@ -126,6 +126,103 @@ console.log('Testing: per-class value-bearing outputs (proceeds/valuation/hurdle
     assert(bco[k] === no[k].baseCaseValue, `${k} agrees between resolveBaseCaseOutputs and named-outputs (bco ${bco[k]}, no ${no[k].baseCaseValue})`);
   }
   assert(bco['class-b.valuation'] === undefined && bco['class-b.hurdle'] === undefined, 'no phantom base-case keys for class-b');
+}
+
+// ---------------------------------------------------------------------------
+// Issue #25: aggregate proceeds ref round-trips through collectNamedOutputs
+// (the contract layer; the existing block above used single string refs only).
+// ---------------------------------------------------------------------------
+console.log('Testing: aggregate proceeds {cells,op:sum} round-trips through collectNamedOutputs');
+{
+  // Two classes so the keys are id-prefixed; class-a's proceeds is an aggregate
+  // spanning three per-block cells, class-b's is a single string ref.
+  const m = {
+    equity: { classes: [
+      { id: 'class-a', basisCell: 'Eq!B2', proceeds: { cells: ['MIP!A1', 'MIP!A2', 'MIP!A3'], op: 'sum' } },
+      { id: 'class-b', basisCell: 'Eq!B3', proceeds: 'MIP!B1' },
+    ] },
+  };
+  const g = {
+    'Eq!B2': 100e6, 'Eq!B3': 50e6,
+    'MIP!A1': 10e6, 'MIP!A2': 20e6, 'MIP!A3': 30e6, 'MIP!B1': 18e6,
+  };
+  const no = collectNamedOutputs(m, g);
+
+  const agg = no['class-a.proceeds'];
+  // The aggregate OBJECT (not a raw string) is stored as `cell`.
+  assert(agg && typeof agg.cell === 'object' && Array.isArray(agg.cell.cells),
+    'aggregate proceeds stores the {cells,op} object as `cell`');
+  assert(agg.cell.op === 'sum' && agg.cell.cells.length === 3, 'aggregate carries op:sum over 3 cells');
+  // Summed baseCaseValue is the INDEPENDENT hand sum 10+20+30 = 60M (non-circular).
+  assert(agg.baseCaseValue === 60e6, `aggregate baseCaseValue is the summed total (got ${agg.baseCaseValue})`);
+  // labelForCell must not throw on the object ref — it falls back to humanize().
+  assert(typeof agg.label === 'string' && agg.label.length > 0, 'aggregate gets a sane (non-throwing) label');
+  assert(agg.format === 'currency', 'aggregate proceeds formats as currency');
+
+  // The single-string sibling still resolves normally.
+  assert(no['class-b.proceeds']?.cell === 'MIP!B1', 'single-ref proceeds unchanged');
+  assert(no['class-b.proceeds']?.baseCaseValue === 18e6, 'single-ref proceeds baseCaseValue resolved');
+
+  // Drift: the base-case layer agrees on the summed value (one-directional guard).
+  const bco = resolveBaseCaseOutputs(m, g);
+  assert(bco['class-a.proceeds'] === 60e6, 'resolveBaseCaseOutputs sums the aggregate identically');
+
+  // Mutation guard: bump one block → the summed output changes by exactly that.
+  const g2 = { ...g, 'MIP!A2': 25e6 };
+  const no2 = collectNamedOutputs(m, g2);
+  assert(no2['class-a.proceeds'].baseCaseValue === 65e6,
+    `mutating one block changes the sum (10+25+30=65M, got ${no2['class-a.proceeds'].baseCaseValue})`);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #25: detectEquity auto-populates a per-class aggregate proceeds from
+// per-block "MIP Proceeds" labels — the heuristic, not just the pin support.
+// ---------------------------------------------------------------------------
+console.log('Testing: detectEquity auto-populates per-block MIP proceeds aggregate');
+{
+  // One equity class on sheet MIP; the management-incentive-plan proceeds is
+  // modeled across three blocks (one per exit scenario), each with its own
+  // "MIP Proceeds" / "MIP Platform Cash Flow" label + adjacent dollar value.
+  const g = {
+    'MIP!A10': 'Total Equity Invested', 'MIP!B10': 50e6,        // equity-class anchor
+    'MIP!A20': 'MIP Proceeds',          'MIP!B20': 5e6,         // block 1
+    'MIP!A60': 'MIP Cash Flow',         'MIP!B60': 8e6,         // block 2
+    'MIP!A100': 'MIP Platform Cash Flow','MIP!B100': 12e6,      // block 3
+    'MIP!A30': 'MIP Shares Issued',     'MIP!B30': 1000,        // NOT proceeds (share count)
+    'MIP!A40': 'MIP Hurdle (MOIC)',     'MIP!B40': 1.40,        // hurdle multiple
+  };
+  const { equity } = detectEquity(g, ['MIP']);
+  const ec = equity.classes[0];
+
+  // proceeds: aggregated across the three per-block cells, op:sum.
+  assert(ec.proceeds && typeof ec.proceeds === 'object', 'detected proceeds is an aggregate object');
+  assert(ec.proceeds.op === 'sum', 'detected proceeds op is sum');
+  assert(JSON.stringify(ec.proceeds.cells) === JSON.stringify(['MIP!B20', 'MIP!B60', 'MIP!B100']),
+    `detected proceeds spans the 3 per-block cells (got ${JSON.stringify(ec.proceeds.cells)})`);
+  // The share-count row must NOT have been swept into proceeds (negative control).
+  assert(!ec.proceeds.cells.includes('MIP!B30'), 'MIP Shares Issued excluded from proceeds');
+  // Independent hand-sum check (non-circular): 5+8+12 = 25M.
+  assert(resolveCell(g, ec.proceeds) === 25e6, `aggregate resolves to the hand sum 25M (got ${resolveCell(g, ec.proceeds)})`);
+  // hurdle found; valuation absent (no valuation label) → fail-soft unset.
+  assert(ec.hurdle === 'MIP!B40', 'detected hurdle cell');
+  assert(ec.valuation === undefined, 'no valuation label → valuation unset (fail-soft)');
+
+  // A single block degrades to a plain string ref (not a 1-element aggregate).
+  const gSingle = { 'MIP!A10': 'Total Equity Invested', 'MIP!B10': 50e6, 'MIP!A20': 'MIP Proceeds', 'MIP!B20': 5e6 };
+  const ecSingle = detectEquity(gSingle, ['MIP']).equity.classes[0];
+  assert(ecSingle.proceeds === 'MIP!B20', 'single-block proceeds is a plain string ref');
+
+  // Mutation guard: change one block's value → the summed proceeds changes.
+  const g2 = { ...g, 'MIP!B60': 18e6 };
+  const ec2 = detectEquity(g2, ['MIP']).equity.classes[0];
+  assert(resolveCell(g2, ec2.proceeds) === 35e6, `mutating block 2 changes the sum (5+18+12=35M, got ${resolveCell(g2, ec2.proceeds)})`);
+
+  // Negative control / fail-soft: remove the MIP labels → proceeds unset, never
+  // a wrong cell. (A broken impl that bound the nearest numeric would fail here.)
+  const gNoMip = { 'MIP!A10': 'Total Equity Invested', 'MIP!B10': 50e6, 'MIP!A2': 'Some Other Row', 'MIP!B2': 7e6 };
+  const ecNoMip = detectEquity(gNoMip, ['MIP']).equity.classes[0];
+  assert(ecNoMip.proceeds === undefined, 'no MIP labels → proceeds unset (not a wrong cell)');
+  assert(ecNoMip.hurdle === undefined && ecNoMip.valuation === undefined, 'no MIP labels → hurdle/valuation unset');
 }
 
 // ---------------------------------------------------------------------------
