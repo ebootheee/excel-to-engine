@@ -279,7 +279,11 @@ Commands:
                                     what-if surface; ADR-026 L2. Synthetic-validated;
                                     real-model cones are gated on the transpiler
                                     `* `COL`` bug — verify cone.run()==engine.run()
-                                    first. Build is ~minutes/~16 GB; runtime is ms)
+                                    first. Build is ~minutes/~16 GB; runtime is ms),
+                                    --version-tag <tag> / --platform <id> /
+                                    --class <id> (version-free build identity
+                                    recorded in chunked/build-manifest.json;
+                                    versionTag defaults to the build contentHash)
   summary <modelDir>         One-shot model overview (--terse to hide suspects)
   verify <modelDir>          Check the engine reproduces the model's base case
   query <modelDir> [args]    Query ground truth cells
