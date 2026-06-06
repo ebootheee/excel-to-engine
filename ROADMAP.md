@@ -1,6 +1,17 @@
 # excel-to-engine — Roadmap
 
-## Now — Lock-grade engine for the Outpost A-1 MIP cone (2026-06-01)
+## Now — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
+
+1. **Re-gate the real-model scoped cone (ADR-026 Tier 2) — UNBLOCKED.** The Wave-2 A-1 cone gate failed
+   *only* because of the `COL$ROW` `* `COL`` transpiler NaN bug, now fixed on main (PR #43). Regenerate
+   A-1 with `--emit-cones --emit-debug`, diff cone vs engine/GT; if it converges, lift the EXPERIMENTAL
+   label on `init --emit-cones`. Wave-3: speed the ~20 min/16 GB cone build (CSR cache); port L1
+   cell-level cycle resolution into `chunked_emitter.rs`; #33 row-chunking.
+2. **Build the "lite" package, Phase 1 (ADR-027) — design accepted.** Tier-0 closed-form proof
+   (`lib/lite-tier0.mjs`, no Rust) → driver-scope → Tier-1 surrogate (cascade/variant samples, breakpoint
+   escalation) → recommender → guiding skill (two personas, `ete lite`). See ADR-027's phased plan.
+
+## Earlier — Lock-grade engine for the Outpost A-1 MIP cone (2026-06-01)
 
 Make the converted engine a legal reproducibility artifact for the Outpost A-1 MIP.
 Two gaps, both closed in code on `feat/lockgrade-cone` and confirmed on the real model:

@@ -1,5 +1,21 @@
 # excel-to-engine — Changelog
 
+## 2026-06-05 — "Lite" package: design accepted (ADR-027) — implementation pending
+
+A guided, tiered extraction that produces the smallest artifact answering a specific question at
+good-enough fidelity, fronted by a skill, shipped as a Claude Code package. **Design only — no code
+yet**; pressure-tested by the `pressure-test-lite-package` workflow. See `docs/adr/ADR-027`.
+
+- 3-question guiding skill (+ two personas) → 4-tier ladder (Tier 0 closed-form · Tier 1 surrogate ·
+  Tier 2 scoped cone (ADR-026) · Tier 3 full engine) → "0.9 r-value" driver extraction (reuse
+  `lib/sensitivity.mjs`). **Load-bearing finding:** SheetJS can't recompute, so Tier-1 sampling = the
+  delta-cascade (no-Rust, disclosed approximation) + an analyst-re-saved-`.xlsx`-variant exact upgrade,
+  NOT a new recalc dep. Safety gates: auto-escalate breakpoint outputs (carry/MIP kinks) to the cone;
+  stamp every artifact with `modelHash` + refuse-on-mismatch. Curated `ete lite` entrypoint + skill.
+- **Next (the handoff):** Phase 1 = the Tier-0 closed-form proof (`lib/lite-tier0.mjs` binding a few
+  extracted cells to `lib/waterfall` + `lib/irr`, no Rust). See `docs/HANDOFF-lite-and-cone.md` +
+  ADR-027's phased build plan.
+
 ## 2026-06-05 — Transpiler root-cause fix: absolute-row mixed references (the real-A1 `* `COL`` NaN bug)
 
 Branch `t078/lock-grade-cone` (off `origin/main`). Root-caused and fixed the upstream transpiler bug
