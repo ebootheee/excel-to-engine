@@ -345,6 +345,35 @@ export function runLite(modelDir, args = {}) {
     }
   }
 
+  // The recommender emits the a-priori "BY-REQUEST SURROGATE BELOW FLOOR" note
+  // A-PRIORI — purely from the 0.99 output class, with no samples (correct IN
+  // ISOLATION: see tier-recommender.mjs r²-floor carve-out). But once we have
+  // actually FITTED the surrogate (the Tier-1 measured path, recommended OR a
+  // Tier-0→Tier-1 fallback), result.fidelity carries the MEASURED truth: a
+  // by-request output that measured BELOW floor stamps `byRequestDisclosure` +
+  // gets the "[BY-REQUEST below floor]" per-output tag. When NO shipped output
+  // actually measured below floor, that scary a-priori note contradicts the clean
+  // per-output rows (e.g. totalCarry r²=1.0 ≥ 0.99) two sections up — strip ONLY
+  // the anchored a-priori line. This can ONLY downgrade a now-redundant note: a
+  // genuine measured below-floor still surfaces via result.fidelity[name]
+  // .byRequestDisclosure (+ the per-output tag) and kinks via result.escalations.
+  // The regex is ANCHORED so the DIFFERENT, measured-independent class-grade
+  // "CARRY/MONETARY SURROGATE BELOW FLOOR" and "BREAKPOINT CHECK NOT RUN" notes
+  // (which do NOT start with "BY-REQUEST SURROGATE BELOW FLOOR") survive untouched.
+  // Mirrors the Tier-0-fallback filter below in style. Guarded on the measured
+  // surrogate path only — never strip when the recommender CAPPED from the cone
+  // with no measurement (recCappedFromCone), where the disclosure is the live signal.
+  if ((rec.tier === 1 || tier0FellBackToTier1) && !recCappedFromCone) {
+    const anyMeasuredByRequest = Object.values(result.fidelity).some(
+      (f) => f && f.byRequestDisclosure,
+    );
+    if (!anyMeasuredByRequest) {
+      result.disclosures = result.disclosures.filter(
+        (d) => !/^BY-REQUEST SURROGATE BELOW FLOOR/.test(d),
+      );
+    }
+  }
+
   // The cone pointer. `ete lite` is the NO-RUST front door, so the recommender
   // never returns Tier 2/3 as a base here — but a cone escalation can arrive two
   // honest ways, and BOTH must tell the analyst exactly how to get the exact
