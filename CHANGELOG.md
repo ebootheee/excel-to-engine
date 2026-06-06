@@ -1,5 +1,58 @@
 # excel-to-engine — Changelog
 
+## 2026-06-05 — Transpiler root-cause fix: absolute-row mixed references (the real-A1 `* `COL`` NaN bug)
+
+Branch `t078/lock-grade-cone` (off `origin/main`). Root-caused and fixed the upstream transpiler bug
+the real-A1 cone gate exposed in commit `de2261b` (the `expr * `COL`` → `number * "DB"` = NaN that
+demoted `init --emit-cones` to EXPERIMENTAL).
+
+**Root cause (two coupled tokenizer defects in `pipelines/rust/src/formula_ast.rs`):**
+
+1. **Absolute-row mixed references with a non-absolute column were dropped.** A ref like `R$8`,
+   `AM$8:AM$22`, or `A$1` (absolute row, relative column — extremely common in financial models that
+   anchor a row band) was not parsed as a reference at all. The tokenizer's `read_ident_or_ref` reads
+   bare letters but stops at `$`; the generic `read_cell_ref_part` only fires when a ref *starts* with
+   `$` or a sheet `!`. So `R$8` fell through to a **bare identifier** → `Expr::StringLit("R")` →
+   transpiled as the JS template `` `R` ``. In an arithmetic context — e.g. the J-weighted
+   `SUMPRODUCT(J8:J22*R$8:R$22)` on the audited-assets sheets — `range * "R"` = **NaN**, which a scoped
+   cone's backward-cone pulls into the active cycle and the NaN poisons convergence (`converged=false`).
+   (`$R8` and `$R$8` already parsed correctly; only the *relative-column + absolute-row* shape broke.)
+2. **A bare unresolved identifier was emitted as a JS string literal, not a numeric-safe value.** The
+   parser's fallback was `Expr::StringLit(name)` with the comment "treat as 0 for now" — but a StringLit
+   transpiles to `` `name` ``, and `number * "name"` = NaN, not 0. Intent and behaviour diverged.
+
+**Fixes:**
+- New `Expr::Name(String)` AST variant for a bare unresolved identifier (Excel `#NAME?` / unresolved
+  named range), transpiled to `/* #NAME? <name> */ null` — **numeric-safe** (`null` coerces to 0 in
+  `*`/`+`/SUM, never NaN), matching the historical "treat as 0" intent without the poison. Genuine
+  undefined names still surface as `#NAME?` in an audit comment.
+- `read_ident_or_ref` now recognises the `COL$ROW[:…]` shape (absolute row, relative column) and parses
+  it as a real cell ref / range via two small helpers (`read_row_digits`, `read_ref_after_colon`).
+- Range second endpoints with a `$`-row (`R8:R$22`) parse via a new `$`-tolerant
+  `looks_like_cell_ref_dollar` instead of silently collapsing to the first endpoint.
+- Fixed a latent bug in `parse_simple_cell_ref` surfaced by the above: the column slice was taken
+  *after* consuming the row `$`, leaking it into `col` (`R$22` → `"R$"` → broken `ctx.range("…R$22")`).
+
+**Evidence / validation:**
+- Confirmed by direct transpiler reproduction: `SUMPRODUCT(J8:J22*R$8:R$22)` now emits
+  `(ctx.range("S!J8:J22") * ctx.range("S!R8:R22"))` (was `… * /* #NAME? R */ null`, previously
+  `… * `R``). All five `$`-placements of `R$8:R$22` normalise to a clean `ctx.range("S!R8:R22")`.
+- The real-A1 artifact's affected cells (`Assets - Q4-25 (audited)!{R,AM}{25..27}`, `Assets - Q1-26`)
+  were the `* `COL`` shape; the bare identifiers (`R`, `AM`) are real data columns on those sheets, so
+  the references must resolve — not fold to 0/NaN. Fix proven at the transpiler level.
+- **Honest limitation:** a full real-A1 *end-to-end* cone re-gate could NOT be run here — the Outpost
+  source workbook is gitignored / R2-only and is not in this checkout. The fix is validated against
+  the transpiler oracle + the synthetic cone gate; the end-to-end re-gate (rebuild the chunked artifact
+  from the Outpost xlsx with this parser, then `--compare baseline`) is the remaining step before the
+  EXPERIMENTAL label can be lifted. `init --emit-cones` therefore stays EXPERIMENTAL pending that re-gate.
+
+**Tests:** new Rust regression tests in `formula_ast.rs` (`name_fallback_tests`): the exact real-A1
+`SUMPRODUCT` shape never emits a bareword string-template; absolute-row mixed refs in all five
+`$`-placements parse as references; genuine undefined names still resolve to `#NAME?`; quoted strings
+unaffected. Full suite green: cargo 23/23, chunked smoke 126/126 (100%), JS lib/cli/cone 500+ tests,
+engine 24, depgraph 14, runnable 20, lazy-engine 19, slimming 13, golden 20, efficacy mini-cyclic
+5/5 @1e-6 parity OK. No gate weakened, nothing skip-listed.
+
 ## 2026-06-04 — Engine-speed Wave 2 landed: scoped cone module (L2) + cell-level full executor (L1)
 
 Branch `feat/engine-perf-wave2` (off `origin/main`). The ADR-026 keystone. One JS post-emit

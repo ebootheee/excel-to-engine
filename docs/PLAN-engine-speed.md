@@ -87,6 +87,19 @@ Reuses `loadDependencyEdges`, `buildCellIndex`/`forEachCellInRange`/`parseRefTok
 > The size thesis held (A-1 cone = 7.8 MB vs 788 MB sheet modules, 101x). **Wave-3 prerequisite for a
 > correct real-model cone: fix the transpiler string-multiply emission, then re-gate.** Seeding the
 > cycle from base values does NOT fix it (confirmed) -- it is a computation-fidelity bug, not convergence.
+>
+> **✅ Root cause FIXED (2026-06-05, T-078) — re-gate still pending.** The `* COL` emission was a
+> tokenizer bug: an absolute-ROW mixed reference with a relative column (`R$8`, `AM$8:AM$22`, `A$1` —
+> ubiquitous in row-anchored finance formulas) was not parsed as a reference and fell through to a bare
+> identifier → JS string literal → `number * "R"` = NaN. (`$R8`/`$R$8` already worked; only the
+> relative-col + absolute-row shape broke.) Fix: parse the `COL$ROW[:…]` shape as a real ref/range;
+> emit unresolved bare identifiers as numeric-safe `null` (Excel `#NAME?`, → 0 in arithmetic, never NaN)
+> via a new `Expr::Name` variant; also fixed a `$`-leaks-into-column latent bug in `parse_simple_cell_ref`.
+> Verified at the transpiler oracle: `SUMPRODUCT(J8:J22*R$8:R$22)` now emits a real range product.
+> **Remaining before lifting EXPERIMENTAL:** the full real-A1 end-to-end re-gate requires rebuilding the
+> Outpost chunked artifact from the source xlsx (gitignored / R2-only — not runnable in a clean checkout)
+> with this parser, then `efficacy --fixture outpost-a1 --compare baseline` (note: `outpost-a1` is not yet
+> a registered fixture in `benchmarks/fixtures/_build.mjs` — it was run ad-hoc). See CHANGELOG 2026-06-05.
 
 - **Files:** new emitter `generate_cone_module` (or a JS post-emit step consuming C1 + per-cell transpiled exprs); wire into `init` while the graph is in memory; register the MIP-grid scope.
 - **Do:** emit `chunked/cones/<scopeId>.mjs` = boundary constants + active acyclic (topo) + active cycle loop, exposing the C3 `run()` contract for the scoped outputs.
