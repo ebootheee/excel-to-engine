@@ -147,6 +147,14 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
         }
         Expr::Bool(b) => if *b { "true".to_string() } else { "false".to_string() },
         Expr::Error(e) => format!("/* {} */ null", e),
+        // Unresolved bare identifier (Excel `#NAME?` / unresolved named range).
+        // Emit `null` (numeric-safe: coerces to 0 in arithmetic, never NaN) with
+        // an audit comment carrying the original name. NEVER emit a string literal
+        // here — `number * "AO"` = NaN and poisons the dependent cone. See T-078.
+        Expr::Name(name) => {
+            let escaped = name.replace("*/", "* /");
+            format!("/* #NAME? {} */ null", escaped)
+        }
 
         Expr::CellRef(r) => cell_ref_to_var(r, config),
 

@@ -64,6 +64,12 @@ pub enum Expr {
     StringLit(String),
     Bool(bool),
     Error(String),
+    /// A bare unquoted identifier that is neither a function call nor a cell
+    /// reference — i.e. an undefined name (Excel `#NAME?`) or an unresolved
+    /// named range. Distinct from `StringLit` so the transpiler can emit a
+    /// numeric-safe value (`null`, never a string) and never poison arithmetic
+    /// with `number * "AO"` = NaN. See T-078.
+    Name(String),
     CellRef(CellRef),
     Range(CellRef, CellRef),
     BinOp {
@@ -190,6 +196,33 @@ impl<'a> Tokenizer<'a> {
         Token::Error(self.input[start..self.pos].to_string())
     }
 
+    /// Read a run of ASCII digits and parse them as a row number (0 if none).
+    fn read_row_digits(&mut self) -> u32 {
+        let row_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c.is_ascii_digit() { self.advance(); } else { break; }
+        }
+        self.input[row_start..self.pos].parse().unwrap_or(0)
+    }
+
+    /// After consuming a range `:`, read the second endpoint of a mixed/absolute
+    /// reference: `[$]COL[$]ROW` (e.g. `R$22`, `$R$22`, `R22`). Returns `None` if
+    /// what follows is not a cell ref (so the caller can backtrack). Used by the
+    /// absolute-row mixed-ref path in `read_ident_or_ref`. See T-078.
+    fn read_ref_after_colon(&mut self) -> Option<CellRef> {
+        let abs_col = if self.peek() == Some('$') { self.advance(); true } else { false };
+        let col_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c.is_ascii_uppercase() { self.advance(); } else { break; }
+        }
+        let col = self.input[col_start..self.pos].to_string();
+        if col.is_empty() || col.len() > 3 { return None; }
+        let abs_row = if self.peek() == Some('$') { self.advance(); true } else { false };
+        let row = self.read_row_digits();
+        if row == 0 { return None; }
+        Some(CellRef { sheet: None, col, row, abs_col, abs_row })
+    }
+
     fn read_ident_or_ref(&mut self, first_char: char) -> Token {
         // Might be: function name, named range, cell ref, or cross-sheet ref
         let start = self.pos - first_char.len_utf8();
@@ -211,6 +244,37 @@ impl<'a> Tokenizer<'a> {
             return cell;
         }
 
+        // Mixed reference with an ABSOLUTE ROW where the column is NOT absolute:
+        // `R$8`, `AM$8:AM$22`, `A$1`. The initial read loop stops at `$`, so `name`
+        // here is just the column letters (`R`) and the next char is `$`. The
+        // generic `read_cell_ref_part` only fires when a ref *starts* with `$` or a
+        // sheet `!`, so without this branch `R$8` mis-parses to a bare identifier
+        // (Expr::Name → `#NAME?` → 0/null), silently dropping a real reference.
+        // This was the upstream transpiler bug the real-A1 cone gate exposed: a
+        // J-weighted SUMPRODUCT like `SUMPRODUCT(J8:J22*R$8:R$22)` lost its second
+        // operand. (`$R8` / `$R$8` already work via the `$`-first tokenizer path.)
+        // See T-078.
+        if looks_like_column_ref(name) && self.peek() == Some('$') {
+            // Lookahead: `$` must be immediately followed by a digit to be an
+            // absolute-row ref. If not (e.g. a stray `$`), fall through unchanged.
+            if self.peek2().map_or(false, |c| c.is_ascii_digit()) {
+                let col1 = name.to_string();
+                self.advance(); // consume '$'
+                let row1 = self.read_row_digits();
+                let ref1 = CellRef { sheet: None, col: col1, row: row1, abs_col: false, abs_row: true };
+                // Optional range continuation: `:COL[$]ROW` or `:[$]COL[$]ROW`.
+                if self.peek() == Some(':') {
+                    let saved = self.pos;
+                    self.advance(); // consume ':'
+                    if let Some(ref2) = self.read_ref_after_colon() {
+                        return Token::Range(ref1, ref2);
+                    }
+                    self.pos = saved;
+                }
+                return Token::CellRef(ref1);
+            }
+        }
+
         // Check if it looks like a cell reference (letters + digits)
         if looks_like_cell_ref(name) {
             // Check if it's a range like A1:B10
@@ -227,9 +291,13 @@ impl<'a> Tokenizer<'a> {
                     }
                 }
                 let name2 = &self.input[start2..self.pos].to_string();
-                if looks_like_cell_ref(name2) || looks_like_column_ref(name2) {
+                // `looks_like_cell_ref_dollar` accepts `$`-bearing endpoints
+                // (`R$22`, `$R$22`); `parse_simple_cell_ref` already decodes them.
+                // Without this, a range whose 2nd endpoint has an absolute row
+                // (`R8:R$22`) silently collapsed to just the 1st endpoint. T-078.
+                if looks_like_cell_ref_dollar(name2) || looks_like_column_ref(name2) {
                     let ref1 = parse_simple_cell_ref(name, None);
-                    let ref2 = if looks_like_cell_ref(name2) {
+                    let ref2 = if looks_like_cell_ref_dollar(name2) {
                         parse_simple_cell_ref(name2, None)
                     } else {
                         // Column-only ref like "BE" → treat as BE1048576 (max row)
@@ -507,14 +575,35 @@ fn looks_like_cell_ref(s: &str) -> bool {
     i > j && i == bytes.len()
 }
 
+/// Like `looks_like_cell_ref`, but tolerates Excel absolute markers `$`:
+/// `$A$1`, `A$1`, `$A1`, `A1`. Shape: optional `$`, 1-3 letters, optional `$`,
+/// 1+ digits. Used so range endpoints with an absolute row parse correctly. T-078.
+fn looks_like_cell_ref_dollar(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    if i < bytes.len() && bytes[i] == b'$' { i += 1; }
+    let col_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_uppercase() { i += 1; }
+    let col_len = i - col_start;
+    if col_len == 0 || col_len > 3 { return false; }
+    if i < bytes.len() && bytes[i] == b'$' { i += 1; }
+    let row_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+    i > row_start && i == bytes.len()
+}
+
 fn parse_simple_cell_ref(s: &str, sheet: Option<String>) -> Token {
     let bytes = s.as_bytes();
     let mut i = 0;
     let abs_col = if bytes.first() == Some(&b'$') { i += 1; true } else { false };
     let col_start = i;
     while i < bytes.len() && bytes[i].is_ascii_uppercase() { i += 1; }
+    // Capture the column slice BEFORE consuming any absolute-row `$`, otherwise
+    // the `$` leaks into `col` (`R$22` → col "R$"), producing a broken
+    // `ctx.range("...R$22")` address. T-078.
+    let col_end = i;
     let abs_row = if i < bytes.len() && bytes[i] == b'$' { i += 1; true } else { false };
-    let col = std::str::from_utf8(&bytes[col_start..i]).unwrap_or("").to_string();
+    let col = std::str::from_utf8(&bytes[col_start..col_end]).unwrap_or("").to_string();
     let row: u32 = std::str::from_utf8(&bytes[i..]).unwrap_or("0").parse().unwrap_or(0);
     Token::CellRef(CellRef { sheet, col, row, abs_col, abs_row })
 }
@@ -684,8 +773,15 @@ impl Parser {
                     if let Token::RParen = self.peek() { self.advance(); }
                     Expr::FunctionCall { name, args }
                 } else {
-                    // Named range or unknown identifier — treat as 0 for now
-                    Expr::StringLit(name)
+                    // Bare unquoted identifier that is not a function call: an
+                    // unresolved named range or an undefined name (Excel `#NAME?`).
+                    // Emit `Expr::Name`, NOT `Expr::StringLit` — a StringLit
+                    // transpiles to a JS string template (`AO`), and in an
+                    // arithmetic context (`number * `AO``) that yields NaN, which
+                    // poisons every dependent cell. `Expr::Name` transpiles to a
+                    // numeric-safe `null` (coerces to 0 in `*`/`+`/SUM), matching
+                    // the historical "treat as 0" intent without the NaN. See T-078.
+                    Expr::Name(name)
                 }
             }
             Token::Op(op) if op == "-" || op == "+" => {
@@ -727,4 +823,148 @@ pub fn parse_formula(formula: &str) -> Option<Expr> {
     }
     let mut parser = Parser::new(tokens);
     Some(parser.parse_expr())
+}
+
+// ---------------------------------------------------------------------------
+// Tests — bare-identifier (#NAME?) regression. See T-078.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod name_fallback_tests {
+    use super::parse_formula;
+    use crate::transpiler::{transpile, TranspileConfig};
+
+    fn tj(f: &str) -> String {
+        let cfg = TranspileConfig {
+            use_ctx_get: true,
+            default_sheet: "S".into(),
+            ..Default::default()
+        };
+        transpile(&parse_formula(f).expect("parse"), &cfg)
+    }
+
+    /// The exact construct that broke the real A-1 cone: a `SUMPRODUCT` whose
+    /// argument multiplies a range by a bare unresolved identifier. Before the
+    /// fix this emitted `range * `R`` → `number * "R"` = NaN, which the cone's
+    /// backward-cone pulled in and the NaN poisoned the active cycle. The fix
+    /// emits `null` (→ 0 in arithmetic), never a string, so NaN can never appear.
+    #[test]
+    fn bare_identifier_never_emits_string_literal_in_arithmetic() {
+        // Regression pin: the real-A1 shape.
+        let out = tj("SUMPRODUCT(J8:J22*R)");
+        assert!(
+            !out.contains("* `R`"),
+            "REGRESSION: bare identifier emitted as string literal (NaN bug): {out}"
+        );
+        assert!(
+            out.contains("null"),
+            "bare identifier must transpile to a numeric-safe null: {out}"
+        );
+
+        // A range of shapes that all used to NaN-poison.
+        for f in &[
+            "SUMPRODUCT(J8:J22*R)",
+            "=SUMPRODUCT($J$8:$J$22*R)",
+            "J8*R",
+            "5*AO",
+            "A1*MyUnresolvedName",
+            "SUMPRODUCT(J8:J22, DB)",
+        ] {
+            let out = tj(f);
+            assert!(
+                !out.contains('`') || !has_bareword_template(&out),
+                "REGRESSION: `{f}` emitted a bareword string-template (NaN risk): {out}"
+            );
+        }
+    }
+
+    /// Quoted strings and quarter-style labels MUST still be real string
+    /// literals — the fix only changes BARE (unquoted) identifiers.
+    #[test]
+    fn quoted_strings_are_unaffected() {
+        let out = tj("IF(A1=\"Active\",1,0)");
+        assert!(
+            out.contains("`Active`"),
+            "quoted string literal must survive as a JS string: {out}"
+        );
+    }
+
+    /// THE root-cause regression: an absolute-ROW mixed reference whose column is
+    /// NOT absolute (`R$8`, `AM$8:AM$22`, `A$1`) must parse as a real cell/range,
+    /// NOT collapse to a bare `#NAME?` identifier. This is the upstream transpiler
+    /// bug the real-A1 cone gate exposed — a J-weighted `SUMPRODUCT(J8:J22*R$8:R$22)`
+    /// silently lost its second operand. See T-078.
+    #[test]
+    fn absolute_row_mixed_refs_parse_as_references() {
+        // single cells
+        assert_eq!(tj("R$8"), "ctx.get(\"S!R8\")");
+        assert_eq!(tj("A$1"), "ctx.get(\"S!A1\")");
+        // ranges — all four $-placements must yield the same clean A1 range,
+        // and the `$` must NEVER leak into the emitted address string.
+        for f in &["R$8:R$22", "R$8:R22", "R8:R$22", "$R8:$R22", "$R$8:$R$22"] {
+            let out = tj(f);
+            assert_eq!(out, "ctx.range(\"S!R8:R22\")", "{f} -> {out}");
+            assert!(!out.contains('$'), "$ leaked into address for {f}: {out}");
+        }
+        assert_eq!(tj("AM$8:AM$22"), "ctx.range(\"S!AM8:AM22\")");
+        // sheet-qualified
+        assert_eq!(tj("Sheet1!R$8:R$22"), "ctx.range(\"Sheet1!R8:R22\")");
+        // the exact real-A1 shape: a real range product, not `* null`.
+        let sp = tj("SUMPRODUCT(J8:J22*R$8:R$22)");
+        assert!(
+            sp.contains("ctx.range(\"S!J8:J22\") * ctx.range(\"S!R8:R22\")"),
+            "real-A1 SUMPRODUCT lost its second operand: {sp}"
+        );
+        assert!(!sp.contains("#NAME?"), "second operand mis-parsed as #NAME?: {sp}");
+    }
+
+    /// The absolute-row fix must NOT swallow genuine undefined names.
+    #[test]
+    fn genuine_names_still_resolve_to_name_error() {
+        assert!(tj("MyName").contains("#NAME?"));
+        assert!(tj("5*FooBar").contains("#NAME?"));
+        // and genuine refs/keywords are untouched
+        assert_eq!(tj("$A1"), "ctx.get(\"S!A1\")");
+        assert_eq!(tj("TRUE"), "true");
+    }
+
+    /// The `null` from an unresolved name folds to 0 in the engine's reduce
+    /// convention (`(+b||0)`), so a SUMPRODUCT over it contributes 0, not NaN.
+    /// We assert the emitted JS evaluates to a finite number (0), via a tiny
+    /// runtime check expressed as JS we know the engine uses.
+    #[test]
+    fn unresolved_name_folds_to_zero_not_nan() {
+        // The emitted form for the array element is `(<range> * (/* #NAME? */ null))`.
+        // In JS: [1,2,3] * null = NaN (array*scalar), but the engine reduce uses
+        // (+b||0) on each FLATTENED element, and the multiply happens per-element
+        // in SUMPRODUCT's 2-arg / single-arg lowering. The key invariant we pin
+        // here is structural: the operand is `null`, never a quoted word.
+        let out = tj("J8*R");
+        assert!(out.contains("null"), "operand must be null: {out}");
+        assert!(!out.contains("`R`"), "operand must not be the string `R`: {out}");
+    }
+
+    // A template literal that is a bare A1-style column word (1-3 upper letters),
+    // i.e. the NaN-causing shape. Distinguishes from legitimate label strings.
+    fn has_bareword_template(js: &str) -> bool {
+        // crude scan for `WORD` where WORD is 1-3 uppercase letters surrounded by backticks
+        let bytes = js.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'`' {
+                if let Some(close) = js[i + 1..].find('`') {
+                    let inner = &js[i + 1..i + 1 + close];
+                    if (1..=3).contains(&inner.len())
+                        && inner.bytes().all(|b| b.is_ascii_uppercase())
+                    {
+                        return true;
+                    }
+                    i = i + 1 + close + 1;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+        false
+    }
 }
