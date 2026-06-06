@@ -379,16 +379,42 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
                 writeln!(w)?;
             }
 
-            // Convergence loop for circular cells
+            // Convergence loop for circular cells.
+            //
+            // Honesty contract (engine-honesty F2/F3/F4):
+            //  - Records per-sheet telemetry onto ctx._sheetConvergence so the
+            //    orchestrator can surface { iterations, converged, maxDelta } into
+            //    run().meta (a single-sheet cycle is otherwise invisible to the
+            //    cross-sheet cluster telemetry — meta was byte-identical between a
+            //    converged and a divergent run).
+            //  - Real divergence detection replaces the old constant-delta "stale"
+            //    early-break: a delta that is INCREASING (monotone up) or holding
+            //    CONSTANT and non-zero (not shrinking toward _tol) is divergence, NOT
+            //    convergence. Such a run is classified converged=false AND its cycle
+            //    cells are NaN-filled so a consumer can't silently trust a wrong
+            //    number. A genuinely contracting run (delta shrinking) converges
+            //    exactly as before.
+            let cycle_addrs: Vec<String> = cycle.iter().map(|(a, _)| a.clone()).collect();
+            let non_cycle_in_range: Vec<&(String, String)> = cell_exprs
+                .iter()
+                .skip(pre.len())
+                .take(last_cycle_idx + 1 - pre.len())
+                .filter(|(addr, _)| !cycle_set.contains(addr))
+                .collect();
+
             writeln!(w, "  // ── Convergence loop ({} circular cells) ──", cycle.len())?;
             writeln!(w, "  const _maxIter = 200;")?;
             writeln!(w, "  const _tol = 1e-6;")?;
-            writeln!(w, "  let _staleCount = 0;")?;
-            writeln!(w, "  let _prevDelta = Infinity;")?;
+            writeln!(w, "  let _converged = false;")?;
+            writeln!(w, "  let _delta = Infinity;")?;
+            writeln!(w, "  let _iters = 0;")?;
+            // Rolling window of recent deltas — used to classify monotone-up /
+            // constant-non-zero divergence (vs a genuine contraction).
+            writeln!(w, "  let _deltaHist = [];")?;
             writeln!(w, "{}", "  for (let _ci = 0; _ci < _maxIter; _ci++) {")?;
+            writeln!(w, "    _iters = _ci + 1;")?;
 
             // Save previous values of cycle cells
-            let cycle_addrs: Vec<String> = cycle.iter().map(|(a, _)| a.clone()).collect();
             writeln!(
                 w,
                 "    const _prev = [{}];",
@@ -405,12 +431,6 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
             }
 
             // Also re-evaluate non-cycle cells between the cycle cells that depend on cycle outputs
-            let non_cycle_in_range: Vec<&(String, String)> = cell_exprs
-                .iter()
-                .skip(pre.len())
-                .take(last_cycle_idx + 1 - pre.len())
-                .filter(|(addr, _)| !cycle_set.contains(addr))
-                .collect();
             for (addr, expr) in &non_cycle_in_range {
                 writeln!(w, "    ctx.set(\"{}\", {});", addr, expr)?;
             }
@@ -425,12 +445,42 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
                     .collect::<Vec<_>>()
                     .join(", ")
             )?;
-            writeln!(w, "{}", "    const _delta = _prev.reduce((mx, v, i) => Math.max(mx, Math.abs(v - (_curr[i] || 0))), 0);")?;
-            writeln!(w, "    if (_delta < _tol) break;")?;
-            writeln!(w, "{}", "    _staleCount = (Math.abs(_delta - _prevDelta) < _tol * 0.01) ? _staleCount + 1 : 0;")?;
-            writeln!(w, "    if (_staleCount >= 5) break; // stale — values stopped improving")?;
-            writeln!(w, "    _prevDelta = _delta;")?;
+            // A non-finite cycle cell (Inf/NaN, e.g. a divide-by-cold-0) can never
+            // be a trustworthy fixed point — force a non-converging delta.
+            writeln!(w, "{}", "    _delta = _prev.reduce((mx, v, i) => { const c = _curr[i]; if (!Number.isFinite(c)) return Infinity; return Math.max(mx, Math.abs(v - (c || 0))); }, 0);")?;
+            writeln!(w, "{}", "    if (_delta < _tol) { _converged = true; break; }")?;
+            // Real divergence detection (replaces the old constant-delta stale break,
+            // which silently STOPPED on a constant non-zero delta and returned that
+            // garbage labelled converged). Keep a short window of deltas and, once we
+            // have a few, declare divergence when the delta is NOT trending down:
+            // either strictly increasing (monotone up) or essentially flat & non-zero
+            // (max-min across the window within _tol of each other, and well above
+            // _tol). A genuine contraction shrinks the delta, so it never matches.
+            writeln!(w, "    _deltaHist.push(_delta);")?;
+            writeln!(w, "    if (_deltaHist.length > 5) _deltaHist.shift();")?;
+            writeln!(w, "{}", "    if (_deltaHist.length >= 4) {")?;
+            writeln!(w, "{}", "      const _w = _deltaHist;")?;
+            writeln!(w, "{}", "      const _mn = Math.min(..._w), _mx = Math.max(..._w);")?;
+            writeln!(w, "{}", "      const _monoUp = _w.every((d, i) => i === 0 || d >= _w[i - 1] - _tol) && (_w[_w.length - 1] > _w[0] + _tol);")?;
+            writeln!(w, "{}", "      const _flatHot = (_mx - _mn) < _tol && _mn > _tol * 100;")?;
+            writeln!(w, "{}", "      if (_monoUp || _flatHot) break; // diverging / stuck non-zero — NOT converged")?;
+            writeln!(w, "    }}")?;
             writeln!(w, "  }}")?;
+
+            // Honesty contract: if we exhausted iterations / broke on divergence
+            // without reaching tolerance, the cycle cells are NOT a fixed point.
+            // NaN-fill them so a downstream consumer reads NaN (detectably unusable)
+            // rather than a confident wrong number.
+            writeln!(w, "{}", "  if (!_converged) {")?;
+            for addr in &cycle_addrs {
+                writeln!(w, "    ctx.set(\"{}\", NaN);", addr)?;
+            }
+            writeln!(w, "  }}")?;
+            // Record telemetry for the orchestrator to fold into run().meta.
+            writeln!(
+                w,
+                "  ctx._sheetConvergence[SHEET_NAME] = {{ iterations: _iters, converged: _converged, maxDelta: _delta }};"
+            )?;
 
             if !post.is_empty() {
                 writeln!(w)?;
@@ -701,9 +751,13 @@ export function run(inputs = {}, options = {}) {"#.to_string());
       const cluster = SHEET_CLUSTERS.find(c => c.includes(sheetName));
       if (cluster && !cluster.some(s => executed.has(s))) {
         // Run the entire cluster in a convergence loop, recording telemetry.
-        let _prevClusterDelta = Infinity, _clusterStale = 0;
         let _iters = 0, _lastDelta = Infinity, _conv = false;
         let _nonFiniteCell = null, _nonFiniteStreak = 0;
+        // Rolling window of recent deltas — used to classify monotone-up /
+        // constant-non-zero divergence (vs a genuine contraction). Replaces the
+        // old constant-delta "stale" early-break, which STOPPED on a constant
+        // non-zero delta and returned that garbage labelled converged (F2/F3).
+        let _clusterDeltaHist = [];
         // Lock-grade convergence via a SAMPLED delta — diff only a fixed subset of
         // cells each iteration instead of JSON.stringify-ing the whole (up to 5.8M-
         // cell) ctx every pass (~8.8min/pass -> ~1min/pass on the real model). The
@@ -763,7 +817,7 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             _nonFiniteCell = _badCell;
             _nonFiniteStreak++;
             _lastDelta = Infinity;
-            _prevClusterDelta = Infinity;
+            _clusterDeltaHist.length = 0;
             // The mid-scan break above left _before STALE for every sample cell
             // ordered after the non-finite one. Invalidate the whole baseline so the
             // next finite pass recomputes it (-> maxDelta=Infinity once) instead of
@@ -777,9 +831,33 @@ export function run(inputs = {}, options = {}) {"#.to_string());
           _nonFiniteStreak = 0;
           _lastDelta = maxDelta;
           if (maxDelta < TOL) { _conv = true; break; }
-          _clusterStale = (Math.abs(maxDelta - _prevClusterDelta) < TOL * 0.01) ? _clusterStale + 1 : 0;
-          if (_clusterStale >= 5) break; // stale — values stopped improving
-          _prevClusterDelta = maxDelta;
+          // Real divergence detection (replaces the old constant-delta stale
+          // break). Keep a short window of deltas; once we have a few, declare
+          // divergence when the delta is NOT trending down: either strictly
+          // increasing (monotone up) or essentially flat & non-zero (window
+          // spread within TOL and well above TOL). A genuine contraction shrinks
+          // the delta, so it never matches and converges exactly as before.
+          _clusterDeltaHist.push(maxDelta);
+          if (_clusterDeltaHist.length > 5) _clusterDeltaHist.shift();
+          if (_clusterDeltaHist.length >= 4) {
+            const _w = _clusterDeltaHist;
+            const _mn = Math.min(..._w), _mx = Math.max(..._w);
+            const _monoUp = _w.every((d, i) => i === 0 || d >= _w[i - 1] - TOL) && (_w[_w.length - 1] > _w[0] + TOL);
+            const _flatHot = (_mx - _mn) < TOL && _mn > TOL * 100;
+            if (_monoUp || _flatHot) break; // diverging / stuck non-zero — NOT converged
+          }
+        }
+        // Honesty contract: a cluster that did not reach tolerance is NOT a fixed
+        // point. NaN-fill its cells (on the cluster's own sheets) so a consumer
+        // reads NaN (detectably unusable) rather than a confident wrong number.
+        if (!_conv) {
+          for (const key in ctx.values) {
+            const _b = key.indexOf('!');
+            if (_b > 0 && _clusterSet.has(key.slice(0, _b)) && typeof ctx.values[key] === 'number'
+                && !(ctx._locked && ctx._locked.has(key))) {
+              ctx.values[key] = NaN;
+            }
+          }
         }
         _clusterMeta.push({ sheets: cluster.slice(), iterations: _iters, converged: _conv, maxDelta: _lastDelta, nonFiniteCell: _nonFiniteCell });
         for (const s of cluster) executed.add(s);
@@ -793,16 +871,39 @@ export function run(inputs = {}, options = {}) {"#.to_string());
 "#.to_string());
     }
 
-    // Shared meta computation + return. converged is true for a no-cluster model
-    // (every() over an empty array). converged=false means a cluster exhausted
-    // MAX_ITER (or stalled) — a non-converged result is silently garbage, so
-    // consumers should refuse to lock on it.
+    // Shared meta computation + return.
+    //
+    // converged folds BOTH cross-sheet cluster telemetry (_clusterMeta) AND
+    // intra-sheet convergence telemetry (ctx._sheetConvergence, populated by any
+    // sheet that ran an internal convergence loop). A model whose entire cycle
+    // lives on ONE sheet has NO sheet cluster (SCC detection is sheet-level), so
+    // before this fix it took the acyclic path, _clusterMeta stayed [], and
+    // converged=[].every()=true regardless of whether the single sheet actually
+    // reached a fixed point — meta was byte-identical between a converged and a
+    // divergent run (engine-honesty F4). Now perSheetIterations is populated and
+    // converged=false flows through for an intra-sheet divergence too.
+    //
+    // converged=false means a cluster OR a single sheet exhausted its iteration
+    // cap / was detected diverging — its affected cells are NaN-filled and the
+    // result must not be trusted (consumers should refuse to lock on it).
     lines.push(r#"
-  const _converged = _clusterMeta.every(c => c.converged);
-  const _maxDelta = _clusterMeta.reduce((m, c) => Math.max(m, c.maxDelta), 0);
-  const _iterations = _clusterMeta.reduce((m, c) => Math.max(m, c.iterations), 0);
+  const _intra = Object.entries(ctx._sheetConvergence || {});
+  const _converged = _clusterMeta.every(c => c.converged) && _intra.every(([, m]) => m.converged);
+  const _maxDelta = Math.max(
+    _clusterMeta.reduce((m, c) => Math.max(m, c.maxDelta), 0),
+    _intra.reduce((m, [, s]) => Math.max(m, Number.isFinite(s.maxDelta) ? s.maxDelta : 0), 0),
+  );
+  const _iterations = Math.max(
+    _clusterMeta.reduce((m, c) => Math.max(m, c.iterations), 0),
+    _intra.reduce((m, [, s]) => Math.max(m, s.iterations), 0),
+  );
   const _perSheetIterations = {};
   for (const c of _clusterMeta) for (const s of c.sheets) _perSheetIterations[s] = c.iterations;
+  // Intra-sheet entries: surface BOTH the iteration count (so perSheetIterations
+  // is no longer {} for a single-sheet cycle) and per-sheet converged flags.
+  for (const [s, m] of _intra) _perSheetIterations[s] = m.iterations;
+  const _sheetConvergence = {};
+  for (const [s, m] of _intra) _sheetConvergence[s] = { iterations: m.iterations, converged: m.converged, maxDelta: m.maxDelta };
   const meta = {
     converged: _converged,
     iterations: _iterations,
@@ -810,6 +911,7 @@ export function run(inputs = {}, options = {}) {"#.to_string());
     convergenceTolerance: TOL,
     clusters: _clusterMeta,
     perSheetIterations: _perSheetIterations,
+    sheetConvergence: _sheetConvergence,
     elapsedMs: Date.now() - _t0,
   };
 
@@ -995,6 +1097,16 @@ class ComputeContext {
     this.values = {};
     /** @type {Set<string>|null} Pinned override cells — set() is a no-op for these. */
     this._locked = null;
+    /**
+     * Intra-sheet convergence telemetry, keyed by sheet name. A sheet whose
+     * compute() ran an internal convergence loop records
+     * { iterations, converged, maxDelta } here so the orchestrator can fold it
+     * into run().meta. Without this, a single-sheet-cycle model produced a meta
+     * byte-identical between a converged and a divergent run (engine-honesty bug
+     * F4). Stays empty for purely linear sheets — zero overhead.
+     * @type {Object<string, {iterations:number, converged:boolean, maxDelta:number}>}
+     */
+    this._sheetConvergence = {};
   }
 
   /**
