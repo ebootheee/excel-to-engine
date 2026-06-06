@@ -1,5 +1,25 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-06 — Outstanding-work triage: 6 PRs merged (master-reviewed fan-out)
+
+A verified triage reprioritized all outstanding work (open issues + ADRs + lite follow-ups), then
+build→test agents landed the **in-repo-gateable** fixes as six small FF-merged PRs; the full integrated
+suite (incl. a fresh `cargo build --release` for the two Rust changes) is green. Merged:
+- **#47 (PR #51)** date-axis `*30.44` → integer Excel serials (DATE/EDATE/EOMONTH helpers) — kills the
+  silent `SUMIFS` date-key zeroing that collapsed the MIP/returns cone.
+- **circular-honesty F2/F3/F4 (PR #52)** — single-sheet cycles now emit convergence telemetry; divergent/
+  stuck runs report `converged:false` + NaN-fill instead of `converged:true` + garbage.
+- **#24 axes 3+4 (PR #48)** consumer-spec `engineArtifactHash` + `versionTag`/platform/class.
+- **#25 (PR #49)** `detectMipValueCells` — per-class MIP proceeds/hurdle/valuation, fail-soft.
+- **ADR-027 f1 (PR #53)** Tier-0 emitter manifest-driven (reconciliation-gated detector).
+- **ADR-027 f2 (PR #50)** strip the redundant a-priori below-floor disclosure when measured r² clears.
+
+**HELD (not honestly gateable in-repo — need the 200 MB models): #46/#33** row-block submodule emission.
+**Real-model re-gates pending:** #47 (A-1 convergence), #25 (A-1 MIP-total reconciliation), and the
+ADR-026 cone (still EXPERIMENTAL — its re-gate is blocked on #47, per the triage). **Hygiene to close:**
+#32 + #26 are fixed-unclosed (close on GitHub; #26 after filing the ~11,813-fallback coverage tracker).
+The two over-claimed "DONE"s (#24, #25) are corrected in ROADMAP. See the CHANGELOG (top 2026-06-06 entry).
+
 ## Status: 2026-06-06 — Lite package (ADR-027) Phases 1–7 LANDED; cone re-gate VACUOUS
 
 The ADR-027 lite package is implemented end-to-end on `main`: Tier-0 closed-form, driver-scope, tier

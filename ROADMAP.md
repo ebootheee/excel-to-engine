@@ -243,7 +243,14 @@ Mippy. Order (issues on ebootheee/excel-to-engine; the Done line is the contract
   (fail loud, never a partial), and emits `chunked/build-manifest.json` (#24):
   the locked artifact layout + a stable `contentHash` over the identity
   artifacts. New `npm run test:runnable` + CI. See CHANGELOG/PLAN.
-- **P2 · [#25] — pin the value-bearing cells as named-outputs. ✅ DONE (2026-05-29).** Per-class MIP Proceeds, hurdle/threshold, participation %, equity basis, valuation/shares — not just MOIC/IRR. Schedules and timeline timelines (such as debt, equity base, cash flow) are now surfaced and participate fully in closure analysis via range expansion. Drivable driver-inputs (`exitMultiple`, `exitYearSelector`, and `hurdleRate`) are also mapped under `named-inputs.json`.
+  **CORRECTION (2026-06-06 triage): the 2026-05-28 "DONE" covered only axes 1/2/5
+  (always-emit-engine.js, stable layout, manifest one-location). Axes 3 & 4 were
+  still open and landed 2026-06-06 (PR #48):** a consumer-spec `engineArtifactHash`
+  (single sha256 over engine.js bytes then each `sheets/` file sorted by filename —
+  matching the Mippy tamper guard; distinct from the internal `contentHash`) +
+  `versionTag`/platform/class identity (version-free dir). **Remaining:** share a
+  golden vector with the Mippy team + add a manifest invariant locking the algorithm.
+- **P2 · [#25] — pin the value-bearing cells as named-outputs. ⚠️ MECHANISM DONE; real-model reconciliation pending.** **CORRECTION (2026-06-06 triage): the 2026-05-29 "DONE" was over-claimed** — only the per-year SCHEDULES + the value-cell pinning *support* had shipped; `detectEquity` never auto-populated proceeds/valuation/hurdle and there was no per-block MIP aggregator. Landed 2026-06-06 (PR #49): `detectMipValueCells` auto-detects per-class MIP/promote **Proceeds** (per-block `{cells,op:'sum'}` aggregate), **hurdle/threshold**, and **valuation** cells, fail-soft. Drivable inputs (`exitMultiple`/`exitYearSelector`/`hurdleRate`) remain mapped under `named-inputs.json`. **Remaining:** reconcile the summed per-block MIP aggregate against the real A-1 MIP total (`ETE_GOLDEN_DIR`) before Mippy trusts the auto-detected proceeds.
 - **P2 · [#26] — `_fn` fallback audit (`_fn-fallbacks.json`). ✅ DONE (2026-05-29).** Scans the generated sheet modules → `_fn-fallbacks.json`, and checks each named output/schedule's dependency closure against it. **Reports** by default (annotates affected outputs with `resolvesThroughFallback`, records `stats.fallbackViolations`, `ete init` warns); **hard-fails only under `--assert-no-fallbacks`** so the gate doesn't block the real models (~11,813 fallbacks today). The "assert no value cell uses a stub" target is the golden-master CI check below, run with `--assert-no-fallbacks`.
 - **P3 · [#22] — scaling walls + lazy sheet loading. ✅ DONE (2026-05-29).**
   Three walls closed so the real models both *build* and *run* at scale:

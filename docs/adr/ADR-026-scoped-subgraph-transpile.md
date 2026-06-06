@@ -1,6 +1,6 @@
 # ADR-026 — Scoped-subgraph transpile (#22 / T-078)
 
-- **Status:** Proposed (design only — no implementation in this change)
+- **Status:** Accepted — implemented & merged (Wave 2, PR #41): `lib/scope-plan.mjs` + `lib/cone-emit.mjs` + `ete init --emit-cones`, synthetic-gated (113 tests). **EXPERIMENTAL label HELD.** The real-model re-gate is VACUOUS (scope output `GPP Promote!KU159` ≡ 0 → `0==0` proves nothing; full-engine override OOM'd ~7.2 GB) AND — per the 2026-06-06 triage — was BLOCKED on **#47** (date-axis float drift collapses the MIP/returns cone to 0/NaN; fixed on main via PR #51, needs an A-1 rebuild to confirm). Sequence before lifting EXPERIMENTAL: rebuild A-1 from the post-#51 parser → re-gate on a NON-ZERO lever-sensitive output (base-case-only compare). (This line was stale "Proposed (design only)" until 2026-06-06 despite 900+ lines of merged code — corrected by the triage.)
 - **Date:** 2026-06-03
 - **Branch this was scoped on:** `feat/engine-perf` (off `main@9ef55c5`)
 - **Supersedes/relates:** #22 (output scoping / scaling walls), #33 (returns-cone shrinking / monster-module row-chunking), T-076 (NaN-guard convergence), ADR-nil sheet-level `--lazy-engine`.

@@ -1,5 +1,58 @@
 # excel-to-engine — Changelog
 
+## 2026-06-06 — Outstanding-work triage: 6 PRs merged (engine defects + contract + lite follow-ups)
+
+A verified triage (adversarial workflow — every open issue/ADR/follow-up re-checked against `main` +
+a skeptic cross-check) reprioritized all outstanding work; a fan-out of build→test agents then landed
+the **in-repo-gateable** fixes as six small FF-merged PRs (each individually green; master reviewed +
+merged + re-ran the full integrated suite). The two real-model-only items (#46/#33 row-block submodule
+emission) were **deliberately HELD** — they can't be honestly gated without the 200 MB models.
+
+- **#47 (PR #51) — date-axis float drift [engine defect, P0].** `DATE`/`EDATE`/`EOMONTH` now transpile
+  to INTEGER Excel day-serials via calendar-exact `_excelSerialFromYMD`/`_edate`/`_eomonth` runtime
+  helpers (day-of-month clamping; EOMONTH last-day; leap-year correct) instead of the `*30.44`
+  float-month approximation that drifted EDATE/EOMONTH date axes off integer serials and silently
+  zeroed exact-match `SUMIFS`/`MINIFS` date-key lookups (→ `x/0` → Inf/NaN across the MIP/returns cone).
+  New `pipelines/rust/tests/test-date-axis-sumifs.mjs` drives an EDATE-recurrence axis + exact-equality
+  SUMIFS (with a verified negative control: reverting to `*30.44` returns 0). **Real-model A-1 re-gate
+  still pending** (200 MB model not in repo).
+- **circular-engine honesty F2/F3/F4 (PR #52) — silent non-convergence [engine defect, P0].**
+  Single-sheet cycles previously reported `meta.converged:true` / `perSheetIterations:{}` unconditionally
+  (the acyclic orchestrator path emitted no telemetry), and a constant per-iteration delta was misread
+  as "stale" → divergent/slow-contractive runs returned confident garbage labeled converged. Now: intra-
+  sheet convergence telemetry surfaces into `meta.sheetConvergence`/`perSheetIterations`, and a real
+  monotone-up / flat-but-hot divergence check (at both convergence sites) sets `converged:false` and
+  **NaN-fills** the affected cells (detectably unusable, never a confident wrong number; locked input
+  overrides preserved). `lib/integration-doc.mjs` documents the `converged:false = do-not-trust` contract.
+  New `test-circular-honesty.mjs` (negative control: the pre-fix emitter returns `converged:true` +
+  `A1≈1.6e60`). Behavior change is strictly in the honest direction; smoke 126/126 + test:engine 24/24
+  confirm convergent cases are 0-drift. (P2-14 intra-sheet cell topo-sort left as a separate follow-up.)
+- **#24 axes 3 & 4 (PR #48) — downstream-consumable artifact [contract, P1].** Emits a consumer-spec
+  `engineArtifactHash` (single sha256 over `engine.js` bytes then each `sheets/` file sorted by
+  filename, filename-then-bytes; engine.js + sheets/ only — NOT the internal structured `contentHash`,
+  which stays for cross-rebuild stability) + `versionTag`/`platform`/`class` identity fields (output dir
+  stays version-free). Non-circular golden-vector + mutation-guard test. **Was over-claimed "DONE" — only
+  3/5 axes were real.** Still pending: share a golden vector with the Mippy team + add a manifest invariant.
+- **#25 (PR #49) — value-bearing MIP outputs [contract, P1].** `detectMipValueCells` auto-detects, per
+  equity class, the per-block MIP/promote **proceeds** (aggregated into a `{cells,op:'sum'}` ref),
+  **hurdle**, and **valuation** cells from ground truth — fail-soft (unset, never a wrong cell, when
+  labels don't resolve). Aggregate-path round-trip + detection + mutation-guard coverage added.
+  **Was over-claimed "DONE" — only the schedules + pinning SUPPORT had shipped.** Mechanism validated on
+  synthetic fixtures; **real A-1 MIP-total reconciliation pending** before Mippy trusts auto-detected proceeds.
+- **ADR-027 follow-up #1 (PR #53) — generalize Tier-0.** `detectTier0Layout` derives the per-tier
+  GP-cashflow cells + cashflow rows from ground truth, gated on the carry-total reconciliation invariant
+  (fail-soft); `emitTier0` is now manifest-driven and fail-loud-escalates to Tier 1 when the layout is
+  absent — no longer limited to the GPP-Promote fixture. Second synthetic fixture asserts on the
+  **disclosed `shapeResidual`** (2-tier annual `lib/waterfall` vs a 4-tier split), not bit-exactness.
+- **ADR-027 follow-up #2 (PR #50) — disclosure reconciliation.** `ete lite` no longer prints the
+  a-priori "BY-REQUEST SURROGATE BELOW FLOOR" disclosure when the MEASURED surrogate r² actually clears
+  the output-class floor (anchored strip in `cli/commands/lite.mjs` only; the recommender's pure
+  prediction + its snapshot test are untouched; the measured per-output gate stays the sole authority).
+- **Hygiene (reconciled by the triage):** #32 (dep-graph 37 GB) and #26 (`_fn-fallbacks.json` audit) are
+  **fixed-unclosed** — done on `main`, to be CLOSED on GitHub (#26 after filing the ~11,813-fallback
+  coverage-debt tracker). The stale ADR-026 "Proposed" status + HANDOFF "re-gate unblocked by #43" drift
+  remain to be corrected; the cone stays EXPERIMENTAL (re-gate blocked on #47).
+
 ## 2026-06-06 — Lite package Phase 7: the FRONT DOOR (`ete lite` + skill + day-in-the-life e2e)
 
 The capstone that makes the ADR-027 lite package usable end-to-end by a non-technical analyst

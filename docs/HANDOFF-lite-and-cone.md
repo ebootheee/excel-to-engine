@@ -15,9 +15,16 @@
 - **Closed as superseded:** #42 (duplicate of #43; its e2e test salvaged into #43), #37 (override-lock
   already shipped via `emit_run_function` `ctx._locked`).
 
-## Thread A — RE-GATE the real-model cone (ADR-026 Tier 2) — now UNBLOCKED
-The cone gate failed *only because of the transpiler bug, which is now fixed on main*. The cone machinery
-faithfully reproduces the engine, so with the NaN cells gone it should now converge. **Do this:**
+## Thread A — RE-GATE the real-model cone (ADR-026 Tier 2) — STILL BLOCKED (on #47)
+**CORRECTION (2026-06-06 triage):** the `COL$ROW` fix (#43) was necessary but NOT sufficient. The prior
+re-gate is VACUOUS — scope output `GPP Promote!KU159` ≡ 0, so the `0==0` PASS proves nothing, and the
+full-engine override OOM'd (~7.2 GB). And **#47 date-axis float drift** (`*30.44` month-step → exact-match
+SUMIFS date keys miss → the MIP/returns cone collapses to 0/NaN) was predicted to make any re-gate fail;
+it is now FIXED on `main` (PR #51) but a STALE A-1 build will NOT show it. The cone machinery reproduces
+the engine faithfully, so once #47 is in the rebuilt binary it *should* converge — verify, don't assume.
+**Do this (in order):**
+0. Rebuild A-1 from the **post-#51** parser (the date-serial fix must be in the binary), and re-gate on a
+   **NON-ZERO, lever-sensitive** output (NOT `KU159`) with a **base-case-only** compare.
 1. Rebuild the A-1 chunked artifact with the fixed parser **and the dependency graph**:
    `node --max-old-space-size=20480 cli/index.mjs init engines/Outpost-A-1.xlsx --output <tmp> --emit-cones --emit-debug`
    (the `Outpost-A-1.xlsx` IS in the checkout — `engines/Outpost-A-1.xlsx`, 77 MB; parse ≈ 65 s, then
