@@ -6,9 +6,13 @@
   honesty gate (`lib/lite-surrogate.mjs`), consolidated provenance + handoff (`lib/lite-provenance.mjs`),
   and the front door (`cli/commands/lite.mjs` `ete lite` + `skill/lite/SKILL.md` + the day-in-the-life
   e2e). Each shipped behind the shared test standard (`docs/LITE-TEST-STANDARD.md`). Open follow-ups:
-  generalize `emitTier0` beyond the single GPP-Promote fixture; reconcile the recommender's a-priori
-  by-request below-floor disclosure with the measured fit; lift Tier-2 (cone) once ADR-026 re-gates
-  on a non-zero output.
+  generalize `emitTier0` beyond the single GPP-Promote fixture; ~~reconcile the recommender's a-priori
+  by-request below-floor disclosure with the measured fit~~ — RECONCILED 2026-06-06: `runLite`
+  (`cli/commands/lite.mjs`) now strips ONLY the anchored a-priori "BY-REQUEST SURROGATE BELOW FLOOR"
+  note when no shipped output actually measured below floor (the measured per-output gate in
+  `lib/lite-surrogate.mjs` remains the sole authority; the recommender + its snapshot test are
+  untouched); regression at `tests/cli/test-lite-byrequest-disclosure.mjs`. Lift Tier-2 (cone) once
+  ADR-026 re-gates on a non-zero output.
 - **Date:** 2026-06-05 (design); 2026-06-06 (implementation)
 - **Branch:** `feat/lite-package` (off `main` after ADR-026 Wave 2 / PR #41 merged)
 - **Relates:** ADR-026 (scoped cone = Tier 2 here); the analyst-onboarding initiative (this is the
