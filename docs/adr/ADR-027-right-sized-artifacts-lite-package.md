@@ -6,7 +6,18 @@
   honesty gate (`lib/lite-surrogate.mjs`), consolidated provenance + handoff (`lib/lite-provenance.mjs`),
   and the front door (`cli/commands/lite.mjs` `ete lite` + `skill/lite/SKILL.md` + the day-in-the-life
   e2e). Each shipped behind the shared test standard (`docs/LITE-TEST-STANDARD.md`). Open follow-ups:
-  generalize `emitTier0` beyond the single GPP-Promote fixture; ~~reconcile the recommender's a-priori
+  ~~generalize `emitTier0` beyond the single GPP-Promote fixture~~ — DONE 2026-06-06: `emitTier0`
+  is now MANIFEST-DRIVEN. `detectTier0Layout` (`lib/manifest.mjs`) derives the per-tier GP-cashflow
+  cells + pre-carry cashflow/cumulative-equity rows from ground truth — anchored on the chosen
+  `carry.totalCell`, restricted to that scenario block, and GATED on the model's own
+  sum-reconciliation invariant (Σ tier GP cells == carry total) so it is FAIL-SOFT (leaves
+  `carry.tier0Layout` unset when it can't confidently reconcile). `emitTier0` reads
+  `manifest.carry.tier0Layout` and throws a clear, actionable "LACKS the Tier-0 layout" error when it
+  is absent (fail-loud → the front door escalates to Tier 1) instead of mis-targeting the old hardcoded
+  refs. Second-fixture proof (different sheet/column/rows, asserting on the disclosed `shapeResidual`
+  not bit-exact carry) at `tests/lib/test-lite-tier0-generic.mjs` + `tests/lib/fixtures-tier0-generic.mjs`;
+  the GPP-Promote regression (`tests/lib/test-lite-tier0.mjs`) now runs via the derived layout.
+  ~~reconcile the recommender's a-priori
   by-request below-floor disclosure with the measured fit~~ — RECONCILED 2026-06-06: `runLite`
   (`cli/commands/lite.mjs`) now strips ONLY the anchored a-priori "BY-REQUEST SURROGATE BELOW FLOOR"
   note when no shipped output actually measured below floor (the measured per-output gate in
