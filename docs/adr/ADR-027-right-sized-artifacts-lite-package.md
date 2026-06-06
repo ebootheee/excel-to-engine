@@ -81,6 +81,13 @@ SheetJS). Reserve engine-sampling for when Rust is already in play. **Do NOT** a
   `lib/sensitivity.mjs` breakpoint detection) to Tier 2 — multiplicative surrogates mis-price carry
   near a hurdle / MIP near a threshold. r² floors are **output-class** (0.99 monetary/carry, 0.97
   IRR/MOIC), not a single global number.
+- **By-request carve-out (ratified 2026-06-06):** the **one** exemption from the output-class floor.
+  An *explicitly requested* embedded surrogate (the integrator `embedded-surrogate` use case) MAY ship
+  a monetary/carry/MIP output as a Tier-1 surrogate **under loud disclosure** — the requester has
+  knowingly accepted the 0.99-floor risk for a lightweight runtime embed (the Mippy integrator path).
+  This is **not** "surrogate everywhere" (still rejected under Alternatives): it fires only on an
+  explicit request, never by default, and the **kink gate overrides it** — a detected breakpoint forces
+  Tier 2 regardless. Every other use case escalates a 0.99-floor surrogate to the cone.
 - **Provenance:** every artifact (Tier 0/1/2) is stamped with the model's `modelHash` (reuse the
   scope-plan discipline) + an r²/maxResidual provenance block, and the loader **refuses on mismatch**
   — a stale surrogate must not silently misprice for the non-technical user least able to catch it.
