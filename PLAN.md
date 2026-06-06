@@ -1,5 +1,15 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-06 — Lite package (ADR-027) Phases 1–7 LANDED; cone re-gate VACUOUS
+
+The ADR-027 lite package is implemented end-to-end on `main`: Tier-0 closed-form, driver-scope, tier
+recommender, evaluator adapters, Tier-1 surrogate + honesty gate, consolidated provenance + handoff,
+and the `ete lite` front door + `skill/lite/SKILL.md` + a day-in-the-life e2e — all behind the shared
+test standard (`docs/LITE-TEST-STANDARD.md`). See the CHANGELOG (2026-06-06 entries) and ADR-027.
+Separately: the ADR-026 cone re-gate was RUN and is **vacuous** (scope output `GPP Promote!KU159` ≡ 0,
+so `0==0` PASS proves nothing; the override recompute OOM'd) — `init --emit-cones` STAYS EXPERIMENTAL
+until a real re-gate on a non-zero, lever-sensitive output (base-case-only compare). See ROADMAP item 1.
+
 ## Status: cone/cycle MEASURED + scoped-subgraph DESIGNED (2026-06-03, branch `feat/engine-perf`)
 
 The module wall now has a measured, designed remedy. On the real A-1 cell graph

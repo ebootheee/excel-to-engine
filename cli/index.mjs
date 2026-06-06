@@ -79,6 +79,7 @@ const COMMANDS = {
   explain: { desc: 'Audit trail for a manifest name or cell', module: './commands/explain.mjs' },
   eval: { desc: 'Evaluate a cell via the chunked engine', module: './commands/eval.mjs' },
   verify: { desc: 'Check the engine reproduces the model base case', module: './commands/verify.mjs' },
+  lite: { desc: 'Right-sized, KB-sized extraction (no Rust): pick a tier + emit an artifact', module: './commands/lite.mjs' },
   manifest: { desc: 'Generate or validate manifest', module: './commands/manifest.mjs' },
 };
 
@@ -166,6 +167,11 @@ async function main() {
       case 'verify': {
         const { runVerify } = mod;
         result = await runVerify(args._[1], args);
+        break;
+      }
+      case 'lite': {
+        const { runLite } = mod;
+        result = runLite(args._[1], args);
         break;
       }
       case 'manifest': {
@@ -282,6 +288,16 @@ Commands:
   sensitivity <modelDir>     Generate sensitivity surface
   compare <modelDir>         Compare scenarios or models
   carry [modelDir]           Compute GP carry under a waterfall
+  lite <modelDir>            Right-sized, KB-sized extraction (no Rust). Answers the
+                             three front-door questions and emits the smallest
+                             artifact that hits the precision budget.
+                             Flags: --output <names> (comma list, e.g.
+                                    grossIRR,totalCarry,grossMOIC; default grossIRR),
+                                    --use-case <one-off|dashboard|what-if-grid|
+                                    embedded-surrogate|app-integration> (default
+                                    one-off), --output-class <name:class> (override),
+                                    --out-dir <dir> (default <modelDir>/lite-out),
+                                    --no-write. See skill/lite/SKILL.md.
   manifest <sub> <path>      generate | validate | refine | doctor | set
 
 Query modes (add --sheet "Name" to restrict scope and speed up 10-50×):

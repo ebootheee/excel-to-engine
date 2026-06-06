@@ -58,6 +58,13 @@ confirm before moving on.
    `named-outputs.json` (the answers, with base-case values to spot-check). Offer
    a starter prompt they can give their developer/agent (see GETTING_STARTED.md).
 
+**Right-sizing the extraction:** if the user only needs one or two numbers
+(carry / IRR / MOIC / a MIP) and not the whole 100s-MB engine — e.g. to embed in
+Mippy or ship a tiny what-if — point them at the lite front door:
+`skill/lite/SKILL.md` and `ete lite <dir> --output grossIRR,totalCarry`. It
+picks the smallest faithful artifact (a KB-sized closed-form/surrogate, no Rust)
+and escalates honestly to the cone when a number sits on a hurdle/kink.
+
 ### Engine fidelity & the run() contract (for the coding-agent handoff)
 
 - `engine.run(inputs?, { strict? })` → `{ values, kpis, meta, unknownOverrides }`.

@@ -1,5 +1,86 @@
 # excel-to-engine — Changelog
 
+## 2026-06-06 — Lite package Phase 7: the FRONT DOOR (`ete lite` + skill + day-in-the-life e2e)
+
+The capstone that makes the ADR-027 lite package usable end-to-end by a non-technical analyst
+pointing a coding agent at the repo. NO Rust, NO network.
+
+- **`ete lite <dir> --output grossIRR,totalCarry --use-case one-off`** (`cli/commands/lite.mjs`,
+  wired additively into `cli/index.mjs`): answers the three front-door questions, builds a no-Rust
+  `cascadeEvaluator`, derives the candidate levers (exitMultiple; exitYear only via
+  `--with-exit-year` — adding it false-escalates a 0.97-floor return output on an interaction-free
+  fit), `recommendTier` → persona/tier/budget, `selectDrivers` → scope, then EMITS the chosen tier:
+  Tier 0 via `emitTier0` with an HONEST fall-back to Tier 1 on the single-fixture layout guard (the
+  fixtures' carry sheet is `GP Promote`, not `GPP Promote`); Tier 1 via `emitSurrogate` (honesty-
+  gated). Because `ete lite` is the NO-RUST front door it never auto-builds Tier 2/3; it ESCALATES to
+  the cone — surfacing the exact `ete init --emit-cones` command — whenever EITHER a measured per-
+  output escalation fires (kink / below-floor) OR the recommender capped DOWN from the cone
+  (`no-rust-cap` / `r2-floor`, e.g. an `app-integration` carry request whose Tier-2 cone default is
+  unreachable without Rust). The recommender's class-specific disclosures (e.g. "NO-RUST FALLBACK",
+  "carry surrogate below floor") are now surfaced, never dropped. Writes a standalone `INTEGRATION.md`
+  from `documentLiteArtifact` (the fixtures dir has no engine.js so `emitIntegrationDoc` skips).
+  Escalated outputs report `{escalated:true}` — NEVER a fabricated number.
+- **Usability fixes (post-review):** the headline command `ete lite <dir> --output grossIRR
+  --use-case one-off` (no `--out-dir`) now CREATES the default `<dir>/lite-out` before emitting (was
+  a raw ENOENT crash — neither emit path mkdir'd); `--no-write` now actually previews without writing
+  (the arg parser camelCases it to `noWrite`, which was unread, so writes still happened); each output
+  is labelled with its OWN class in the summary (`grossIRR (irr)`, `totalCarry (carry)` — not one
+  lumped class); the run-file's exact grouped key is shown next to the friendly name; the local
+  r²-floor table was replaced by the canonical `R2_FLOORS` import (single source of truth).
+- **Kink-aware recommender (post-merge master fix):** `runLite` now runs `selectDrivers` BEFORE
+  `recommendTier` and feeds its real breakpoint finding as `modelTraits.hasBreakpointInRange`, so
+  the recommender's kink gate is accurate (a kinked money output escalates to the cone at the
+  recommendation step, not only later at surrogate-emit) and the spurious "BREAKPOINT CHECK NOT RUN
+  … UNVERIFIED" disclosure no longer fires on a clean, already-checked output.
+- **`skill/lite/SKILL.md`** — the focused, plain-language front-door skill (three questions, the
+  hidden 4th, two personas, the tier ladder, the exact command, how to read the result, the honesty
+  caveats, the handoff). Now states plainly that `ete lite` is no-Rust and only ESCALATES to the cone
+  (never auto-builds it), and documents the disclosures + grouped run() keys. One-line pointer added
+  from `skill/SKILL.md`.
+- **`tests/cli/test-lite-e2e.mjs`** — the day-in-the-life e2e (45 assertions, 1 mutation guard): real
+  CLI via spawnSync (exits 0, recommends a tier + rationale, Tier-0→1 fallback quoted); the literal
+  front-door command with NO `--out-dir` (creates the default `lite-out`, no ENOENT); `--no-write`
+  previews without writing; the integrator cone lane (`app-integration` carry surfaces the
+  `ete init --emit-cones` command + the NO-RUST FALLBACK disclosure); KB-sized artifact (< 64 KB) +
+  run file; NON-CIRCULAR base fidelity vs the independently-computed cascade base; handoff NAMES the
+  lever + fidelity + escalations; HONEST escalation negative control on the synthetic MIP@1.5× kink
+  (gpCarry/mip escalate, grossMOIC ships; same outputs ship clean on a no-kink range); refuse-on-
+  mismatch on a tampered beta. Gates green: test-lite-e2e (45/45), test-cli (34/34), test-onboarding
+  (15/15).
+
+## 2026-06-06 — Lite package Phases 3, 4, 6 + a shared test standard
+
+The lib layer beneath the Phase-7 front door, each built adversarially (spec → build → 3-lens review
+with mutation testing → fix) and FF-merged small with the full suite green. NO Rust, NO network.
+
+- **Test standard** (`tests/lib/_lite-harness.mjs` + `docs/LITE-TEST-STANDARD.md`): a counted
+  assert/near/throws harness plus `mutationGuard` — the anti-tautology check Phase 1 lacked. The
+  rules every lite test follows: non-circular truth, a negative control, a mandatory mutation guard,
+  refuse-on-mismatch provenance MUST be tested, honesty-gate escalation MUST be tested, committed
+  fixtures only, no network/clock/random.
+- **Phase 3 — evaluator adapters** (`lib/lite-evaluators.mjs`, 98 assertions): the pluggable
+  `(inputs)=>groupedResult` contract driver-scope + the surrogate consume — `cascadeEvaluator`
+  (no-Rust delta-cascade → grouped), `directEvaluator` (already-grouped compute fn / engine.run),
+  `engineRunEvaluator` (chunked `run()` + outputsSpec), and a documented workbook-variant stub. Only
+  finite/boolean leaves are emitted (null carry below the hurdle, NaN, object `carryDetail` omitted);
+  non-finite / unmapped / malformed-map driver values throw loud.
+- **Phase 4 — Tier-1 surrogate emitter + honesty gate** (`lib/lite-surrogate.mjs`, 79 assertions, 6
+  mutation guards): `emitSurrogate`/`loadSurrogate`. Multiplicative `out = base·∏(1+βᵢΔᵢ)` fit with a
+  per-driver quadratic fallback; r²/maxResidual MEASURED on the fitted surrogate (never the
+  `selectedR2` proxy). Ordered honesty gate: a detected kink ALWAYS escalates to Tier 2 and OVERRIDES
+  the by-request carve-out; coverage-below-floor escalates; below-class-floor escalates unless
+  `useCase==='embedded-surrogate'` (then ships under a LOUD disclosure, ADR §5). A signed `gateHash`
+  over the gate decision + coeff/base floats + r²/disclosure means `loadSurrogate` refuses a tampered
+  β or a force-shipped kinked output; an escalated output returns `{escalated:true}`, never a
+  fabricated money number (verified by an independent adversarial probe).
+- **Phase 6 — provenance consolidation + handoff** (`lib/lite-provenance.mjs`, 40 assertions):
+  single canonical home for `structuralRefs`/`hashStructuralRefs`/`deriveModelHash`/`stableStringify`/
+  `fitSignature` + `verifyModelLayer` (the shared model-identity (A)/(B)/(C) refusal logic). lite-tier0
+  + lite-surrogate now import it and drop their duplicates (behavior-preserving — tier0 50/50 +
+  surrogate 79/79 unchanged; `deriveModelHash` confirmed == a hand sha256). `documentLiteArtifact` +
+  `emitIntegrationDoc` now append a lite-artifact section to the handoff when a params file is present
+  (byte-identical when absent).
+
 ## 2026-06-05 — "Lite" package: design accepted (ADR-027) — implementation pending
 
 A guided, tiered extraction that produces the smallest artifact answering a specific question at

@@ -1,7 +1,15 @@
 # ADR-027 — Right-sized artifacts + the "lite" package (guided, tiered extraction)
 
-- **Status:** Accepted (design; Phase 1 implementation in this change)
-- **Date:** 2026-06-05
+- **Status:** Accepted + IMPLEMENTED — Phases 1–7 landed on `main` (2026-06-06). Tier-0 closed-form
+  (`lib/lite-tier0.mjs`), driver-scope (`lib/driver-scope.mjs`), tier recommender
+  (`lib/tier-recommender.mjs`), evaluator adapters (`lib/lite-evaluators.mjs`), Tier-1 surrogate +
+  honesty gate (`lib/lite-surrogate.mjs`), consolidated provenance + handoff (`lib/lite-provenance.mjs`),
+  and the front door (`cli/commands/lite.mjs` `ete lite` + `skill/lite/SKILL.md` + the day-in-the-life
+  e2e). Each shipped behind the shared test standard (`docs/LITE-TEST-STANDARD.md`). Open follow-ups:
+  generalize `emitTier0` beyond the single GPP-Promote fixture; reconcile the recommender's a-priori
+  by-request below-floor disclosure with the measured fit; lift Tier-2 (cone) once ADR-026 re-gates
+  on a non-zero output.
+- **Date:** 2026-06-05 (design); 2026-06-06 (implementation)
 - **Branch:** `feat/lite-package` (off `main` after ADR-026 Wave 2 / PR #41 merged)
 - **Relates:** ADR-026 (scoped cone = Tier 2 here); the analyst-onboarding initiative (this is the
   self-serve front door); the Mippy contract (Tier 1/2 are its targeted-query needs).

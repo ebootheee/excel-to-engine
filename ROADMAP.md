@@ -2,14 +2,22 @@
 
 ## Now — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
 
-1. **Re-gate the real-model scoped cone (ADR-026 Tier 2) — UNBLOCKED.** The Wave-2 A-1 cone gate failed
-   *only* because of the `COL$ROW` `* `COL`` transpiler NaN bug, now fixed on main (PR #43). Regenerate
-   A-1 with `--emit-cones --emit-debug`, diff cone vs engine/GT; if it converges, lift the EXPERIMENTAL
-   label on `init --emit-cones`. Wave-3: speed the ~20 min/16 GB cone build (CSR cache); port L1
+1. **Re-gate the real-model scoped cone (ADR-026 Tier 2) — re-gate was VACUOUS; label STAYS.** The
+   Wave-2 A-1 cone gate failed *only* because of the `COL$ROW` `* `COL`` transpiler NaN bug, fixed on
+   main (PR #43). The 2026-06-06 re-gate (`engines/_scratch_probe/cone-gate.mjs`, input `GPP Promote!C108`
+   → output `GPP Promote!KU159`) printed cone==engine==GT relErr 0.000 PASS — but **`KU159` is
+   identically 0**, so every verdict is a vacuous `0==0` and proves nothing; the lever what-if was
+   inconclusive and the full-engine override recompute OOM'd at ~7.2 GB. **Do NOT lift the EXPERIMENTAL
+   label on `init --emit-cones`.** A real re-gate needs (a) a scope output that is NONZERO at base AND
+   varies with the lever, and (b) a base-case-only cone-vs-engine compare (the override recompute OOMs →
+   needs a memory-bounded path). Wave-3: speed the ~20 min/16 GB cone build (CSR cache); port L1
    cell-level cycle resolution into `chunked_emitter.rs`; #33 row-chunking.
-2. **Build the "lite" package, Phase 1 (ADR-027) — design accepted.** Tier-0 closed-form proof
-   (`lib/lite-tier0.mjs`, no Rust) → driver-scope → Tier-1 surrogate (cascade/variant samples, breakpoint
-   escalation) → recommender → guiding skill (two personas, `ete lite`). See ADR-027's phased plan.
+2. **Build the "lite" package (ADR-027) — Phases 1–7 LANDED.** Tier-0 closed-form (`lib/lite-tier0.mjs`)
+   → driver-scope → Tier-1 surrogate (cascade samples, breakpoint escalation) → recommender → shared
+   provenance/handoff (`lib/lite-provenance.mjs`) → **Phase 7 FRONT DOOR: `ete lite` (`cli/commands/lite.mjs`)
+   + `skill/lite/SKILL.md` + the day-in-the-life e2e (`tests/cli/test-lite-e2e.mjs`).** Next: generalize
+   `emitTier0` beyond the single GPP-Promote fixture (manifest-derived tier GP cells); lift the cone
+   (Tier 2) once ADR-026 re-gates; named-output-keyed lever derivation for non-PE model families.
 
 ## Earlier — Lock-grade engine for the Outpost A-1 MIP cone (2026-06-01)
 
