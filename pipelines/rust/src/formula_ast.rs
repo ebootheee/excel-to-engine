@@ -269,6 +269,18 @@ impl<'a> Tokenizer<'a> {
             self.pos = saved;
         }
 
+        // Mixed reference COL$ROW (relative column, absolute row), e.g. DB$7, AO$7,
+        // B$1 — the alpha loop above stops at '$', so `name` is a bare column. Without
+        // this, it falls through to Token::Ident → StringLit → JS `expr * "DB"` = NaN,
+        // and the rest of the formula is silently dropped (240k+ such cells on the
+        // real models; ADR-026 Wave-2 gate finding). Reset to the start of the column
+        // letters and let read_cell_ref_part handle the full $-permutation + ':' range
+        // logic (it already supports the optional row-absolute '$').
+        if looks_like_column_ref(name) && self.peek() == Some('$') {
+            self.pos = start;
+            return self.read_cell_ref_part(None);
+        }
+
         // Check for TRUE/FALSE booleans
         match name.to_uppercase().as_str() {
             "TRUE" => return Token::Bool(true),

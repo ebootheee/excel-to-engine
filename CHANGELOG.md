@@ -1,5 +1,25 @@
 # excel-to-engine — Changelog
 
+## 2026-06-05 — fix(transpiler): COL$ROW mixed references (240,973 silent-NaN cells on A-1)
+
+Branch `fix/colrow-ref-lexer`. Surfaced by the Wave-2 real-A1 cone gate (ADR-026): the lexer
+(`pipelines/rust/src/formula_ast.rs` `read_ident_or_ref`) stopped reading at `$`, so a mixed
+reference like **`DB$7`** (relative column, absolute row — the ubiquitous header/date-row anchor)
+lexed as `Ident("DB")` → `StringLit` → JS `expr * "DB"` = **NaN**, and the rest of the formula was
+silently dropped. **240,973 such cells** in the Outpost A-1 chunked modules. Named outputs dodged
+them (base-case verification passed), so it lurked — but any cell touching a `COL$ROW` anchor was
+silently NaN/truncated.
+
+- **Fix (~6 lines):** when a bare column ref is followed by `$`, reset and delegate to
+  `read_cell_ref_part`, which already handles the optional row-absolute `$` + `:` ranges. Low risk —
+  the branch only fires on `COL$ROW`, which previously *always* mis-lexed (no correct behavior to
+  regress); `DB7`, `$DB$7`, `$AN1717`, `V:V` all unaffected.
+- **Verified at scale:** regenerated outpost-a1 → `` * `COL` `` string-multiplies **240,973 → 0**;
+  `Debt!DB1725`'s dropped range/IF tail is restored. Synthetic regression `tests/cli/test-colrow-ref.mjs`
+  (5/5, wired into `npm test`); Rust smoke 126/126; full `npm test` green.
+
+This is the Wave-3 prerequisite for a correct real-model scoped cone (ADR-026 / ADR-027 Tier 2).
+
 ## 2026-06-04 — Engine-speed Wave 2 landed: scoped cone module (L2) + cell-level full executor (L1)
 
 Branch `feat/engine-perf-wave2` (off `origin/main`). The ADR-026 keystone. One JS post-emit
