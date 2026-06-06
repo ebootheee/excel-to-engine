@@ -480,7 +480,15 @@ export function runInit(excelPath, args) {
   lines.push('');
   lines.push('Finalizing: build manifest (artifact lock + content hash)...');
   try {
-    const bm = emitBuildManifest(chunkedDir, { toolVersion: readToolVersion() });
+    const bm = emitBuildManifest(chunkedDir, {
+      toolVersion: readToolVersion(),
+      // Version-free build identity (#24 axis 4). Optional caller flags
+      // --version-tag / --platform / --class; emitBuildManifest defaults
+      // versionTag to the contentHash and platform/class to null when omitted.
+      versionTag: typeof args.versionTag === 'string' ? args.versionTag : undefined,
+      platform: typeof args.platform === 'string' ? args.platform : undefined,
+      class: typeof args.class === 'string' ? args.class : undefined,
+    });
     buildContentHash = bm.contentHash;
     if (!bm.ok && !canReuse) {
       // Fresh build is missing a required artifact (above all engine.js) — the
