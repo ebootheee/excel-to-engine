@@ -43,11 +43,13 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 
+import { openSync, readSync, closeSync, statSync } from 'fs';
+
 import {
   emitTier0, loadTier0, streamReadCells, streamReadRows, rowToVector, deriveModelHash,
 } from '../../lib/lite-tier0.mjs';
 import { computeWaterfall, createAmericanWaterfall } from '../../lib/waterfall.mjs';
-import { loadManifest } from '../../lib/manifest.mjs';
+import { loadManifest, detectTier0Layout } from '../../lib/manifest.mjs';
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dir, '..', '..');
@@ -71,6 +73,64 @@ function relNear(a, b, relTol, msg) {
 const manifest = loadManifest(CHUNKED);
 const totalCell = manifest.carry.totalCell; // "GPP Promote!D180"
 const TIER_GP_CELLS = ['GPP Promote!D128', 'GPP Promote!D155', 'GPP Promote!D169', 'GPP Promote!D177'];
+
+// ── ADR-027 Phase 2: emitTier0 is now MANIFEST-DRIVEN — it reads
+// manifest.carry.tier0Layout (per-tier GP-CF cells + cashflow rows) rather than a
+// hardcoded fixture constant. Derive that layout HERE from a streamed slice of the
+// carry sheet via the real detector (detectTier0Layout) and ensure the on-disk
+// manifest carries it, so the rest of the suite exercises the manifest-derived
+// path end-to-end. We assert the detector reproduced EXACTLY the known GPP-Promote
+// layout (the original fixture constants), proving the generalization is faithful.
+function streamSheetSlice(gtPath, sheet, cols) {
+  // Pull every `${sheet}!${col}${row}` scalar for the requested columns in ONE
+  // streaming pass (labels in A/B + the value column), keyed for detectTier0Layout.
+  const wantCols = new Set(cols);
+  const prefix = sheet + '!';
+  const re = /"((?:[^"\\]|\\.)*)":(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?|"(?:[^"\\]|\\.)*"|true|false|null)/g;
+  const cellRe = new RegExp('^' + sheet.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '!([A-Z]+)(\\d+)$');
+  const fd = openSync(gtPath, 'r');
+  const buf = Buffer.alloc(1024 * 1024);
+  const out = {};
+  let tail = '', pos = 0;
+  try {
+    while (true) {
+      const n = readSync(fd, buf, 0, buf.length, pos);
+      if (n <= 0) break; pos += n;
+      const hay = tail + buf.toString('utf8', 0, n);
+      re.lastIndex = 0; let m, lastEnd = 0;
+      while ((m = re.exec(hay)) !== null) {
+        lastEnd = re.lastIndex;
+        const key = m[1];
+        if (!key.startsWith(prefix)) continue;
+        const cm = cellRe.exec(key);
+        if (cm && wantCols.has(cm[1])) out[key] = JSON.parse(m[2]);
+      }
+      tail = hay.slice(Math.max(lastEnd, hay.length - 512));
+    }
+  } finally { closeSync(fd); }
+  return out;
+}
+
+const valueCol = totalCell.split('!')[1].match(/^([A-Z]+)/)[1]; // 'D'
+const carrySheet = totalCell.split('!')[0];                     // 'GPP Promote'
+const sheetSlice = streamSheetSlice(GT, carrySheet, ['A', 'B', valueCol]);
+const derivedLayout = detectTier0Layout(sheetSlice, manifest.carry);
+assert(derivedLayout != null, 'detectTier0Layout derives a layout for the GPP-Promote carry from ground truth');
+if (derivedLayout) {
+  assert(JSON.stringify(derivedLayout.tierGpCfCells) === JSON.stringify(TIER_GP_CELLS),
+    `detector reproduces the known per-tier GP cells exactly (got ${JSON.stringify(derivedLayout.tierGpCfCells)})`);
+  assert(derivedLayout.cfRow === 117 && derivedLayout.cumEquityRow === 118,
+    `detector reproduces the known cashflow rows 117/118 (got ${derivedLayout.cfRow}/${derivedLayout.cumEquityRow})`);
+  assert(derivedLayout.reconRelErr <= 1e-6, `detector layout reconciles to the carry total (relErr ${derivedLayout.reconRelErr})`);
+  // Ensure the on-disk manifest carries the derived layout so emitTier0 (which
+  // reloads from disk) finds it. The a2-v3 manifest is a local-only artifact.
+  if (!manifest.carry.tier0Layout) {
+    const onDisk = JSON.parse(readFileSync(MANIFEST, 'utf-8'));
+    onDisk.carry.tier0Layout = derivedLayout;
+    writeFileSync(MANIFEST, JSON.stringify(onDisk, null, 2));
+    manifest.carry.tier0Layout = derivedLayout;
+  }
+}
 
 // ── (1) STREAMING-READ UNIT CHECK ────────────────────────────────────────────
 console.log('Testing: streamReadCells — tier GP cells sum == carry.totalCell (model invariant)');
@@ -180,8 +240,19 @@ let factor, life;
   // Dropped-terms disclosure: the manifest catch-up RATE (0.5) is not modeled.
   assert(Array.isArray(params.provenance.droppedTerms) && params.provenance.droppedTerms.some((d) => /catch-?up rate/i.test(d)), 'provenance.droppedTerms discloses the dropped 0.5 catch-up rate');
 
-  // Single-fixture scope disclosure.
-  assert(typeof params.provenance.scope === 'string' && /single-fixture/i.test(params.provenance.scope), 'provenance.scope discloses single-fixture over-fit');
+  // Scope disclosure: ADR-027 Phase 2 — manifest-DERIVED layout (no longer a
+  // hardcoded single fixture), reconciled to the carry total, with the honest
+  // "annual approximation" structural caveat retained.
+  assert(typeof params.provenance.scope === 'string' && /manifest-derived/i.test(params.provenance.scope),
+    'provenance.scope discloses the manifest-derived layout (no longer hardcoded single-fixture)');
+  assert(/reconciled to|relErr/i.test(params.provenance.scope),
+    'provenance.scope discloses the sum-reconciliation that gated the layout');
+  assert(/approximation|honest only near/i.test(params.provenance.scope),
+    'provenance.scope retains the honest annual-approximation structural caveat');
+  // The shipped artifact also records the resolved layout it targeted.
+  assert(params.provenance.tier0Layout && Array.isArray(params.provenance.tier0Layout.tierGpCfCells)
+    && params.provenance.tier0Layout.tierGpCfCells.length === TIER_GP_CELLS.length,
+    'provenance.tier0Layout records the manifest-derived per-tier GP cells');
 
   // params artifact shape + honest disclosure baked in
   assert(params.$artifact === 'lite-tier0-v1', 'artifact tag stamped');
