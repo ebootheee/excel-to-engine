@@ -553,12 +553,16 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "YEAR" => format!("/* YEAR */ new Date(({} - 25569) * 86400000).getFullYear()", arg(0)),
         "MONTH" => format!("/* MONTH */ (new Date(({} - 25569) * 86400000).getMonth() + 1)", arg(0)),
         "DAY" => format!("/* DAY */ new Date(({} - 25569) * 86400000).getDate()", arg(0)),
-        "DATE" => format!("/* DATE */ ({} * 365.25 + {} * 30.44 + {} - 25569)", arg(0), arg(1), arg(2)),
+        // DATE/EDATE/EOMONTH return INTEGER Excel day-serials via calendar-exact
+        // helpers. The old `*365.25`/`*30.44` float approximation drifted up to
+        // ~2.88 days/year, breaking exact-equality SUMIFS/MINIFS date-key lookups
+        // (issue #47). EDATE clamps short months; EOMONTH returns the last day.
+        "DATE" => format!("/* DATE */ _excelSerialFromYMD({}, {}, {})", arg(0), arg(1), arg(2)),
         "DAYS" => format!("({} - {})", arg(0), arg(1)),
         "DATEDIF" => format!("/* DATEDIF */ ({} - {})", arg(1), arg(0)),
         "YEARFRAC" => format!("/* YEARFRAC */ (({} - {}) / 365.25)", arg(1), arg(0)),
-        "EDATE" => format!("((+({}) || 0) + (+({}) || 0) * 30.44)", arg(0), arg(1)),
-        "EOMONTH" => format!("((+({}) || 0) + (+({}) || 0) * 30.44)", arg(0), arg(1)),
+        "EDATE" => format!("_edate({}, {})", arg(0), arg(1)),
+        "EOMONTH" => format!("_eomonth({}, {})", arg(0), arg(1)),
         "NETWORKDAYS" => format!("/* NETWORKDAYS */ ({} - {})", arg(1), arg(0)),
 
         // ----------------------------------------------------------------
@@ -696,5 +700,43 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
             let a = args_joined(", ");
             format!("/* {} */ _fn('{}', {})", other, other, if a.is_empty() { "[]".to_string() } else { format!("[{}]", a) })
         }
+    }
+}
+
+#[cfg(test)]
+mod date_lowering_tests {
+    use super::*;
+    use crate::formula_ast::parse_formula;
+
+    fn lower(formula: &str) -> String {
+        let ast = parse_formula(formula).expect("formula should parse");
+        transpile(&ast, &TranspileConfig::default())
+    }
+
+    // Issue #47: DATE/EDATE/EOMONTH must lower to the integer-serial calendar
+    // helpers, NOT the old float-month `*30.44` / `*365.25` approximation that
+    // drifted off integer Excel serials and broke exact-equality SUMIFS lookups.
+
+    #[test]
+    fn date_lowers_to_serial_helper() {
+        let js = lower("DATE(2024,1,1)");
+        assert!(js.contains("_excelSerialFromYMD("), "DATE should call helper, got: {js}");
+        // Negative control: must NOT use the old float approximation.
+        assert!(!js.contains("30.44"), "DATE must not use *30.44, got: {js}");
+        assert!(!js.contains("365.25"), "DATE must not use *365.25, got: {js}");
+    }
+
+    #[test]
+    fn edate_lowers_to_helper() {
+        let js = lower("EDATE(A1,1)");
+        assert!(js.contains("_edate("), "EDATE should call _edate, got: {js}");
+        assert!(!js.contains("30.44"), "EDATE must not use *30.44, got: {js}");
+    }
+
+    #[test]
+    fn eomonth_lowers_to_helper() {
+        let js = lower("EOMONTH(A1,0)");
+        assert!(js.contains("_eomonth("), "EOMONTH should call _eomonth, got: {js}");
+        assert!(!js.contains("30.44"), "EOMONTH must not use *30.44, got: {js}");
     }
 }

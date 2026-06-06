@@ -291,7 +291,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     writeln!(w)?;
 
     // Runtime helpers for Excel functions — import from shared module
-    writeln!(w, "{}", "import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter } from './_helpers.mjs';")?;
+    writeln!(w, "{}", "import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _edate, _eomonth } from './_helpers.mjs';")?;
     writeln!(w)?;
 
     // compute(ctx) function
@@ -1536,6 +1536,52 @@ function _filter(array, include, ifEmpty) {
   const inc = Array.isArray(include) ? include.flat() : arr.map(() => include);
   const out = arr.filter((_, i) => { const f = inc[i]; return f === true || (typeof f === 'number' && f !== 0); });
   return out.length ? out : (ifEmpty !== undefined ? ifEmpty : 0);
+}
+
+// ── Date helpers (integer Excel day-serials; issue #47) ──
+// Excel stores dates as integer day-serials (days since the 1899-12-30 epoch).
+// EDATE/EOMONTH recurrences must stay on exact integers or downstream
+// exact-equality SUMIFS/MINIFS date-key lookups miss (drift → 0 → x/0 → NaN).
+// We round-trip through UTC midnight so DST never shifts the serial.
+function _excelSerialFromYMD(y, m, d) {
+  y = Math.trunc(+y); m = Math.trunc(+m); d = Math.trunc(+d);
+  // Excel DATE normalises out-of-range month/day by rolling over (Date.UTC does too).
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+}
+
+function _serialToYMD(serial) {
+  // Inverse of _excelSerialFromYMD for normal modern dates (serial >= 61, i.e.
+  // 1900-03-01 onward, where Excel's leap-year-1900 bug does not apply).
+  const ms = Math.round(+serial) * 86400000 + Date.UTC(1899, 11, 30);
+  const dt = new Date(ms);
+  return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
+}
+
+function _daysInMonth(y, m) {
+  // m is 1-based; day 0 of the next month is the last day of month m.
+  return new Date(Date.UTC(y, m, 0)).getUTCDate();
+}
+
+function _edate(serial, months) {
+  serial = Math.round(+serial || 0); months = Math.trunc(+months || 0);
+  const { y, m, d } = _serialToYMD(serial);
+  // Add months, normalising into a valid 1..12 month + year.
+  const total = (y * 12 + (m - 1)) + months;
+  const ny = Math.floor(total / 12);
+  const nm = (total % 12) + 1; // 1-based
+  // Excel clamps the day to the last day of the target month (EDATE(Jan31,1)=Feb28/29).
+  const nd = Math.min(d, _daysInMonth(ny, nm));
+  return _excelSerialFromYMD(ny, nm, nd);
+}
+
+function _eomonth(serial, months) {
+  serial = Math.round(+serial || 0); months = Math.trunc(+months || 0);
+  const { y, m } = _serialToYMD(serial);
+  const total = (y * 12 + (m - 1)) + months;
+  const ny = Math.floor(total / 12);
+  const nm = (total % 12) + 1; // 1-based
+  // Last day of the target month.
+  return _excelSerialFromYMD(ny, nm, _daysInMonth(ny, nm));
 }
 
 function _colNum(col) {
