@@ -405,9 +405,18 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "NOT" => format!("(!({}))", arg(0)),
         "TRUE" => "true".to_string(),
         "FALSE" => "false".to_string(),
-        "IFERROR" => format!("((() => {{ try {{ const _v = ({}); return (isNaN(_v) && typeof _v === 'number') ? ({}) : _v; }} catch(e) {{ return {}; }} }})())", arg(0), arg(1), arg(1)),
-        "ISERROR" | "ISERR" => format!("(isNaN({}) || ({}) === null)", arg(0), arg(0)),
-        "ISNUMBER" => format!("(typeof ({}) === 'number' && !isNaN({}))", arg(0), arg(0)),
+        // Excel errors include #DIV/0! — which surfaces in JS as ±Infinity (x/0,
+        // x!=0), NOT NaN. These predicates must treat any NON-FINITE number (NaN
+        // AND ±Infinity) as an error, else IFERROR(x/0, fallback) leaks Infinity
+        // and poisons the circular-cluster convergence (the lock-grade T-076
+        // non-convergence root cause: ~194k IFERROR cells on Outpost A-1). The
+        // `0/0`->NaN case was already caught; `x/0`->Infinity was the gap.
+        "IFERROR" => format!("((() => {{ try {{ const _v = ({}); return (typeof _v === 'number' && !Number.isFinite(_v)) ? ({}) : _v; }} catch(e) {{ return {}; }} }})())", arg(0), arg(1), arg(1)),
+        // `IF(ISERROR(x/0),…)` is the pre-IFERROR idiom and leaked the same Infinity.
+        // `!isFinite` (coercing, like the old `isNaN`) catches NaN AND ±Infinity.
+        "ISERROR" | "ISERR" => format!("(!isFinite({}) || ({}) === null)", arg(0), arg(0)),
+        // #DIV/0! (Infinity) is not a number in Excel — `isFinite` excludes NaN/±Inf.
+        "ISNUMBER" => format!("(typeof ({}) === 'number' && isFinite({}))", arg(0), arg(0)),
         "ISBLANK" => format!("(({}) == null || ({}) === ``)", arg(0), arg(0)),
         "ISTEXT" => format!("(typeof ({}) === 'string')", arg(0)),
         "ISLOGICAL" => format!("(typeof ({}) === 'boolean')", arg(0)),
@@ -738,5 +747,46 @@ mod date_lowering_tests {
         let js = lower("EOMONTH(A1,0)");
         assert!(js.contains("_eomonth("), "EOMONTH should call _eomonth, got: {js}");
         assert!(!js.contains("30.44"), "EOMONTH must not use *30.44, got: {js}");
+    }
+}
+
+#[cfg(test)]
+mod error_guard_lowering_tests {
+    use super::*;
+    use crate::formula_ast::parse_formula;
+
+    fn lower(formula: &str) -> String {
+        let ast = parse_formula(formula).expect("formula should parse");
+        transpile(&ast, &TranspileConfig::default())
+    }
+
+    // Excel #DIV/0! surfaces as ±Infinity in JS (x/0, x!=0), NOT NaN. IFERROR /
+    // ISERROR / ISNUMBER must treat any non-finite NUMBER as an error, else
+    // IFERROR(x/0, fallback) leaks Infinity and poisons circular-cluster
+    // convergence (lock-grade T-076 root cause).
+
+    #[test]
+    fn iferror_guards_infinity_not_just_nan() {
+        let js = lower("IFERROR(A1/A2,0)");
+        assert!(js.contains("!Number.isFinite(_v)"),
+            "IFERROR must guard non-finite (NaN AND Infinity), got: {js}");
+        assert!(!js.contains("isNaN(_v) &&"),
+            "IFERROR must not use the NaN-only guard that leaks Infinity, got: {js}");
+    }
+
+    #[test]
+    fn iserror_is_true_for_div_by_zero() {
+        let js = lower("ISERROR(A1)");
+        assert!(js.contains("!isFinite("),
+            "ISERROR must be true for ±Infinity (#DIV/0!), got: {js}");
+    }
+
+    #[test]
+    fn isnumber_is_false_for_div_by_zero() {
+        let js = lower("ISNUMBER(A1)");
+        assert!(js.contains("isFinite("),
+            "ISNUMBER must exclude ±Infinity/NaN via isFinite, got: {js}");
+        assert!(!js.contains("!isNaN("),
+            "ISNUMBER must not use the NaN-only test that admits Infinity, got: {js}");
     }
 }

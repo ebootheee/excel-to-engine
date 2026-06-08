@@ -1,5 +1,28 @@
 # excel-to-engine — Changelog
 
+## 2026-06-08 — Transpiler error-guards: #DIV/0! (±Infinity) treated as an Excel error [engine defect]
+
+Found by running the real Outpost A-1 17-sheet returns cluster end-to-end. Excel's `#DIV/0!`
+surfaces in JS as **±Infinity** (`x/0`, x≠0), **not** NaN, but the transpiler's error guards tested
+only `isNaN`:
+
+- **`IFERROR(expr, fb)`** (`transpiler.rs`) returned **Infinity** instead of `fb` for `x/0` — on A-1
+  alone this is **194,175** IFERROR cells. The leaked Infinity then propagates through downstream sums
+  and poisons the circular-cluster convergence (a major root cause of the lock-grade non-convergence,
+  T-076): in an A/B recompute the first non-finite cell moved from `Owned Asset PP&E!N22`
+  (`=IFERROR(N23/N21,0)`, N21 a date-keyed SUMIFS that iterates to 0) past N22 once fixed.
+- **`ISERROR`/`ISNUMBER`** had the same gap (`IF(ISERROR(x/0),…)` is the pre-IFERROR idiom and leaked
+  the same Infinity).
+
+Fix: the numeric guards now treat any **non-finite number** (NaN **and** ±Infinity) as the error case
+(`!Number.isFinite` / `!isFinite` / `isFinite`), typeof-guarded so strings/finite/NaN behaviour is
+unchanged. New unit tests (`transpiler::error_guard_lowering_tests`) and an end-to-end regression
+(`pipelines/rust/tests/test-iferror-infinity.mjs`, wired into `npm test`). cargo 29/29, smoke 126/126.
+
+NOTE: this is necessary but **not sufficient** for a converged A-1 base case — bare (non-IFERROR)
+divisions still leak Infinity, where Excel propagates `#DIV/0!`. Tracked separately (lock-grade
+convergence).
+
 ## 2026-06-06 — Outstanding-work triage: 6 PRs merged (engine defects + contract + lite follow-ups)
 
 A verified triage (adversarial workflow — every open issue/ADR/follow-up re-checked against `main` +
