@@ -1,6 +1,17 @@
 # excel-to-engine — Roadmap
 
-## Now — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
+## Now — lock-grade convergence (2026-06-08): machinery fixed, two roots remain
+
+The lock-grade cluster non-convergence (T-076) is **multi-root** (div-by-zero leaking ±Inf/NaN). The
+in-repo-gateable roots are merged (proven on synthetic `.xlsx` → real rust-parser → `eng.run()`, with
+negative controls; design panel + adversarial verify): **#55** IFERROR-treats-Infinity, **#56**
+per-sheet-eval `_sheetConvergence`, **#57 Commit A** transient-tolerant cluster convergence (PR #58),
+**#57 lockstep** per-sheet-eval NaN-fill (PR #59). **Remaining:** **#60** un-`IFERROR`'d `SUM`/`AVERAGE`
+silently drop a `0/0` NaN (confident wrong number on acyclic cells) — fix is `_div` + NaN-propagating
+reducers but **gated on a real-A-1 before/after re-measure**; **#61** correctness-safe perf/maintenance
+follow-ups; and a **real-A-1 convergence confirmation** (the slow path). See PLAN.md + CHANGELOG.
+
+## Earlier — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
 
 1. **Re-gate the real-model scoped cone (ADR-026 Tier 2) — re-gate was VACUOUS; label STAYS.** The
    Wave-2 A-1 cone gate failed *only* because of the `COL$ROW` `* `COL`` transpiler NaN bug, fixed on

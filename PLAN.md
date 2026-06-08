@@ -1,5 +1,32 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-08 — Lock-grade convergence: multi-root div-by-zero, 4 PRs merged (design panel + adversarial verify)
+
+The lock-grade cluster non-convergence (T-076) was confirmed **multi-root** (div-by-zero leaking
+±Inf/NaN) and the in-repo-gateable roots were fixed and merged, each proven on a fast **synthetic
+`.xlsx` → real rust-parser → `eng.run()`** loop (not the 34–70 min A-1 rebuild) with negative-control
+discipline. Approached via a Workflow design panel (4 proposals → 3 judges → synthesis) + an
+independent adversarial verification of the merged fix.
+
+- **#55 (PR `2b273ba`)** — `IFERROR`/`ISERROR`/`ISNUMBER` treat `#DIV/0!` (±Infinity, not just NaN) as an
+  Excel error (~194k IFERROR cells on A-1). `test-iferror-infinity.mjs`.
+- **#56 (PR `0ea9759`)** — `per-sheet-eval` initializes `_sheetConvergence` (PR #52 follow-up crash on
+  intra-sheet-cycle sheets). `test-per-sheet-eval-intracycle.mjs`.
+- **#57 Commit A (PR #58 `6bb2193`)** — the cross-sheet cluster loop is **transient-tolerant**: a
+  divide-by-cold-0 that warms across iterations no longer aborts the cluster (it judges non-finiteness
+  only at the fixed point); a structural `#DIV/0!` stays `converged:false` + NaN-fill (honest). Strictly
+  safe for previously-converging models. `test-cluster-transient-div0.mjs` (negative-controlled).
+- **#57 lockstep (PR #59 `73ee5a8`)** — `per-sheet-eval` now NaN-fills a non-converged cluster +
+  engine-faithful warming delta (it had been over-reporting warm-seed accuracy on clusters the engine
+  NaN-fills). `test-per-sheet-eval-lockstep.mjs`.
+
+**REMAINING (cannot be honestly gated in-repo):** **#60** — un-`IFERROR`'d `SUM`/`AVERAGE` silently DROP a
+`0/0` NaN (confident wrong number on acyclic cells); fix = `_div` canonical-NaN + NaN-propagating
+reducers, **gated on a real-A-1 before/after re-measure** (moves base-case numbers) + a `_div` call-site
+audit across both emitters. **#61** — perf/maintenance follow-ups (per-sheet-eval divergence detector;
+engine divergent+structural churn; dead pre-#57 loop), all correctness-safe. **Real-A-1 convergence
+confirmation** still pending (the slow path). `#57` stays open until A-1 confirms a converged base case.
+
 ## Status: 2026-06-06 — Outstanding-work triage: 6 PRs merged (master-reviewed fan-out)
 
 A verified triage reprioritized all outstanding work (open issues + ADRs + lite follow-ups), then
