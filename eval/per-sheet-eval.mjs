@@ -553,8 +553,18 @@ try {
       // break the loop the way the old "_ci>=2" veto did (which quit before the
       // denominator warmed). Exclude it from the delta and keep iterating; judge
       // non-finiteness only at the fixed point.
-      if (!Number.isFinite(v)) { anyNonFinite = true; _nonFinite = k; continue; }
-      const prev = prevSnapshot[k] || 0;
+      // Store the non-finite value as the baseline (mirrors the engine storing _before[i]
+      // = _cur): when this cell WARMS to a finite number its delta becomes
+      // |finite - nonfinite| = non-finite, forcing a non-converging pass — so this harness
+      // accepts a fixed point on exactly the same pass the engine does (true lockstep, not
+      // just loop shape). NOTE: comments here must avoid backticks (this is inside a
+      // template literal).
+      if (!Number.isFinite(v)) { anyNonFinite = true; _nonFinite = k; prevSnapshot[k] = v; continue; }
+      const prev = prevSnapshot[k];
+      // First observation (unset) forces a non-converging delta, like the engine's
+      // typeof-not-number guard — NOT the old prevSnapshot||0, which let a small first
+      // value look converged and diverged from the engine's pass count.
+      if (typeof prev !== 'number') { maxDelta = Infinity; prevSnapshot[k] = v; continue; }
       const d = Math.abs(v - prev);
       if (d > maxDelta) maxDelta = d;
       prevSnapshot[k] = v;
@@ -571,6 +581,16 @@ try {
     if (_ci > 0 && maxDelta < TOL) { _conv = true; _nonFinite = null; break; }
   }
 } catch (e) { _err = e.message; }
+
+// Honesty contract (mirrors chunked_emitter.rs NaN-fill on !_conv): a cluster that did
+// NOT converge is not a fixed point — NaN-fill the cells it wrote so compareOne and the
+// named-output harvest below report NaN (detectably unusable) instead of leaving the
+// warm-seeded GT values, which would over-report accuracy on a cluster the SHIPPED engine
+// (eng.run) NaN-fills. Without this the fast harness and the engine disagree on a
+// non-converged returns/MIP cluster (the lite/cone accuracy numbers read from here).
+if (!_conv) {
+  for (const k of ctx._written) { if (typeof ctx.values[k] === 'number') ctx.values[k] = NaN; }
+}
 
 const compareOne = (sheetGt) => {
   let correct = 0, total = 0; const failures = [];

@@ -1,5 +1,33 @@
 # excel-to-engine — Changelog
 
+## 2026-06-08 — per-sheet-eval true lockstep with the engine: NaN-fill on non-convergence + engine-faithful warming delta (#57 follow-up)
+
+An adversarial verification of #57 Commit A found my "lockstep" claim was overstated: the
+`eval/per-sheet-eval.mjs` cluster loop mirrored the transient-tolerant loop *body*, but the
+shipped engine (`chunked_emitter.rs`) also **NaN-fills every cluster cell when the cluster
+does not converge** (the PR #52 honesty contract), and the eval harness did **not**. So a
+non-converged returns/MIP cluster (a structural `#DIV/0!` or a divergent cycle) had its
+**warm-seeded** ground-truth values left in place and reported as ~100% "measured", while
+`eng.run()` returns NaN for those exact cells — the fast harness over-reported accuracy on a
+cluster the engine refuses to trust (and the lite/cone accuracy numbers are read from here).
+
+Fix: per-sheet-eval now (a) stores the non-finite value as the delta baseline (mirroring the
+engine's `_before[i]=_cur`, and dropping the old `prevSnapshot||0`) so a warming cell is judged
+on the **same pass** the engine judges it; and (b) **NaN-fills the cells a non-converged cluster
+wrote** before the comparison + named-output harvest, so a non-converged cluster reports NaN
+(detectably unusable) instead of warm-seed GT. New regression
+`pipelines/rust/tests/test-per-sheet-eval-lockstep.mjs`: a convergent cross-sheet cluster still
+reports 100%; a structural `#DIV/0!` cluster now reports `clustersConverged=0` and **low**
+accuracy (NaN-filled) — the negative control confirmed pre-fix it reported ~80% by keeping the
+warm seed. Wired into `npm test`.
+
+KNOWN REMAINING GAP (tracked separately, not a correctness issue): per-sheet-eval still lacks the
+engine's monotone-up/flat-hot **divergence detector**, so a divergent cluster churns to
+`MAX_ITER` before the NaN-fill (honest result, just slower); and the engine itself does not
+short-circuit a cluster that is *both* divergent *and* carries a persistent structural non-finite
+(it runs to `MAX_ITER` then NaN-fills — correct, but the Commit-A note's "does not churn to
+MAX_ITER" only holds for the structural-but-*settled* case).
+
 ## 2026-06-08 — Transient-tolerant cluster convergence: a divide-by-cold-0 no longer aborts the cluster (#57, Commit A)
 
 The cross-sheet cluster convergence loop (`chunked_emitter.rs`) aborted on the **first** non-finite
