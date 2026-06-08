@@ -538,23 +538,37 @@ for (const [addr, val] of Object.entries(allGt)) ctx.values[addr] = val;
 const clusterFns = [${members.map((_, i) => `compute_${i}`).join(', ')}];
 const MAX_ITER = 200, TOL = 1e-6;
 const prevSnapshot = {};
-let _iters = 0, _conv = false, _nonFinite = null, _err = null;
+let _iters = 0, _conv = false, _nonFinite = null, _err = null, _nonFiniteSettled = 0;
 try {
   for (let _ci = 0; _ci < MAX_ITER; _ci++) {
     _iters = _ci + 1;
     for (const fn of clusterFns) fn(ctx);
-    let maxDelta = 0, bad = null;
+    let maxDelta = 0, anyNonFinite = false;
     for (const k of ctx._written) {
       const v = ctx.values[k];
       if (typeof v !== 'number') continue;
-      if (!Number.isFinite(v)) { bad = k; break; }
+      // TRANSIENT-TOLERANT non-finite handling (#57) — mirrors chunked_emitter.rs so
+      // the fast eval harness and the shipped engine agree. A non-finite written cell
+      // (Inf/NaN from a divide-by-cold-0 denominator that has not warmed yet) does NOT
+      // break the loop the way the old "_ci>=2" veto did (which quit before the
+      // denominator warmed). Exclude it from the delta and keep iterating; judge
+      // non-finiteness only at the fixed point.
+      if (!Number.isFinite(v)) { anyNonFinite = true; _nonFinite = k; continue; }
       const prev = prevSnapshot[k] || 0;
       const d = Math.abs(v - prev);
       if (d > maxDelta) maxDelta = d;
       prevSnapshot[k] = v;
     }
-    if (bad !== null) { _nonFinite = bad; if (_ci >= 2) break; continue; }
-    if (_ci > 0 && maxDelta < TOL) { _conv = true; break; }
+    if (anyNonFinite) {
+      // Keep iterating so a TRANSIENT cold-0 can warm. If the FINITE surface has
+      // settled (maxDelta<TOL) while a cell stays non-finite across several passes,
+      // it is STRUCTURAL (#DIV/0! that never warms) -> stop, converged stays false.
+      if (_ci > 0 && maxDelta < TOL) { _nonFiniteSettled++; if (_nonFiniteSettled >= 4) break; }
+      else _nonFiniteSettled = 0;
+      continue;
+    }
+    _nonFiniteSettled = 0;
+    if (_ci > 0 && maxDelta < TOL) { _conv = true; _nonFinite = null; break; }
   }
 } catch (e) { _err = e.message; }
 

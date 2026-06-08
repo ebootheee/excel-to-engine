@@ -795,15 +795,20 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             if (_sampleKeys.length === 0) break; // converged stays false (honest)
           }
           let maxDelta = 0;
-          let _badCell = null;
+          let _anyNonFinite = false;
           for (let i = 0; i < _sampleKeys.length; i++) {
             const _cur = v[_sampleKeys[i]];
             if (typeof _cur !== 'number') continue;
-            // Lock-grade NaN-guard: a non-finite cell (Inf/NaN — typically a
-            // waterfall/coverage formula dividing by a cold-started 0) must never
-            // look like convergence. Record it; a persistent non-finite fixed point
-            // is reported converged=false rather than silently poisoning the result.
-            if (!Number.isFinite(_cur)) { _badCell = _sampleKeys[i]; break; }
+            // TRANSIENT-TOLERANT non-finite handling (#57). A non-finite cell (Inf/NaN
+            // — typically a coverage/amortization formula dividing by a denominator
+            // that is a COLD 0 at iteration 0 and WARMS to nonzero as the cluster
+            // solves) must NOT abort the loop the way the old streak>=3 break did
+            // (it quit before the denominator could warm, NaN-filling a cluster whose
+            // true fixed point is finite — the Debt!AR84 lock-grade symptom). Instead:
+            // exclude it from the delta, remember it, and KEEP iterating. Non-finiteness
+            // is judged ONLY at the fixed point (below) — a TRANSIENT cold-0 warms and
+            // converges; a STRUCTURAL #DIV/0! stays non-finite and stays converged=false.
+            if (!Number.isFinite(_cur)) { _anyNonFinite = true; _nonFiniteCell = _sampleKeys[i]; _before[i] = _cur; continue; }
             const _b = _before[i];
             // A cell going undefined -> number is a change, not convergence.
             // (Skipping these would let the first pass — every cluster cell newly
@@ -813,24 +818,24 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             maxDelta = Math.max(maxDelta, Math.abs(_cur - _b));
             _before[i] = _cur;
           }
-          if (_badCell !== null) {
-            _nonFiniteCell = _badCell;
-            _nonFiniteStreak++;
+          if (_anyNonFinite) {
+            // A non-finite pass can never be a fixed point. Force a non-converging
+            // delta and keep iterating so a TRANSIENT cold-0 denominator can warm.
+            // BUT if the FINITE surface has already settled (maxDelta<TOL) while a cell
+            // stays non-finite across several consecutive passes, it is STRUCTURAL
+            // (a genuine #DIV/0! that never warms) — stop and report converged=false
+            // (honest); the NaN-fill below then blanks the cluster (PR #52 contract).
             _lastDelta = Infinity;
             _clusterDeltaHist.length = 0;
-            // The mid-scan break above left _before STALE for every sample cell
-            // ordered after the non-finite one. Invalidate the whole baseline so the
-            // next finite pass recomputes it (-> maxDelta=Infinity once) instead of
-            // diffing across two iterations — otherwise a recovering oscillator could
-            // be compared to a same-phase stale value and falsely report converged.
-            // A non-finite pass can't converge anyway, so this costs <=1 iteration.
-            _before = new Array(_sampleKeys.length);
-            if (_nonFiniteStreak >= 3) break; // not recovering — stop churning to MAX_ITER
+            if (maxDelta < TOL) { _nonFiniteStreak++; if (_nonFiniteStreak >= 4) break; }
+            else _nonFiniteStreak = 0;
             continue;
           }
           _nonFiniteStreak = 0;
           _lastDelta = maxDelta;
-          if (maxDelta < TOL) { _conv = true; break; }
+          // Fixed point reached with the whole sampled surface finite: a transient
+          // cold-0 (if any) has fully warmed, so clear its residual telemetry.
+          if (maxDelta < TOL) { _conv = true; _nonFiniteCell = null; break; }
           // Real divergence detection (replaces the old constant-delta stale
           // break). Keep a short window of deltas; once we have a few, declare
           // divergence when the delta is NOT trending down: either strictly

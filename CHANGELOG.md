@@ -1,5 +1,36 @@
 # excel-to-engine — Changelog
 
+## 2026-06-08 — Transient-tolerant cluster convergence: a divide-by-cold-0 no longer aborts the cluster (#57, Commit A)
+
+The cross-sheet cluster convergence loop (`chunked_emitter.rs`) aborted on the **first** non-finite
+sampled cell (`_nonFiniteStreak >= 3` early break) and then NaN-filled the **whole** cluster. On the
+real Outpost A-1 returns cluster a coverage/amortization ratio divides by a denominator that is a
+**cold 0 at iteration 0** and **warms** to nonzero as the cluster solves; the bare division was
+transiently `Infinity`, poisoned a downstream `SUM` (`Debt!AR84`), and the loop quit at iteration 3 —
+**before** the denominator warmed — reporting `converged:false` and destroying the cluster's true
+(finite) fixed point (`totalCarry` / `class-*.equityBasis` measured 0%).
+
+Fix: the loop is now **transient-tolerant** — a non-finite cell is excluded from the delta and the
+loop keeps iterating; non-finiteness is judged **only at the fixed point**. A TRANSIENT cold-0 warms
+and the cluster converges to the correct numbers; a STRUCTURAL `#DIV/0!` that never warms stays
+non-finite and stays `converged:false` (honest — the existing NaN-fill contract from PR #52 is
+preserved, never a silent wrong number). A structural-but-settled cell short-circuits after a few
+passes so a hopeless case does not churn to `MAX_ITER`. Mirrored in `eval/per-sheet-eval.mjs` so the
+fast eval harness and the shipped engine agree (lockstep). Division emission is **unchanged** (bare).
+
+New regression `pipelines/rust/tests/test-cluster-transient-div0.mjs` builds cross-sheet clusters
+through the real rust-parser and drives `eng.run()` (cold-start — the surface that reproduces the
+transient; per-sheet-eval warm-seeds full GT on a tiny model and would not): MODEL A transient
+converges (pre-fix `converged:false` + NaN — the negative control verified red on the pre-fix
+emitter), MODEL C structural `#DIV/0!` stays `converged:false` with NaN (not a fabricated value),
+MODEL D `IFERROR`-caught converges, MODEL E divergent cycle still NaN-fills. Wired into `npm test`.
+
+NOTE: this is the **convergence** half of #57 (Commit A). The separate latent honesty hole — the
+`SUM` reducer `(+b||0)` propagates `Infinity` but **silently drops** a `0/0` `NaN` (turns a real
+`#DIV/0!` into a confident wrong number) — is fixed in a follow-up (`_div` canonical NaN sentinel +
+NaN-propagating reducers) that is gated behind a real-A-1 before/after re-measure (it can move
+base-case numbers) and is therefore tracked separately, not in this change.
+
 ## 2026-06-08 — per-sheet-eval: initialize `_sheetConvergence` in the child ctx [eval regression]
 
 PR #52 (circular-engine honesty) made emitted sheet modules with an intra-sheet cycle write
