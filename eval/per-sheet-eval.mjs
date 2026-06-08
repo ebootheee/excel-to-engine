@@ -363,6 +363,7 @@ const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=
 const ctx = {
   values: {},
   _written: new Set(),  // cells written by compute() — the cluster convergence diffs only these
+  _sheetConvergence: {},  // intra-sheet cycle telemetry sink (PR #52): an emitted sheet with an internal convergence loop writes ctx._sheetConvergence[SHEET_NAME]; without this it throws "Cannot set properties of undefined"
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
   set(addr, value) { this.values[addr] = value; this._written.add(addr); },
   _parseRange(rangeStr) {
@@ -504,6 +505,7 @@ const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=
 const ctx = {
   values: {},
   _written: new Set(),
+  _sheetConvergence: {},  // intra-sheet cycle telemetry sink (PR #52): an emitted sheet with an internal convergence loop writes ctx._sheetConvergence[SHEET_NAME]; without this it throws "Cannot set properties of undefined"
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
   set(addr, value) { this.values[addr] = value; this._written.add(addr); },
   _parseRange(rangeStr) {

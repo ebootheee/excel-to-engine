@@ -1,5 +1,19 @@
 # excel-to-engine — Changelog
 
+## 2026-06-08 — per-sheet-eval: initialize `_sheetConvergence` in the child ctx [eval regression]
+
+PR #52 (circular-engine honesty) made emitted sheet modules with an intra-sheet cycle write
+`ctx._sheetConvergence[SHEET_NAME]` from inside `compute()`. `eval/per-sheet-eval.mjs` builds its own
+hand-rolled ctx in the child eval script and did not initialize `_sheetConvergence`, so the moment such
+a sheet ran it threw `Cannot set properties of undefined (setting '<sheet>')`. This silently broke the
+cluster recompute on any real model with an intra-sheet cycle (e.g. Outpost A-1's GPP Promote — the
+cluster ran ~10 min then crashed). `npm test` missed it because the only per-sheet-eval cluster fixture
+is **cross-sheet** (its sheets have no internal loop).
+
+Fix: add `_sheetConvergence: {}` to both child ctx templates (standalone + cluster). New parser-backed
+regression `pipelines/rust/tests/test-per-sheet-eval-intracycle.mjs` builds a single-sheet convergent
+mutual cycle and asserts per-sheet-eval evaluates it without error (wired into `npm test`).
+
 ## 2026-06-08 — Transpiler error-guards: #DIV/0! (±Infinity) treated as an Excel error [engine defect]
 
 Found by running the real Outpost A-1 17-sheet returns cluster end-to-end. Excel's `#DIV/0!`
