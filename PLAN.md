@@ -1,5 +1,28 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-09 — #60 + #61 merged; slow-model run reframes #57 (structural denominator + scale wall)
+
+All in-repo div-by-zero roots are now merged (`fdf1b1d`): **#60** `_div` canonical-NaN + NaN-propagating
+reducers (un-IFERROR'd `SUM`/`AVERAGE` no longer silently drop a `#DIV/0!` → confident wrong number);
+**#61** convergence churn-cap + per-sheet-eval divergence detector + dead-loop removal. Full `npm test`
+green with the Commit-B binary.
+
+Then the real A-1 was run end-to-end (build ~71 min + per-sheet-eval), which **reframed #57**:
+- **#60 real-A-1 gate PASSED.** A 5-pass warm-GT recompute, Commit-A vs Commit-B: **13/23 named outputs
+  byte-identical and matching GT** (IRRs, MOICs, terminalValue, fundSize, paidIn, ltv, …) → #60 corrupts
+  no correct output. **10/23 moved finite→NaN** (`equityBasis×5`, `totalCarry`, `distributed`, `exitDebt`,
+  `outstandingDebt`) — but the Commit-A values were **already wrong** (`totalCarry=0`, `equityBasis=0` vs
+  GT `4.16e7`/`1.32e7`): silently-dropped `#DIV/0!`s. #60 turns those **deceptive zeros into honest NaN**.
+- **#57's real blocker is STRUCTURAL, not convergence.** From a **warm GT seed** the returns-sheet
+  denominators (`Equity!AN122`, `GPP Promote!D88`) compute **0 where Excel has nonzero** → `#DIV/0!`. A
+  warm seed should reproduce GT in ~1 pass, so this is an **unfaithful transpiled formula** (likely a
+  #47 date-keyed `SUMIFS` miss or a #54 unsupported-fn stub), not a cold-start transient. NEXT: trace the
+  `#DIV/0!` feeding those two cells.
+- **Scale wall (#33/#46).** The 17-sheet cluster is **~11–13 min/PASS**; full convergence (~10 hrs) is
+  infeasible on a 31 GB machine — both per-sheet-eval runs timed out. Convergence can't be *measured*
+  here; the machinery (Commit A / #59 / #60 / #61) is synthetic-proven. `#57` stays open, re-scoped to the
+  structural denominator root + the scale work.
+
 ## Status: 2026-06-08 — Lock-grade convergence: multi-root div-by-zero, 4 PRs merged (design panel + adversarial verify)
 
 The lock-grade cluster non-convergence (T-076) was confirmed **multi-root** (div-by-zero leaking

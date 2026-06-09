@@ -1,15 +1,22 @@
 # excel-to-engine — Roadmap
 
-## Now — lock-grade convergence (2026-06-08): machinery fixed, two roots remain
+## Now — lock-grade A-1: div-by-zero machinery DONE; the real blocker is a structural denominator + scale (2026-06-09)
 
-The lock-grade cluster non-convergence (T-076) is **multi-root** (div-by-zero leaking ±Inf/NaN). The
-in-repo-gateable roots are merged (proven on synthetic `.xlsx` → real rust-parser → `eng.run()`, with
-negative controls; design panel + adversarial verify): **#55** IFERROR-treats-Infinity, **#56**
-per-sheet-eval `_sheetConvergence`, **#57 Commit A** transient-tolerant cluster convergence (PR #58),
-**#57 lockstep** per-sheet-eval NaN-fill (PR #59). **Remaining:** **#60** un-`IFERROR`'d `SUM`/`AVERAGE`
-silently drop a `0/0` NaN (confident wrong number on acyclic cells) — fix is `_div` + NaN-propagating
-reducers but **gated on a real-A-1 before/after re-measure**; **#61** correctness-safe perf/maintenance
-follow-ups; and a **real-A-1 convergence confirmation** (the slow path). See PLAN.md + CHANGELOG.
+The lock-grade cluster non-convergence (T-076) was **multi-root** (div-by-zero leaking ±Inf/NaN). **ALL
+in-repo div-by-zero roots are merged**: **#55** IFERROR-treats-Infinity, **#56** per-sheet-eval
+`_sheetConvergence`, **#57 Commit A** transient-tolerant convergence (PR #58), **#59** per-sheet-eval
+lockstep NaN-fill, **#60** `_div` + NaN-propagating reducers (`fdf1b1d`), **#61** churn-cap + divergence
+detector (`fdf1b1d`). All synthetic-proven with negative controls; full `npm test` green.
+
+**The real A-1 run (2026-06-09) reframed #57** — see PLAN.md + the #57 thread:
+- **#60 real-A-1 gate PASSED** — 13/23 named outputs unchanged & matching GT; the 10 it moved
+  (`totalCarry`, `equityBasis`, …) were already-wrong silently-dropped `#DIV/0!` zeros, now honest NaN.
+- **The blocker is STRUCTURAL, not convergence:** from a warm GT seed the returns denominators
+  (`Equity!AN122`, `GPP Promote!D88`) compute `0` where Excel has nonzero → `#DIV/0!`. Likely a #47
+  date-keyed `SUMIFS` miss or a #54 unsupported-fn stub. **Next: trace the `#DIV/0!` feeding those cells.**
+- **Scale wall (#33/#46):** the 17-sheet cluster is ~11–13 min/PASS → full convergence (~10 hrs) is
+  infeasible on a 31 GB box (both per-sheet-eval runs timed out). The convergence machinery is correct
+  (synthetic-proven); making the real recompute feasible is the separate perf track.
 
 ## Earlier — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
 
