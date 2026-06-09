@@ -306,47 +306,20 @@ async function main() {
   async function evalOneSheet(task) {
     const { sheetName, sanitized, modulePath, sheetGtPath, gtTmpPath: gtFullPath, gtCount } = task;
 
-    // Determine if this sheet is in a circular cluster
-    const cluster = sheetClusters.find(c => c.includes(sheetName));
-    const clusterModules = cluster ? cluster.map(s => {
-      const san = s.replace(/[^a-zA-Z0-9]/g, '_');
-      const modPath = join(sheetsDir, `${san}.mjs`);
-      return { name: s, sanitized: san, path: modPath };
-    }).filter(m => existsSync(m.path)) : [];
+    // evalOneSheet handles STANDALONE (non-cluster) sheets only — cross-sheet circular
+    // clusters are routed to evalOneCluster (a sheet reaches here only when it is NOT in
+    // clusterSheetSet; see the task dispatch above). The pre-#57 cluster convergence loop
+    // that used to live here (non-finite-poisoning, no NaN-fill / no divergence detector)
+    // was DEAD and is removed (#61) so a future routing change can't silently reactivate
+    // the old, dishonest convergence contract. All cluster recompute now goes through the
+    // single transient-tolerant + NaN-fill loop in evalOneCluster.
 
-    // Build a child process script that loads the sheet module(s) and compares.
-    // Paths flow into JS source — interpolate them as JSON-quoted strings so a
-    // path containing `'` or `\` can't break out and inject code.
-    const clusterImports = clusterModules.length > 0
-      ? clusterModules.map(m => `import { compute as compute_${m.sanitized} } from ${JSON.stringify(pathToFileURL(m.path).href)};`).join('\n')
-      : '';
-    const clusterComputeBlock = clusterModules.length > 0
-      ? `
-  // Convergence loop for circular cluster (${clusterModules.length} sheets)
-  const clusterFns = [${clusterModules.map(m => `compute_${m.sanitized}`).join(', ')}];
-  const MAX_ITER = 200;
-  const TOL = 1e-6;
-  const prevSnapshot = {};
-  for (let _ci = 0; _ci < MAX_ITER; _ci++) {
-    for (const fn of clusterFns) fn(ctx);
-    // Convergence is about the cluster's *computed* cells stabilizing, so diff
-    // only the cells the cluster wrote (ctx._written) — not every seeded
-    // ground-truth cell. On a model with millions of seeded cells the old
-    // O(all-cells)-per-iteration diff was a dominant cost (and × 200 iters).
-    let maxDelta = 0;
-    for (const k of ctx._written) {
-      const v = ctx.values[k];
-      if (typeof v !== 'number') continue;
-      const prev = prevSnapshot[k] || 0;
-      const d = Math.abs(v - prev);
-      if (d > maxDelta) maxDelta = d;
-      prevSnapshot[k] = v;
-    }
-    if (_ci > 0 && maxDelta < TOL) break;
-  }
-`
-      : `
-  // Single sheet (not in circular cluster)
+    // Build a child process script that loads the sheet module and compares. Paths flow
+    // into JS source — interpolate them as JSON-quoted strings so a path containing a
+    // quote or backslash can't break out and inject code.
+    const clusterImports = '';
+    const clusterComputeBlock = `
+  // Single sheet (standalone; circular clusters are handled by evalOneCluster).
   compute(ctx);
 `;
 
@@ -538,6 +511,7 @@ for (const [addr, val] of Object.entries(allGt)) ctx.values[addr] = val;
 const clusterFns = [${members.map((_, i) => `compute_${i}`).join(', ')}];
 const MAX_ITER = 200, TOL = 1e-6;
 const prevSnapshot = {};
+const _deltaHist = [];
 let _iters = 0, _conv = false, _nonFinite = null, _err = null, _nonFiniteSettled = 0;
 try {
   for (let _ci = 0; _ci < MAX_ITER; _ci++) {
@@ -570,15 +544,30 @@ try {
       prevSnapshot[k] = v;
     }
     if (anyNonFinite) {
-      // Keep iterating so a TRANSIENT cold-0 can warm. If the FINITE surface has
-      // settled (maxDelta<TOL) while a cell stays non-finite across several passes,
-      // it is STRUCTURAL (#DIV/0! that never warms) -> stop, converged stays false.
-      if (_ci > 0 && maxDelta < TOL) { _nonFiniteSettled++; if (_nonFiniteSettled >= 4) break; }
-      else _nonFiniteSettled = 0;
+      // Keep iterating so a TRANSIENT cold-0 can warm. Bound the churn (#61): stop fast
+      // when the FINITE surface has SETTLED while a cell stays non-finite (STRUCTURAL
+      // #DIV/0! whose finite inputs settled, so it will never warm); a generous absolute
+      // cap also covers a divergent+persistent-non-finite cluster (whose finite surface
+      // never settles, so the settled test never fires). Mirrors chunked_emitter.rs.
+      _deltaHist.length = 0;
+      _nonFiniteSettled++;
+      if ((_ci > 0 && maxDelta < TOL && _nonFiniteSettled >= 4) || _nonFiniteSettled >= 50) break;
       continue;
     }
     _nonFiniteSettled = 0;
     if (_ci > 0 && maxDelta < TOL) { _conv = true; _nonFinite = null; break; }
+    // Divergence detection (#61 — mirrors chunked_emitter.rs): a divergent (monotone-up)
+    // or stuck-non-zero (flat-hot) cluster breaks early instead of churning to MAX_ITER
+    // and then NaN-filling. A genuine contraction shrinks the delta, so it never matches.
+    _deltaHist.push(maxDelta);
+    if (_deltaHist.length > 5) _deltaHist.shift();
+    if (_deltaHist.length >= 4) {
+      const _w = _deltaHist;
+      const _mn = Math.min(..._w), _mx = Math.max(..._w);
+      const _monoUp = _w.every((d, i) => i === 0 || d >= _w[i - 1] - TOL) && (_w[_w.length - 1] > _w[0] + TOL);
+      const _flatHot = (_mx - _mn) < TOL && _mn > TOL * 100;
+      if (_monoUp || _flatHot) break;
+    }
   }
 } catch (e) { _err = e.message; }
 

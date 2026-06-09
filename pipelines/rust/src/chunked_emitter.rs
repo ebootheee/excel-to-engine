@@ -291,7 +291,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     writeln!(w)?;
 
     // Runtime helpers for Excel functions — import from shared module
-    writeln!(w, "{}", "import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _edate, _eomonth } from './_helpers.mjs';")?;
+    writeln!(w, "{}", "import { _div, _aggNum, _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _edate, _eomonth } from './_helpers.mjs';")?;
     writeln!(w)?;
 
     // compute(ctx) function
@@ -821,14 +821,18 @@ export function run(inputs = {}, options = {}) {"#.to_string());
           if (_anyNonFinite) {
             // A non-finite pass can never be a fixed point. Force a non-converging
             // delta and keep iterating so a TRANSIENT cold-0 denominator can warm.
-            // BUT if the FINITE surface has already settled (maxDelta<TOL) while a cell
-            // stays non-finite across several consecutive passes, it is STRUCTURAL
-            // (a genuine #DIV/0! that never warms) — stop and report converged=false
-            // (honest); the NaN-fill below then blanks the cluster (PR #52 contract).
+            // Stop early in two cases (#61 — bound the churn instead of running all
+            // MAX_ITER passes on a hopeless cluster): (a) STRUCTURAL — the FINITE
+            // surface has SETTLED (maxDelta<TOL) while a cell stays non-finite for a
+            // few passes (a genuine #DIV/0! whose finite inputs settled, so it will
+            // never warm); (b) a generous absolute warm-up cap that also covers a
+            // cluster that is BOTH divergent AND carries a persistent non-finite (the
+            // finite surface never settles, so case (a) never fires). converged stays
+            // false either way and the NaN-fill below blanks the cluster (PR #52).
             _lastDelta = Infinity;
             _clusterDeltaHist.length = 0;
-            if (maxDelta < TOL) { _nonFiniteStreak++; if (_nonFiniteStreak >= 4) break; }
-            else _nonFiniteStreak = 0;
+            _nonFiniteStreak++;
+            if ((maxDelta < TOL && _nonFiniteStreak >= 4) || _nonFiniteStreak >= 50) break;
             continue;
           }
           _nonFiniteStreak = 0;
@@ -1413,6 +1417,20 @@ fn detect_intra_sheet_cycles(partition: &SheetPartition<'_>, sheet_name: &str) -
 /// that the transpiler emits as _fn() calls.
 fn generate_runtime_helpers() -> String {
     r#"// ── Runtime helpers ──
+function _div(a, b) {
+  // Excel #DIV/0!: both x/0 (->Infinity) and 0/0 (->NaN) collapse to ONE sentinel (NaN)
+  // so downstream detection is a single predicate and IFERROR/ISERROR/ISNUMBER catch it.
+  const q = a / b;
+  return Number.isFinite(q) ? q : NaN;
+}
+function _aggNum(b) {
+  // Coerce a SUM/SUMPRODUCT/AVERAGE operand: a finite number passes; a NON-FINITE NUMBER
+  // (Inf/NaN — an Excel #DIV/0! that reached the aggregate) propagates as NaN (Excel's SUM
+  // of a #DIV/0! cell IS #DIV/0!); text/blank/null contribute 0 (Excel ignores text in SUM).
+  if (typeof b === 'number') return Number.isFinite(b) ? b : NaN;
+  const n = +b;
+  return Number.isFinite(n) ? n : 0;
+}
 function _index(arr, rowNum, colNum) {
   if (arr == null) return 0;
   if (!Array.isArray(arr)) return arr;
@@ -1556,7 +1574,7 @@ function _sumif(range, criteria, sumRange) {
   let total = 0;
   for (let i = 0; i < range.length; i++) {
     if (_matchesCriteria(range[i], criteria)) {
-      total += (+sr[i] || 0);
+      total += _aggNum(sr[i]); // propagate a #DIV/0! (non-finite number) as NaN; text -> 0
     }
   }
   return total;
@@ -1570,7 +1588,7 @@ function _sumifs(sumRange, criteriaPairs) {
     for (const [cr, cv] of criteriaPairs) {
       if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { allMatch = false; break; }
     }
-    if (allMatch) total += (+sumRange[i] || 0);
+    if (allMatch) total += _aggNum(sumRange[i]); // propagate a #DIV/0! as NaN; text -> 0
   }
   return total;
 }

@@ -346,6 +346,20 @@ pub fn generate_raw_engine(
 fn generate_runtime_helpers() -> String {
     r#"// ── Runtime helpers ──────────────────────────────────────────────────────
 
+// #DIV/0! canonicalization: x/0 (->Infinity) and 0/0 (->NaN) collapse to ONE sentinel
+// (NaN) that IFERROR/ISERROR/ISNUMBER catch. The transpiler emits _div for every division.
+function _div(a, b) {
+  const q = a / b;
+  return Number.isFinite(q) ? q : NaN;
+}
+// SUM/SUMPRODUCT/AVERAGE operand coercion: a finite number passes; a non-finite NUMBER
+// (#DIV/0!) propagates as NaN; text/blank contribute 0 (Excel ignores text in SUM).
+function _aggNum(b) {
+  if (typeof b === 'number') return Number.isFinite(b) ? b : NaN;
+  const n = +b;
+  return Number.isFinite(n) ? n : 0;
+}
+
 // VLOOKUP implementation
 function _vlookup(val, table, colIdx, exact) {
   if (!Array.isArray(table)) return null;

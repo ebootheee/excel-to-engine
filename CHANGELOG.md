@@ -1,5 +1,35 @@
 # excel-to-engine — Changelog
 
+## 2026-06-08 — #DIV/0! honesty (#60) + convergence churn bound (#61)
+
+**#60 — un-IFERROR'd aggregates no longer turn a `#DIV/0!` into a confident wrong number.**
+Excel `#DIV/0!` is `x/0`->±Infinity / `0/0`->NaN in JS. The old reducer `(+b||0)` PROPAGATED
+Infinity but SILENTLY DROPPED NaN (`+NaN||0===0`), so `=SUM(100, 0/0, 250)` returned **350**
+(Excel: `#DIV/0!`) — on **acyclic** cells the #57 convergence machinery never inspects. Fix:
+route every division through `_div` (collapses `x/0` and `0/0` to one **NaN** sentinel that
+`IFERROR`/`ISERROR`/`ISNUMBER` already catch post-#55), and make `SUM`/`SUBTOTAL`/`SUMPRODUCT`/
+`AVERAGE`/`SUMIF`/`SUMIFS` propagate a non-finite **number** as NaN via a shared `_aggNum`
+helper — while still treating **text** as 0 (Excel ignores text in SUM; the naive fix would
+wrongly poison label cells). `_div`+`_aggNum` land in BOTH emitters (`chunked_emitter.rs`
+runtime helpers + the per-sheet-module import list, and `model_map.rs` raw-engine helpers);
+the cone inherits them via its lifted `_helpers.mjs` import. The `isFinite`-filtering
+criteria-aggregators (`MINIFS`/`MAXIFS`/`AVERAGEIF`/`AVERAGEIFS`) already exclude non-finite
+and are left as-is. New regression `pipelines/rust/tests/test-div-nan-propagation.mjs`.
+
+**#61 — bound convergence churn on a hopeless cluster.** The #57 Commit-A non-finite branch
+`continue`s before the divergence detector and only short-circuits when the FINITE surface has
+SETTLED, so a cluster that is BOTH divergent AND carries a persistent structural non-finite
+ran all `MAX_ITER=200` passes (multi-hour on real A-1) before NaN-filling. Added a generous
+absolute non-finite-pass cap (50) in `chunked_emitter.rs`; ported the monotone-up/flat-hot
+divergence detector + the cap into `eval/per-sheet-eval.mjs` (it had neither, so a divergent
+cluster churned to 200 then NaN-filled); and **removed the dead pre-#57 cluster loop** in
+`per-sheet-eval.mjs` `evalOneSheet` (a reactivation hazard — it still had the old
+non-finite-poisoning behavior). Correctness-safe (converged=false + NaN-fill either way). New
+regression `test-cluster-divergent-cap.mjs`. Both tests wired into `npm test`.
+
+NOTE: #60 can move base-case numbers wherever a model relied on the silent drop, so it was
+gated on a real-A-1 before/after re-measure (see the gate run recorded with this change).
+
 ## 2026-06-08 — per-sheet-eval true lockstep with the engine: NaN-fill on non-convergence + engine-faithful warming delta (#57 follow-up)
 
 An adversarial verification of #57 Commit A found my "lockstep" claim was overstated: the
