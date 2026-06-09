@@ -1,6 +1,24 @@
 # excel-to-engine — Roadmap
 
-## Now — lock-grade A-1: div-by-zero machinery DONE; the real blocker is a structural denominator + scale (2026-06-09)
+## Now — lock-grade A-1: structural denominator root FIXED (calamine $-anchors); remaining = scale wall (2026-06-09)
+
+**The structural denominator is solved** (branch `fix/calamine-shared-formula-anchors`, see
+PLAN.md/CHANGELOG 2026-06-09-later): calamine 0.26's `$`-blind shared-formula expansion had
+corrupted **1.75M A-1 cells (30%)**; upgraded to 0.35 + LOG10 tokenizer guard + 1900-epoch &
+XIRR-365 helper fidelity. One-pass warm-GT recompute now has **zero numeric divergence** on
+Equity and GPP Promote (`equityBasis`/`totalCarry`/IRRs == GT exactly).
+
+Remaining for a converged lock-grade A-1 base case:
+- **Scale wall (#33/#46)** — unchanged: ~11–13 min/cluster-pass makes a full convergence
+  re-measure infeasible; this is now THE blocker. (With faithful formulas a warm-seeded cluster
+  should also converge in far fewer passes — worth re-measuring before deep perf work.)
+- **Re-measure named-outputs / per-sheet-eval on the fixed build** (the 10 honest-NaN outputs
+  should now be real numbers matching GT).
+- Follow-ups discovered: `lib/irr.mjs` CLI-side XIRR still 365.25 (engine helpers fixed);
+  `TEXT()` format codes unimplemented (cosmetic labels only); `CELL("filename")` → "null" label.
+- **#47 can close** (date-axis mechanism fixed & verified: row-7 axis 0/301 divergent on the
+  current build; residual symptoms were this calamine root). #54 remediation unblocked from
+  the returns cone (its A-1 fallbacks file is empty).
 
 The lock-grade cluster non-convergence (T-076) was **multi-root** (div-by-zero leaking ±Inf/NaN). **ALL
 in-repo div-by-zero roots are merged**: **#55** IFERROR-treats-Infinity, **#56** per-sheet-eval

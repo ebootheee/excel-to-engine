@@ -1681,13 +1681,27 @@ function _filter(array, include, ifEmpty) {
 function _excelSerialFromYMD(y, m, d) {
   y = Math.trunc(+y); m = Math.trunc(+m); d = Math.trunc(+d);
   // Excel DATE normalises out-of-range month/day by rolling over (Date.UTC does too).
-  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+  const ms = Date.UTC(y, m - 1, d);
+  let serial = Math.round((ms - Date.UTC(1899, 11, 30)) / 86400000);
+  // Excel's phantom 1900-02-29 (the Lotus leap-year bug): real dates BEFORE
+  // 1900-03-01 sit one serial LOWER (Jan 1 1900 = 1, Feb 28 1900 = 59), so an
+  // EOMONTH chain seeded from a degenerate 0 (e.g. a no-match MINIFS) matches
+  // Excel exactly: EOMONTH(0,1) = 59, not 60.
+  if (ms < Date.UTC(1900, 2, 1)) serial -= 1;
+  return serial;
 }
 
 function _serialToYMD(serial) {
-  // Inverse of _excelSerialFromYMD for normal modern dates (serial >= 61, i.e.
-  // 1900-03-01 onward, where Excel's leap-year-1900 bug does not apply).
-  const ms = Math.round(+serial) * 86400000 + Date.UTC(1899, 11, 30);
+  serial = Math.round(+serial);
+  // Inverse of _excelSerialFromYMD. Serials 0..60 predate the phantom
+  // 1900-02-29: 0 = "Jan 0" (month January 1900), 60 = the phantom Feb 29 —
+  // EOMONTH/EDATE month math must land these in Excel's month, not the epoch's.
+  if (serial >= 0 && serial <= 60) {
+    if (serial === 0) return { y: 1900, m: 1, d: 0 };
+    if (serial === 60) return { y: 1900, m: 2, d: 29 };
+    serial += 1; // real dates Jan 1..Feb 28 1900: undo the phantom-day gap
+  }
+  const ms = serial * 86400000 + Date.UTC(1899, 11, 30);
   const dt = new Date(ms);
   return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
 }
@@ -1788,7 +1802,7 @@ function computeXIRR(cashflows, dates, guess) {
   for (let i = 0; i < 200; i++) {
     let f = 0, df = 0;
     for (let t = 0; t < cfs.length; t++) {
-      const years = (ds[t] - d0) / 365.25;
+      const years = (ds[t] - d0) / 365; // Excel XIRR uses a 365-day basis (like XNPV)
       const disc = Math.pow(1 + r, years);
       f += cfs[t] / disc;
       df -= years * cfs[t] / (disc * (1 + r));

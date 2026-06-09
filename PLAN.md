@@ -1,5 +1,30 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-09 (later) — #57 STRUCTURAL ROOT FOUND & FIXED: calamine $-blind shared-formula expansion (1.75M corrupted A-1 cells)
+
+The "trace the `#DIV/0!` feeding `Equity!AN122` / `GPP Promote!D88`" investigation landed
+(branch `fix/calamine-shared-formula-anchors`). The root was **neither #47 nor #54**: calamine
+0.26.1's shared-formula expansion (`replace_cell_names`) is **`$`-blind** — on fill it SHIFTED
+column-absolute refs (`$AO17`) and FROZE row-anchored column-relative refs (`L$7`, `AO$698`),
+corrupting **1,745,461 member cells (30% of A-1)**; exactly the mixed-anchor AVERAGEIFS/SUMIFS
+financial idioms. Diagnostic: one-pass warm-GT recompute (seeds ctx with all 5.8M GT values; a
+faithful formula must reproduce GT) — Equity diverged at rows 17–19 with the column-shift
+signature `got(Y17)==GT(N17)`.
+
+Fixes: **calamine 0.26 → 0.35** (upstream fixed $ anchors in 0.32 + LOG10-as-ref in 0.35; zero
+API churn) + our own tokenizer's LOG10 guard (`formula_ast.rs`: name followed by `(` is a
+function) + helpers fidelity (Excel 1900-epoch quirk serials ≤ 60 → `EOMONTH(0,1)=59`, live on
+GPP row 116; XIRR 365-day basis, was 365.25 → fixed the 4th-decimal IRR drift). Result:
+**Equity 9,819 → 1 divergence (cosmetic label), GPP Promote → 30 (all cosmetic TEXT() labels);
+`AN122`/`D88`/all IRRs == GT exactly.** Negative-controlled regression
+`test-shared-formula-anchors.mjs` (hand-zipped REAL `<f t="shared">` xlsx — SheetJS never emits
+shared formulas, which is why every prior synthetic gate missed the class). Full `npm test` green.
+
+Remaining for a converged A-1 base case: the scale wall (#33/#46) — unchanged by this fix —
+then a full cluster convergence re-measure. `lib/irr.mjs` 365.25 XIRR (CLI-side) noted as
+follow-up. #47's date-axis mechanism is verified fixed on the current build (row-7 axis 0/301
+divergent); its residual symptom claims are superseded by this root.
+
 ## Status: 2026-06-09 — #60 + #61 merged; slow-model run reframes #57 (structural denominator + scale wall)
 
 All in-repo div-by-zero roots are now merged (`fdf1b1d`): **#60** `_div` canonical-NaN + NaN-propagating

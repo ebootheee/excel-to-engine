@@ -275,8 +275,12 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
-        // Check if it looks like a cell reference (letters + digits)
-        if looks_like_cell_ref(name) {
+        // Check if it looks like a cell reference (letters + digits).
+        // A name immediately followed by `(` is a FUNCTION CALL, never a ref:
+        // without this guard `LOG10(100)` parsed as cell ref LOG10 + a stray
+        // parenthesized expression (→ #NAME?-style 0), same shape as calamine's
+        // upstream LOG10-as-cell-ref expansion bug fixed in 0.35.
+        if looks_like_cell_ref(name) && self.peek() != Some('(') {
             // Check if it's a range like A1:B10
             if self.peek() == Some(':') {
                 let saved = self.pos;

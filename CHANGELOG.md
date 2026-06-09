@@ -1,5 +1,47 @@
 # excel-to-engine — Changelog
 
+## 2026-06-09 — #57 structural root FOUND & FIXED: calamine $-blind shared-formula expansion corrupted 1.75M A-1 cells
+
+**The trace.** A one-pass warm-GT recompute (`ctx` seeded with all 5.8M ground-truth values,
+one `compute()` sweep, every `set()` diffed against GT — a faithful formula MUST reproduce GT
+from a warm seed) showed 9,819 Equity divergences starting at rows 17–19 (the capital-call
+schedule), with `got(Y17) == GT(N17)`: the row was **column-shifted**. The xlsx master formula
+`AVERAGEIFS($AO17:$MC17, $AO$7:$MC$7, ">"&L$7, …)` (shared group, filled M17:AJ17) was expanded
+by **calamine 0.26.1's `replace_cell_names()`, which is `$`-blind**: a `$` splits the ref token,
+so `$AO17` (column-absolute) was offset as if relative (wrongly SHIFTED) and `L$7`/`AO$698`
+(row-anchored, column-relative) never parsed as refs (wrongly FROZEN). Plain-relative and
+fully-absolute refs both behave by accident — which is why 13/23 named outputs were fine and
+exactly the mixed-anchor financial idioms (AVERAGEIFS/SUMIFS windows, ratio rows) collapsed.
+Blast radius on A-1: **1,745,461 of 4.69M shared-formula member cells (30% of the model)**
+received a corrupted formula. This — not date drift (#47's mechanism is already fixed and
+verified: row-7 axis 0/301 divergent) and not fn stubs (#54: `_fn-fallbacks` is empty) — is what
+zeroed `Equity!AN122` (class equityBasis) and `GPP Promote!D88` (totalCarry): their cash-flow
+rows aggregate corrupted schedule rows to 0, then #60's honest NaN surfaced the 0/0.
+
+**The fixes** (branch `fix/calamine-shared-formula-anchors`):
+1. **calamine 0.26 → 0.35** (`pipelines/rust/Cargo.toml`) — upstream fixed $-anchor handling in
+   shared-formula expansion (0.32) and `LOG10`-parsed-as-cell-ref (0.35). Zero API churn.
+2. **`formula_ast.rs`: a name followed by `(` is a function call, never a cell ref** — our own
+   tokenizer had the same LOG10 bug (parsed as column LOG, row 10 → `#NAME?`-style 0).
+3. **`chunked_emitter.rs` helpers: Excel 1900-epoch quirk for serials ≤ 60** — `EOMONTH(0,1)`
+   now = 59 like Excel (phantom 1900-02-29 / "Jan 0" handling in `_serialToYMD` /
+   `_excelSerialFromYMD`); live on A-1 GPP row 116 where a no-match MINIFS seeds an EOMONTH
+   chain from 0. And **`computeXIRR` now uses Excel's 365-day basis** (was 365.25) — this was
+   the residual 4th-decimal IRR drift on all 14 Equity IRR cells.
+
+**Result (one-pass warm-GT recompute, full rebuild):** Equity 9,819 → **1** divergence (the
+cosmetic `CELL("filename")` label); GPP Promote 4.62M set-divergences → **30** (all cosmetic
+`TEXT()` percent labels). `Equity!AN122` = 1.3191e7 == GT, `GPP Promote!D88` = 4.1613e7 == GT,
+row 116 and every IRR exact. **Zero numeric divergence on both traced sheets.**
+
+New regression `pipelines/rust/tests/test-shared-formula-anchors.mjs` (hand-zipped xlsx with
+REAL `<f t="shared">` groups — SheetJS never writes them, which is why the 78/78 smoke suite
+missed this class; negative-controlled RED on 0.26 with the predicted wrong values 22/23/5/7,
+GREEN on 0.35) + epoch-quirk & XIRR-365 cases in `test-date-axis-sumifs.mjs`. Both in `npm test`.
+
+Follow-up noted: `lib/irr.mjs` (CLI-side XIRR) still uses 365.25 — separate consumer, tracked
+in ROADMAP. #33/#46 (scale wall) unchanged by this fix.
+
 ## 2026-06-08 — #DIV/0! honesty (#60) + convergence churn bound (#61)
 
 **#60 — un-IFERROR'd aggregates no longer turn a `#DIV/0!` into a confident wrong number.**

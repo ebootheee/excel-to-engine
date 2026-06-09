@@ -169,7 +169,7 @@ console.log('Testing: EDATE-recurrence date axis + exact-equality SUMIFS (issue 
 // ---------------------------------------------------------------------------
 console.log('Testing: EDATE clamp, EOMONTH last-day/leap-year, DATE integer serial');
 {
-  const Edge = { '!ref': 'A1:B8' };
+  const Edge = { '!ref': 'A1:E11' };
   // EDATE(Jan31-2021, 1) must clamp to Feb 28 2021 (Feb has no 31st).
   Edge['A1'] = { t: 'n', v: ser(2021, 1, 31) };
   Edge['B1'] = { t: 'n', v: 0, f: 'EDATE(A1,1)' };
@@ -189,6 +189,24 @@ console.log('Testing: EDATE clamp, EOMONTH last-day/leap-year, DATE integer seri
   // EDATE with a negative month step → goes backward.
   Edge['A7'] = { t: 'n', v: ser(2022, 3, 31) };
   Edge['B7'] = { t: 'n', v: 0, f: 'EDATE(A7,-1)' }; // → Feb 28 2022 (clamp)
+  // Excel 1900-epoch quirk zone (serial <= 60, before the phantom Feb 29 1900).
+  // A degenerate 0 (e.g. a no-match MINIFS feeding an EOMONTH chain — live on
+  // the real A-1 GPP Promote row 116) must follow Excel's serials exactly:
+  // serial 0 = "Jan 0 1900" → EOMONTH(0,1) = end of Feb 1900 = 59 (NOT 60).
+  Edge['A8'] = { t: 'n', v: 0 };
+  Edge['B8'] = { t: 'n', v: 0, f: 'EOMONTH(A8,1)' };  // → 59
+  Edge['A9'] = { t: 'n', v: 59 };
+  Edge['B9'] = { t: 'n', v: 0, f: 'EOMONTH(A9,1)' };  // → Mar 31 1900 = 91
+  Edge['A10'] = { t: 'n', v: 1 };
+  Edge['B10'] = { t: 'n', v: 0, f: 'EOMONTH(A10,0)' }; // Jan 1 1900 → Jan 31 = 31
+  // XIRR uses Excel's 365-day basis (not 365.25): -100 → +110 across the 366
+  // days of leap-2020 solves to 1.1^(365/366)-1, distinguishable from the old
+  // 365.25 basis by ~3.6e-5.
+  Edge['D1'] = { t: 'n', v: -100 };
+  Edge['D2'] = { t: 'n', v: 110 };
+  Edge['E1'] = { t: 'n', v: ser(2020, 1, 1) };
+  Edge['E2'] = { t: 'n', v: ser(2021, 1, 1) };
+  Edge['D3'] = { t: 'n', v: 0, f: 'XIRR(D1:D2,E1:E2)' };
 
   const { eng, cleanup } = await buildEngine({ Edge });
   const r = eng.run();
@@ -200,6 +218,13 @@ console.log('Testing: EDATE clamp, EOMONTH last-day/leap-year, DATE integer seri
   assert(r.values['Edge!B5'] === ser(2024, 1, 1) && Number.isInteger(r.values['Edge!B5']), `DATE(2024,1,1) = integer serial 45292 (got ${r.values['Edge!B5']})`);
   assert(r.values['Edge!B6'] === ser(2025, 1, 1), `DATE(2024,13,1) rolls to 2025-01-01 (got ${r.values['Edge!B6']})`);
   assert(r.values['Edge!B7'] === ser(2022, 2, 28), `EDATE(Mar31-2022,-1) = Feb28-2022 serial / backward+clamp (got ${r.values['Edge!B7']})`);
+  assert(r.values['Edge!B8'] === 59, `EOMONTH(0,1) = 59, Excel's end-of-Feb-1900 with the phantom Feb 29 (got ${r.values['Edge!B8']})`);
+  assert(r.values['Edge!B9'] === 91, `EOMONTH(59,1) = 91, Mar 31 1900 (got ${r.values['Edge!B9']})`);
+  assert(r.values['Edge!B10'] === 31, `EOMONTH(1,0) = 31, Jan 31 1900 in the quirk zone (got ${r.values['Edge!B10']})`);
+  const xirrExpected = Math.exp(Math.log(1.1) * 365 / 366) - 1; // Excel 365-day basis
+  const xirrOld = Math.exp(Math.log(1.1) * 365.25 / 366) - 1;   // the old 365.25 basis
+  assert(Math.abs(xirrExpected - xirrOld) > 1e-5, `negative control: 365 vs 365.25 basis differ measurably (${xirrExpected} vs ${xirrOld})`);
+  assert(Math.abs(r.values['Edge!D3'] - xirrExpected) < 1e-6, `XIRR on a 366-day leap span uses the 365-day basis: ${xirrExpected.toFixed(7)} (got ${r.values['Edge!D3']})`);
 
   cleanup();
 }
