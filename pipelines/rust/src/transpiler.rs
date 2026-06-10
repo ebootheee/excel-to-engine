@@ -160,6 +160,25 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
 
         Expr::Range(r1, r2) => expand_range_to_vars(r1, r2, config),
 
+        Expr::DynRange { start, end } => {
+            // Computed-endpoint range (`CF14:OFFSET(CF14,,-($F$12-2))`):
+            // resolve both endpoints to corner-address expressions and span
+            // the rectangle at runtime. An endpoint we cannot resolve to an
+            // address (INDEX/INDIRECT/...) is an HONEST NaN — never a
+            // truncated partial range (issue #66).
+            if !config.use_ctx_get {
+                return "(NaN /* computed range endpoint unsupported in flat-var mode */)".to_string();
+            }
+            match (dyn_range_corners(start, config), dyn_range_corners(end, config)) {
+                (Some(a), Some(b)) => {
+                    let mut corners = a;
+                    corners.extend(b);
+                    format!("_dynRange(ctx, [{}])", corners.join(", "))
+                }
+                _ => "(NaN /* unsupported computed range endpoint */)".to_string(),
+            }
+        }
+
         Expr::UnaryOp { op, operand } => {
             let inner = transpile(operand, config);
             match op.as_str() {
@@ -199,6 +218,54 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
 // ---------------------------------------------------------------------------
 // Function transpilation
 // ---------------------------------------------------------------------------
+
+/// Resolve a DynRange endpoint to the JS expression(s) for its corner
+/// address(es): a `"Sheet!A1"` literal for refs, `_offsetAddr(...)` calls for
+/// an OFFSET endpoint (near + far corner when height/width are present).
+/// `None` = the endpoint cannot be resolved to an address statically.
+fn dyn_range_corners(e: &Expr, config: &TranspileConfig) -> Option<Vec<String>> {
+    let lit = |r: &crate::formula_ast::CellRef| {
+        let sheet_owned;
+        let sheet = match &r.sheet {
+            Some(s) => s.as_str(),
+            None => {
+                sheet_owned = config.default_sheet.clone();
+                sheet_owned.as_str()
+            }
+        };
+        let escaped = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{}!{}{}\"", escaped, r.col, r.row)
+    };
+    match e {
+        Expr::CellRef(r) => Some(vec![lit(r)]),
+        Expr::Range(r1, r2) => Some(vec![lit(r1), lit(r2)]),
+        Expr::FunctionCall { name, args } if name.to_uppercase() == "OFFSET" && !args.is_empty() => {
+            let base = match &args[0] {
+                Expr::CellRef(r) => lit(r),
+                _ => return None,
+            };
+            let t = |i: usize, dflt: &str| {
+                args.get(i)
+                    .map(|a| transpile(a, config))
+                    .unwrap_or_else(|| dflt.to_string())
+            };
+            let rows = t(1, "0");
+            let cols = t(2, "0");
+            let mut corners = vec![format!("_offsetAddr({}, ({}), ({}))", base, rows, cols)];
+            if args.len() >= 4 {
+                // height/width extend the endpoint to its far corner
+                let h = t(3, "1");
+                let w = t(4, "1");
+                corners.push(format!(
+                    "_offsetAddr({}, ({}) + ({}) - 1, ({}) + ({}) - 1)",
+                    base, rows, h, cols, w
+                ));
+            }
+            Some(corners)
+        }
+        _ => None,
+    }
+}
 
 fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> String {
     // Excel stores newer functions with future-function prefixes in the file
@@ -581,7 +648,14 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "DATE" => format!("/* DATE */ _excelSerialFromYMD({}, {}, {})", arg(0), arg(1), arg(2)),
         "DAYS" => format!("({} - {})", arg(0), arg(1)),
         "DATEDIF" => format!("/* DATEDIF */ ({} - {})", arg(1), arg(0)),
-        "YEARFRAC" => format!("/* YEARFRAC */ (({} - {}) / 365.25)", arg(1), arg(0)),
+        // YEARFRAC's default basis 0 is US-NASD 30/360 — month-aligned spans
+        // are EXACT (1, 0.5), which real models gate on with equality tests
+        // like `MOD(YEARFRAC(...), x) = 0` and month counts `YEARFRAC*12+1`.
+        // The old `(b-a)/365.25` drifted every such gate (issue #66).
+        "YEARFRAC" => {
+            let basis = if args.len() >= 3 { arg(2) } else { "0".to_string() };
+            format!("_yearfrac({}, {}, {})", arg(0), arg(1), basis)
+        }
         "EDATE" => format!("_edate({}, {})", arg(0), arg(1)),
         "EOMONTH" => format!("_eomonth({}, {})", arg(0), arg(1)),
         "NETWORKDAYS" => format!("/* NETWORKDAYS */ ({} - {})", arg(1), arg(0)),

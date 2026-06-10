@@ -72,6 +72,17 @@ pub enum Expr {
     Name(String),
     CellRef(CellRef),
     Range(CellRef, CellRef),
+    /// A range with a COMPUTED endpoint — `CF14:OFFSET(CF14,,-($F$12-2))`,
+    /// `OFFSET(A1,1,0):B10`. Plain `A1:B10` ranges fold to `Range` in the
+    /// tokenizer and never reach this; this exists so a bare `:` token has a
+    /// parse rule. Before it existed the parser STOPPED at the colon and
+    /// silently returned the partial AST — `SUM(CF14:OFFSET(...))*(X<Y)`
+    /// became `SUM(CF14)` with the entire trailing factor dropped (issue #66,
+    /// 284k corrupted cells on the real A-1 Technology sheet).
+    DynRange {
+        start: Box<Expr>,
+        end: Box<Expr>,
+    },
     BinOp {
         op: String,
         left: Box<Expr>,
@@ -299,7 +310,11 @@ impl<'a> Tokenizer<'a> {
                 // (`R$22`, `$R$22`); `parse_simple_cell_ref` already decodes them.
                 // Without this, a range whose 2nd endpoint has an absolute row
                 // (`R8:R$22`) silently collapsed to just the 1st endpoint. T-078.
-                if looks_like_cell_ref_dollar(name2) || looks_like_column_ref(name2) {
+                // An endpoint followed by `(` is a FUNCTION CALL (`A1:MAX(...)`,
+                // `A1:LOG10(...)`), never a ref — leave the colon for the
+                // parser's computed-endpoint (DynRange) rule (issue #66).
+                let endpoint_is_call = self.peek() == Some('(');
+                if !endpoint_is_call && (looks_like_cell_ref_dollar(name2) || looks_like_column_ref(name2)) {
                     let ref1 = parse_simple_cell_ref(name, None);
                     let ref2 = if looks_like_cell_ref_dollar(name2) {
                         parse_simple_cell_ref(name2, None)
@@ -754,8 +769,21 @@ impl Parser {
         expr
     }
 
-    /// Primary: literals, cell refs, ranges, function calls, parenthesised
+    /// Primary: an atom, optionally extended by `:` into a computed-endpoint
+    /// range (`ref:OFFSET(...)`, `OFFSET(...):ref`). Plain `A1:B10` ranges are
+    /// folded by the tokenizer and never produce a bare `Colon` here.
     fn parse_primary(&mut self) -> Expr {
+        let mut expr = self.parse_atom();
+        while let Token::Colon = self.peek() {
+            self.advance();
+            let rhs = self.parse_atom();
+            expr = Expr::DynRange { start: Box::new(expr), end: Box::new(rhs) };
+        }
+        expr
+    }
+
+    /// Atom: literals, cell refs, ranges, function calls, parenthesised
+    fn parse_atom(&mut self) -> Expr {
         match self.peek().clone() {
             Token::Number(n) => { self.advance(); Expr::Number(n) }
             Token::StringLit(s) => { self.advance(); Expr::StringLit(s) }
@@ -792,6 +820,12 @@ impl Parser {
                 self.parse_unary()
             }
             Token::Eof => Expr::Number(0.0),
+            // An argument-list terminator in expression position is an EMPTY
+            // argument (`OFFSET(A1,,2)` — rows omitted = 0). Do NOT consume:
+            // the old advance here ATE the second comma and misaligned every
+            // argument after it (issue #66; OFFSET(C1,,-1) read cols from the
+            // wrong slot). parse_arg_list owns these tokens.
+            Token::Comma | Token::Semicolon | Token::RParen => Expr::Number(0.0),
             _ => {
                 self.advance();
                 Expr::Number(0.0)
@@ -826,7 +860,15 @@ pub fn parse_formula(formula: &str) -> Option<Expr> {
         return None;
     }
     let mut parser = Parser::new(tokens);
-    Some(parser.parse_expr())
+    let expr = parser.parse_expr();
+    // A PARTIAL parse must be a loud failure (-> the caller's parse-error
+    // path), never a silently truncated expression: pre-#66 a formula the
+    // parser couldn't finish was emitted up to the stuck token and the rest
+    // — including whole trailing factors — vanished into a plausible number.
+    if !matches!(parser.peek(), Token::Eof) {
+        return None;
+    }
+    Some(expr)
 }
 
 // ---------------------------------------------------------------------------

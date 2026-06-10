@@ -51,8 +51,10 @@ pub fn build_formulas_json(workbook: &WorkbookData) -> Vec<FormulaEntry> {
 
                 let (js_expr, parse_error) = match parse_formula(formula) {
                     Some(ast) => (transpile(&ast, &config), None),
+                    // Honest sentinel (issue #66): unparseable or PARTIALLY
+                    // parseable formulas emit NaN, never a silent 0.
                     None => (
-                        "/* parse error */ 0".to_string(),
+                        "/* parse error */ NaN".to_string(),
                         Some(format!("Could not parse: {}", formula)),
                     ),
                 };

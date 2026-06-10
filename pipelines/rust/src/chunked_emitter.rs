@@ -291,7 +291,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     writeln!(w)?;
 
     // Runtime helpers for Excel functions — import from shared module
-    writeln!(w, "{}", "import { _div, _aggNum, _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _serialToYMD, _edate, _eomonth } from './_helpers.mjs';")?;
+    writeln!(w, "{}", "import { _div, _aggNum, _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _serialToYMD, _edate, _eomonth, _yearfrac, _offsetAddr, _dynRange } from './_helpers.mjs';")?;
     writeln!(w)?;
 
     // compute(ctx) function
@@ -329,7 +329,10 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
                 };
                 let js_expr = match parse_formula(formula) {
                     Some(ast) => transpile(&ast, &cell_config),
-                    None => format!("/* parse error: {} */ 0", escape_js_string(formula)),
+                    // Honest sentinel: an unparseable (or PARTIALLY parseable —
+                    // see parse_formula's trailing-token guard, issue #66)
+                    // formula must be detectably unusable, never a silent 0.
+                    None => format!("/* parse error: {} */ NaN", escape_js_string(formula)),
                 };
                 cell_exprs.push((qualified, js_expr));
             }
@@ -1582,6 +1585,17 @@ function _sumif(range, criteria, sumRange) {
 
 function _sumifs(sumRange, criteriaPairs) {
   if (!Array.isArray(sumRange)) return 0;
+  // ARRAY criteria (Excel array semantics, issue #66): a criteria VALUE that
+  // is itself a range — `SUM(SUMIFS(vals, cats, $EK$973:$EK$977))` — yields
+  // one sum per criteria element; the surrounding SUM() flattens them. The
+  // first array criteria is mapped; any others stay scalar per element.
+  const arrIdx = criteriaPairs.findIndex(([, cv]) => Array.isArray(cv));
+  if (arrIdx >= 0) {
+    return criteriaPairs[arrIdx][1].map((cv) => {
+      const pairs = criteriaPairs.map(([cr, v], j) => (j === arrIdx ? [cr, cv] : [cr, v]));
+      return _sumifs(sumRange, pairs);
+    });
+  }
   let total = 0;
   for (let i = 0; i < sumRange.length; i++) {
     let allMatch = true;
@@ -1731,6 +1745,64 @@ function _eomonth(serial, months) {
   const nm = (total % 12) + 1; // 1-based
   // Last day of the target month.
   return _excelSerialFromYMD(ny, nm, _daysInMonth(ny, nm));
+}
+
+function _yearfrac(start, end, basis) {
+  // Excel YEARFRAC. Basis 0 (the default) is US-NASD 30/360 — month-aligned
+  // spans are EXACT (1, 0.5), which models gate on with equality tests
+  // (MOD(YEARFRAC(...), x) = 0) and month counts (YEARFRAC*12+1). Issue #66.
+  let a = Math.round(+start || 0), b = Math.round(+end || 0);
+  basis = Math.trunc(+basis || 0);
+  if (a > b) { const t = a; a = b; b = t; } // Excel YEARFRAC is symmetric
+  if (basis === 2) return (b - a) / 360;
+  if (basis === 3) return (b - a) / 365;
+  const A = _serialToYMD(a), B = _serialToYMD(b);
+  if (basis === 1) {
+    // actual/actual: actual days over the average year length of the span
+    let denom = 0;
+    for (let y = A.y; y <= B.y; y++) denom += (((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365);
+    return (b - a) / (denom / (B.y - A.y + 1));
+  }
+  // basis 0 (US NASD 30/360) and 4 (European 30/360)
+  let d1 = A.d, d2 = B.d;
+  if (basis === 4) {
+    if (d1 === 31) d1 = 30;
+    if (d2 === 31) d2 = 30;
+  } else {
+    const lastFeb = (p) => p.m === 2 && p.d === _daysInMonth(p.y, 2);
+    if (lastFeb(A) && lastFeb(B)) d2 = 30;
+    if (lastFeb(A)) d1 = 30;
+    if (d2 === 31 && d1 >= 30) d2 = 30;
+    if (d1 === 31) d1 = 30;
+  }
+  return ((B.y - A.y) * 360 + (B.m - A.m) * 30 + (d2 - d1)) / 360;
+}
+
+function _offsetAddr(refAddr, rows, cols) {
+  // Pure address arithmetic for a computed range endpoint (no dereference).
+  const m = String(refAddr).match(/^(.*)!([A-Z]+)([0-9]+)$/);
+  if (!m) return refAddr;
+  const col = _colNum(m[2]) + Math.trunc(+cols || 0);
+  const row = +m[3] + Math.trunc(+rows || 0);
+  if (col < 1 || row < 1) return refAddr; // Excel #REF!; clamp to base (finite, sweep-visible)
+  return m[1] + '!' + _numToCol(col) + row;
+}
+
+function _dynRange(ctx, corners) {
+  // Computed-endpoint range (`CF14:OFFSET(CF14,,-($F$12-2))`): the rectangle
+  // spanning every corner address. Returns the flat values array, like
+  // ctx.range(). Issue #66.
+  let sheet = null, c1 = Infinity, r1 = Infinity, c2 = -1, r2 = -1;
+  for (const addr of corners) {
+    const m = String(addr).match(/^(.*)!([A-Z]+)([0-9]+)$/);
+    if (!m) return [];
+    if (sheet === null) sheet = m[1];
+    const c = _colNum(m[2]), r = +m[3];
+    if (c < c1) c1 = c; if (c > c2) c2 = c;
+    if (r < r1) r1 = r; if (r > r2) r2 = r;
+  }
+  if (sheet === null) return [];
+  return ctx.range(sheet + '!' + _numToCol(c1) + r1 + ':' + _numToCol(c2) + r2);
 }
 
 function _colNum(col) {
