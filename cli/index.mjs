@@ -277,9 +277,9 @@ Commands:
                                     --emit-cones ([EXPERIMENTAL] emit chunked/cones/
                                     <id>.mjs scoped cone module(s) for the MIP-grid
                                     what-if surface; ADR-026 L2. Synthetic-validated;
-                                    real-model cones are gated on the transpiler
-                                    `* `COL`` bug — verify cone.run()==engine.run()
-                                    first. Build is ~minutes/~16 GB; runtime is ms),
+                                    real-model cones still need a nonzero-output
+                                    re-gate — verify cone.run()==engine.run() first.
+                                    Build is ~minutes/~16 GB; runtime is ms),
                                     --version-tag <tag> / --platform <id> /
                                     --class <id> (version-free build identity
                                     recorded in chunked/build-manifest.json;

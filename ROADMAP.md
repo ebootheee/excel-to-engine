@@ -1,24 +1,28 @@
 # excel-to-engine — Roadmap
 
-## Now — lock-grade A-1: structural denominator root FIXED (calamine $-anchors); remaining = scale wall (2026-06-09)
+## Now — post-v0.3.0: scale wall (#33/#46) is the remaining lock-grade blocker (2026-06-09)
 
-**The structural denominator is solved** (branch `fix/calamine-shared-formula-anchors`, see
-PLAN.md/CHANGELOG 2026-06-09-later): calamine 0.26's `$`-blind shared-formula expansion had
-corrupted **1.75M A-1 cells (30%)**; upgraded to 0.35 + LOG10 tokenizer guard + 1900-epoch &
-XIRR-365 helper fidelity. One-pass warm-GT recompute now has **zero numeric divergence** on
-Equity and GPP Promote (`equityBasis`/`totalCarry`/IRRs == GT exactly).
+**v0.3.0 shipped** — PR #62 (calamine $-anchors) + PR #63 (CLI XIRR 365) merged, #47 closed,
+help crash fixed, README/release notes/blog booked. See `docs/releases/v0.3.0.md`.
 
-Remaining for a converged lock-grade A-1 base case:
-- **Scale wall (#33/#46)** — unchanged: ~11–13 min/cluster-pass makes a full convergence
-  re-measure infeasible; this is now THE blocker. (With faithful formulas a warm-seeded cluster
-  should also converge in far fewer passes — worth re-measuring before deep perf work.)
-- **Re-measure named-outputs / per-sheet-eval on the fixed build** (the 10 honest-NaN outputs
-  should now be real numbers matching GT).
-- Follow-ups discovered: `lib/irr.mjs` CLI-side XIRR still 365.25 (engine helpers fixed);
-  `TEXT()` format codes unimplemented (cosmetic labels only); `CELL("filename")` → "null" label.
-- **#47 can close** (date-axis mechanism fixed & verified: row-7 axis 0/301 divergent on the
-  current build; residual symptoms were this calamine root). #54 remediation unblocked from
-  the returns cone (its A-1 fallbacks file is empty).
+**Convergence re-measure:** per-sheet warm-GT sweep of all 17 cluster sheets — pre-#62
+1/17 clean (~5.9M numeric divergences) → post-#62 9/17 (391k) → **post-#64 11/17 exactly
+clean, 383k residual (−93.5%)**; returns/promote/equity chain all ZERO. The sweep found #64
+(YEAR/MONTH/DAY local-time getters → TZ-dependent answers; fixed same day, PR #64).
+
+Remaining:
+- **Residual structural fidelity (NEW, highest-priority fidelity work):** 4 sheets
+  (Technology 285k, Owned Asset PP&E 84k, Lease Amortization 7.3k, Debt 6.7k) where the
+  transpiled AST ≠ the workbook formula (`Technology!CG14`: exact-GT inputs → ours 1, Excel 0).
+  Attack: xlsx `<f>`-vs-AST diff on each sheet's first divergent cell (the #57 playbook).
+  Until these are exact, full-cluster convergence measurement (#33) is moot.
+- **#46** — A-2's Debt module (315 MB emitted) breaks V8's ~537 MB string limit on multi-pass
+  recompute → A-2 cannot reach a converged base case until the emitter row-chunks/streams
+  monster modules. Fix direction unchanged (chunk `generate_sheet_module` output).
+- **#33** — row-chunk the monster sheets + cluster scoping so interactive/returns consumers
+  don't pay the ~780 MB cluster load; per-pass cost is the lever for cold-start convergence.
+- Cosmetic follow-ups: `TEXT()` format codes (labels only); `CELL("filename")` → "null" label.
+- #54 remediation unblocked from the returns cone (A-1 fallbacks file is empty).
 
 The lock-grade cluster non-convergence (T-076) was **multi-root** (div-by-zero leaking ±Inf/NaN). **ALL
 in-repo div-by-zero roots are merged**: **#55** IFERROR-treats-Infinity, **#56** per-sheet-eval

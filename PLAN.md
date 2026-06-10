@@ -1,5 +1,31 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-09 (release) — v0.3.0 TAGGED: #62/#63 merged, #47 closed, convergence re-measured on the fixed build
+
+Release day. **PR #62 merged** (FF, `e5072bd`) and **PR #63 merged** (FF, `20aedcc` — CLI-side
+XIRR 365-day basis, the noted follow-up). Issue write-ups posted to #57/#47; **#47 closed**.
+`ete` help crash fixed (nested backticks in `printHelp`'s template literal parsed as a tagged
+template — `TypeError: "COL" is not a function` on every bare invocation; stale cone help text
+rewritten + smoke test). README gained `ete lite`/templates/`--reuse-parse` and a
+**Correctness & honesty** section; package.json `0.2.0 → 0.3.0`; first tagged release booked
+(`docs/releases/v0.3.0.md` + boothe.io post).
+
+**Convergence re-measure → found TWO more roots, fixed one same-day (#64).** The per-sheet
+warm-GT sweep (`diag-warm-all-sheets.mjs`, all 17 cluster sheets, fresh GT seed each):
+pre-#62 baseline **1/17 clean / ~5.9M numeric divergences** → post-#62 **9/17 clean / 391k**
+→ the residual carried a one-day date-shift signature → **#64: `YEAR`/`MONTH`/`DAY` lowered
+to LOCAL-time `Date` getters** (engines west of UTC read every serial a day early; answers
+depended on machine TZ; fixed via `_serialToYMD` + TZ-pinned-child regression, RED pre-fix)
+→ post-#64 rebuild **11/17 exactly clean, 13/17 within float noise, 383k residual (−93.5%)**,
+returns/promote/equity chain all ZERO. Residual = 4 sheets (Technology 285k, PP&E 84k,
+Lease Am 7.3k, Debt 6.7k) carrying a NEW class: **formula-STRUCTURE mismatch**
+(`Technology!CG14` computes 1 from exact-GT inputs where Excel computed 0 → transpiled AST ≠
+workbook formula; next campaign). Scale-wall characterization: canonical per-sheet-eval
+cluster child **OOMs 16 GB after 61 min on 31 GB** (duplicate GT + 4.7M-string `_written` +
+per-cell snapshots — a lean single-copy/sampled-delta probe ran in <6 GB); ~11–16 min/pass;
+full-cluster convergence measurement stays moot until the 4 sheets are exact (iteration walks
+away from GT through them; the engine's #61 detector correctly NaN-fills, honesty held).
+
 ## Status: 2026-06-09 (later) — #57 STRUCTURAL ROOT FOUND & FIXED: calamine $-blind shared-formula expansion (1.75M corrupted A-1 cells)
 
 The "trace the `#DIV/0!` feeding `Equity!AN122` / `GPP Promote!D88`" investigation landed

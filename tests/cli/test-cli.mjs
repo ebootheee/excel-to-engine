@@ -34,6 +34,17 @@ function assert(test, msg) {
 }
 
 // ---------------------------------------------------------------------------
+// Help — printHelp must never crash (a nested backtick inside its template
+// literal once parsed as a tagged template and threw on every bare `ete`)
+// ---------------------------------------------------------------------------
+console.log('Testing: help');
+{
+  const out = run('--help');
+  assert(out.includes('ete — excel-to-engine CLI'), 'help banner prints');
+  assert(out.includes('lite <modelDir>'), 'help lists the lite command');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 console.log('Testing: summary');

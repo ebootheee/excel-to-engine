@@ -1,5 +1,44 @@
 # excel-to-engine — Changelog
 
+## 2026-06-09 — v0.3.0 RELEASED: "Never a Silent Wrong Number" (first tagged release)
+
+**Booked the correctness campaign as the first tagged release** (`v0.3.0`, notes at
+`docs/releases/v0.3.0.md`). Same-day landings:
+
+- **PR #62 MERGED to main** (`e5072bd`, FF) — the calamine $-anchor fix (entry below). Issue
+  comments posted to #57 (trace + result) and #47; **#47 CLOSED** (date-axis mechanism verified
+  exact 0/301; residual symptoms were the calamine root).
+- **PR #63 MERGED** (`20aedcc`, FF) — `lib/irr.mjs` CLI-side XIRR now Excel's 365-day basis
+  (was 365.25), closing the follow-up noted in the #62 entry. Negative-controlled leap-span
+  regression in `tests/lib/test-lib.mjs` (RED pre-fix with exactly the 365.25-basis value).
+- **`ete` help crash FIXED** — `printHelp()`'s template literal contained nested backticks
+  (`` `* `COL`` ``) from the --emit-cones help text, which parsed as a tagged template and threw
+  `TypeError: "COL" is not a function` on every bare/unknown invocation. Rewrote the stale text
+  (the COL$ROW bug it referenced was fixed in #43; the cone's EXPERIMENTAL label now stems from
+  the vacuous re-gate) + help smoke test in `test-cli.mjs` (36/36).
+- **PR #64 MERGED** (`92ca242`, FF) — found by the release-day re-measure: **`YEAR`/`MONTH`/`DAY`
+  lowerings used LOCAL-time `Date` getters**, so any engine runtime west of UTC read every Excel
+  serial one day early (`DAY(Jun-30-2023)=29`; the `DATE(YEAR(x),MONTH(x),DAY(x))` idiom on
+  `Valuation!G7` rebuilt 45107 as 45106) — date-keyed COUNTIFS/SUMIFS windows shifted a day and
+  0/1 flags flipped across sheets; **the engine's answers depended on the machine timezone.**
+  Now routed through `_serialToYMD` (UTC integer math, epoch-quirk aware). Regression runs the
+  engine in TZ-pinned children (America/Denver + Pacific/Auckland) with a hazard probe as the
+  negative control — RED pre-fix with the A-1-observed values, 26/26 GREEN post.
+- **Convergence re-measured (the discipline that caught #64):** per-sheet warm-GT sweep of all
+  17 cluster sheets — pre-fix baseline 1/17 clean / ~5.9M numeric divergences; post-#62
+  9/17 exactly clean (entire returns chain → 0), ~391k residual (−93%) all carrying the one-day
+  signature; post-#64 rebuild: **11/17 exactly clean, 13/17 within float noise, 383k residual (−93.5% from
+  pre-#62)** — returns/promote/equity chain all at ZERO; residual = 4 sheets (Technology 285k,
+  PP&E 84k, Lease Am 7.3k, Debt 6.7k) carrying a NEW defect class (formula-STRUCTURE mismatch:
+  `Technology!CG14` computes 1 from exact-GT inputs where Excel computed 0 — transpiled AST ≠
+  workbook formula; next campaign, see the residual-fidelity issue). The canonical per-sheet-eval
+  cluster child OOMs a 16 GB heap after 61 min on a 31 GB box (#33 = memory-bound; duplicate GT
+  copy + 4.7M-string `_written` set + per-cell snapshots identified as the avoidable overhead).
+  See `docs/releases/v0.3.0.md` and the #33 thread.
+- README refreshed (`ete lite`, templates, `--reuse-parse`, **Correctness & honesty** section,
+  three-ways-to-compute, test counts); package.json `0.2.0 → 0.3.0` + repository URL fixed
+  (pointed at a nonexistent org); release notes + boothe.io post drafted.
+
 ## 2026-06-09 — #57 structural root FOUND & FIXED: calamine $-blind shared-formula expansion corrupted 1.75M A-1 cells
 
 **The trace.** A one-pass warm-GT recompute (`ctx` seeded with all 5.8M ground-truth values,
