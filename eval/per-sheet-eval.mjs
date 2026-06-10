@@ -47,8 +47,12 @@ const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '8192');
 const MAX_SHEET_SIZE_MB = parseInt(process.env.MAX_SHEET_SIZE_MB || '150');
 // Per-task child timeout. A real cross-sheet cluster (17 sheets, millions of
 // formulas, seeded from a multi-GB ground truth) needs more than the per-sheet
-// default — raise EVAL_TIMEOUT_MS for the single-pass cone measurement.
+// default, so cluster tasks get their own ceiling: a warm-seeded real cluster is
+// ~2-3 passes at ~10-15 min/pass, and the #61 divergence detector bounds a
+// hopeless cluster's churn — 60 min covers the healthy case without letting a
+// stuck child run forever.
 const EVAL_TIMEOUT_MS = parseInt(process.env.EVAL_TIMEOUT_MS || '300000');
+const EVAL_CLUSTER_TIMEOUT_MS = parseInt(process.env.EVAL_CLUSTER_TIMEOUT_MS || String(Math.max(EVAL_TIMEOUT_MS, 3600000)));
 
 // ── Validate inputs ────────────────────────────────────────────────────────
 const gtPath = join(chunkedDir, '_ground-truth.json');
@@ -80,7 +84,7 @@ async function main() {
   console.log(`  Ground truth: ${totalCells} cells`);
 
   // Group ground truth by sheet
-  const gtBySheet = {};
+  let gtBySheet = {};
   for (const [addr, val] of Object.entries(allGt)) {
     const bang = addr.indexOf('!');
     if (bang < 0) continue;
@@ -169,11 +173,12 @@ async function main() {
   }
   const namedCells = namedOfInterest.map(o => o.cell);
 
-  // Write full ground truth to a temp file for child processes
+  // Children read the full ground truth straight from the build's own file —
+  // re-serializing a ~5.8M-cell copy into _eval_tmp doubled parent peak memory
+  // (a ~170MB transient string) and disk for no isolation benefit.
   const tmpDir = join(chunkedDir, '_eval_tmp');
   await mkdir(tmpDir, { recursive: true });
-  const gtTmpPath = join(tmpDir, '_gt_full.json');
-  await writeFile(gtTmpPath, JSON.stringify(allGt));
+  const gtTmpPath = gtPath;
 
   // Build task list. Cross-sheet circular clusters become a SINGLE task (one
   // convergence, all members scored); standalone sheets stay one task each.
@@ -190,20 +195,30 @@ async function main() {
       continue;
     }
 
-    // Check module size
+    const cluster = clusterSheetSet.has(entry.name) ? sheetClusters.find(c => c.includes(entry.name)) : null;
+
+    // Check module size — STANDALONE sheets only. A cluster member must NEVER be
+    // size-skipped: the cluster would converge WITHOUT it to a silently wrong
+    // fixed point and every member would be scored against garbage. An oversized
+    // member is included loudly — if the import then OOMs, the cluster reports
+    // an honest crash instead of a confident wrong number.
     try {
       const modStat = await stat(modulePath);
       const sizeMB = modStat.size / (1024 * 1024);
       if (sizeMB > MAX_SHEET_SIZE_MB) {
-        skipped.push({ name: entry.name, reason: `module too large (${sizeMB.toFixed(0)}MB > ${MAX_SHEET_SIZE_MB}MB limit)` });
-        continue;
+        if (cluster) {
+          console.log(`  ! ${entry.name}: ${sizeMB.toFixed(0)}MB exceeds the ${MAX_SHEET_SIZE_MB}MB cap but is a cluster member — included anyway (a partial cluster is a silently wrong fixed point).`);
+        } else {
+          skipped.push({ name: entry.name, reason: `module too large (${sizeMB.toFixed(0)}MB > ${MAX_SHEET_SIZE_MB}MB limit)` });
+          continue;
+        }
       }
     } catch {
       skipped.push({ name: entry.name, reason: 'stat failed' });
       continue;
     }
 
-    if (SKIP_CLUSTERS && clusterSheetSet.has(entry.name)) {
+    if (SKIP_CLUSTERS && cluster) {
       skipped.push({ name: entry.name, reason: 'circular cluster (--skip-clusters; needs single-pass orchestrator eval)' });
       continue;
     }
@@ -222,6 +237,7 @@ async function main() {
     // Write per-sheet GT to temp
     const sheetGtPath = join(tmpDir, `_gt_${sanitized}.json`);
     await writeFile(sheetGtPath, JSON.stringify(sampleGt));
+    entry.gt = null; // sampled to disk — free the parent's per-sheet copy
 
     const member = {
       sheetName: entry.name,
@@ -235,7 +251,6 @@ async function main() {
 
     // Route cluster members into one shared cluster task; standalone sheets each
     // get their own task.
-    const cluster = clusterSheetSet.has(entry.name) ? sheetClusters.find(c => c.includes(entry.name)) : null;
     if (cluster) {
       const key = cluster.join('|');
       if (!clusterTasks.has(key)) {
@@ -250,6 +265,13 @@ async function main() {
   // Append one task per cluster (after standalone sheets, so the largest
   // standalone sheets still start first under the concurrency window).
   for (const ct of clusterTasks.values()) tasks.push(ct);
+
+  // The grouped-by-sheet GT (a second full set of ~N-million property slots) is
+  // no longer needed — every evaluated sheet's sample is on disk. Free it so the
+  // parent holds ONE full GT copy (allGt, still needed for seed scoping and the
+  // named-output report) instead of two.
+  for (const e of sheetEntries) e.gt = null;
+  gtBySheet = null;
 
   // GT-seed scoping (#33): give each cluster child only the GT it needs — its
   // external reads (+ a warm start for its own cells) — instead of the whole
@@ -328,17 +350,18 @@ import { readFile } from 'fs/promises';
 import { compute } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 ${clusterImports}
 
-const allGt = JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8'));
 const sheetGt = JSON.parse(await readFile(${JSON.stringify(sheetGtPath.replace(/\\/g, '/'))}, 'utf8'));
 
 const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
 const ctx = {
-  values: {},
-  _written: new Set(),  // cells written by compute() — the cluster convergence diffs only these
+  // Seeded with the full ground truth (upstream sheet values) — parsed DIRECTLY
+  // into ctx.values. The old pattern (parse allGt, then copy every entry in a
+  // loop) held TWO full copies of a multi-GB object; this holds one.
+  values: JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8')),
   _sheetConvergence: {},  // intra-sheet cycle telemetry sink (PR #52): an emitted sheet with an internal convergence loop writes ctx._sheetConvergence[SHEET_NAME]; without this it throws "Cannot set properties of undefined"
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
-  set(addr, value) { this.values[addr] = value; this._written.add(addr); },
+  set(addr, value) { this.values[addr] = value; },
   _parseRange(rangeStr) {
     const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
     if (!m) return null;
@@ -367,11 +390,6 @@ const ctx = {
     return result;
   }
 };
-
-// Seed context with full ground truth (upstream sheet values)
-for (const [addr, val] of Object.entries(allGt)) {
-  ctx.values[addr] = val;
-}
 
 // Run compute (with convergence loop for circular clusters)
 try {
@@ -471,16 +489,17 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
 import { readFile } from 'fs/promises';
 ${importLines}
 
-const allGt = JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8'));
-
 const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
 const ctx = {
-  values: {},
-  _written: new Set(),
+  // Seeded with the (scoped or full) ground truth, parsed DIRECTLY into
+  // ctx.values — single copy. The old parse-allGt-then-copy-every-entry pattern
+  // held TWO full copies of a multi-GB object and was one leg of the 16GB OOM
+  // on real-model clusters.
+  values: JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8')),
   _sheetConvergence: {},  // intra-sheet cycle telemetry sink (PR #52): an emitted sheet with an internal convergence loop writes ctx._sheetConvergence[SHEET_NAME]; without this it throws "Cannot set properties of undefined"
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
-  set(addr, value) { this.values[addr] = value; this._written.add(addr); },
+  set(addr, value) { this.values[addr] = value; },
   _parseRange(rangeStr) {
     const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
     if (!m) return null;
@@ -501,61 +520,80 @@ const ctx = {
   }
 };
 
-// Seed context with full ground truth (upstream sheet values)
-for (const [addr, val] of Object.entries(allGt)) ctx.values[addr] = val;
-
-// ONE convergence loop over ALL cluster members. Diff only the cells the cluster
-// wrote (ctx._written). A non-finite cell (Inf/NaN from a waterfall/coverage
-// formula dividing by a not-yet-converged 0) is recorded and stops the loop
-// rather than poisoning the delta — converged stays false (honest contract).
+// ONE convergence loop over ALL cluster members, mirroring the SHIPPED engine's
+// emitted cluster loop (chunked_emitter.rs) decision-for-decision so this harness
+// accepts a fixed point on exactly the pass the engine does: the same SAMPLED
+// delta surface (every numeric cell on the cluster's OWN sheets plus a bounded
+// strided safety net over the rest of ctx, captured once after the first pass),
+// the same parallel _before baseline array (undefined slots force an Infinity
+// delta, so a first pass can never falsely converge), the same transient-tolerant
+// non-finite rules (#57), and the same divergence detection and churn caps (#61).
+// The old harness surface — a _written Set of ~4.7M fresh strings plus a per-cell
+// prevSnapshot object — was BOTH a 16GB-OOM leg on real-model clusters AND subtly
+// non-lockstep: it diffed and NaN-filled cells the cluster wrote onto NON-member
+// sheets (the engine does neither) and skipped never-written GT input cells on
+// member sheets (the engine NaN-fills those too on non-convergence).
+// NOTE: comments here must avoid backticks (this is inside a template literal).
 const clusterFns = [${members.map((_, i) => `compute_${i}`).join(', ')}];
 const MAX_ITER = 200, TOL = 1e-6;
-const prevSnapshot = {};
+const _clusterSet = new Set(${JSON.stringify(clusterSheets)});
+const _SAMPLE_SAFETY_CAP = 4000;
+let _sampleKeys = null, _before = null;
 const _deltaHist = [];
 let _iters = 0, _conv = false, _nonFinite = null, _err = null, _nonFiniteSettled = 0;
 try {
   for (let _ci = 0; _ci < MAX_ITER; _ci++) {
     _iters = _ci + 1;
     for (const fn of clusterFns) fn(ctx);
+    const v = ctx.values;
+    if (_sampleKeys === null) {
+      // First pass done: the cluster's cells now exist. Capture the sample.
+      _sampleKeys = [];
+      for (const key in v) {
+        const _bang = key.indexOf('!');
+        if (_bang > 0 && _clusterSet.has(key.slice(0, _bang)) && typeof v[key] === 'number') _sampleKeys.push(key);
+      }
+      const _allKeys = Object.keys(v);
+      const _stride = Math.max(1, Math.floor(_allKeys.length / _SAMPLE_SAFETY_CAP));
+      for (let i = 0; i < _allKeys.length; i += _stride) {
+        if (typeof v[_allKeys[i]] === 'number') _sampleKeys.push(_allKeys[i]);
+      }
+      _before = new Array(_sampleKeys.length);
+      // No observable cluster cells: we cannot confirm a fixed point, so do not
+      // let an empty scan read maxDelta=0 and falsely converge on pass 0.
+      if (_sampleKeys.length === 0) break; // converged stays false (honest)
+    }
     let maxDelta = 0, anyNonFinite = false;
-    for (const k of ctx._written) {
-      const v = ctx.values[k];
-      if (typeof v !== 'number') continue;
-      // TRANSIENT-TOLERANT non-finite handling (#57) — mirrors chunked_emitter.rs so
-      // the fast eval harness and the shipped engine agree. A non-finite written cell
-      // (Inf/NaN from a divide-by-cold-0 denominator that has not warmed yet) does NOT
-      // break the loop the way the old "_ci>=2" veto did (which quit before the
-      // denominator warmed). Exclude it from the delta and keep iterating; judge
-      // non-finiteness only at the fixed point.
-      // Store the non-finite value as the baseline (mirrors the engine storing _before[i]
-      // = _cur): when this cell WARMS to a finite number its delta becomes
-      // |finite - nonfinite| = non-finite, forcing a non-converging pass — so this harness
-      // accepts a fixed point on exactly the same pass the engine does (true lockstep, not
-      // just loop shape). NOTE: comments here must avoid backticks (this is inside a
-      // template literal).
-      if (!Number.isFinite(v)) { anyNonFinite = true; _nonFinite = k; prevSnapshot[k] = v; continue; }
-      const prev = prevSnapshot[k];
-      // First observation (unset) forces a non-converging delta, like the engine's
-      // typeof-not-number guard — NOT the old prevSnapshot||0, which let a small first
-      // value look converged and diverged from the engine's pass count.
-      if (typeof prev !== 'number') { maxDelta = Infinity; prevSnapshot[k] = v; continue; }
-      const d = Math.abs(v - prev);
+    for (let i = 0; i < _sampleKeys.length; i++) {
+      const _cur = v[_sampleKeys[i]];
+      if (typeof _cur !== 'number') continue;
+      // TRANSIENT-TOLERANT non-finite handling (#57): a non-finite cell (Inf/NaN
+      // from a divide-by-cold-0 denominator that has not warmed yet) is excluded
+      // from the delta, remembered, and the loop KEEPS iterating; non-finiteness
+      // is judged only at the fixed point. Storing it as the baseline means a
+      // WARMING cell produces a non-finite delta next pass, forcing another pass
+      // exactly like the engine.
+      if (!Number.isFinite(_cur)) { anyNonFinite = true; _nonFinite = _sampleKeys[i]; _before[i] = _cur; continue; }
+      const _b = _before[i];
+      // A cell going undefined -> number is a change, not convergence.
+      if (typeof _b !== 'number') { maxDelta = Infinity; _before[i] = _cur; continue; }
+      const d = Math.abs(_cur - _b);
       if (d > maxDelta) maxDelta = d;
-      prevSnapshot[k] = v;
+      _before[i] = _cur;
     }
     if (anyNonFinite) {
       // Keep iterating so a TRANSIENT cold-0 can warm. Bound the churn (#61): stop fast
       // when the FINITE surface has SETTLED while a cell stays non-finite (STRUCTURAL
-      // #DIV/0! whose finite inputs settled, so it will never warm); a generous absolute
-      // cap also covers a divergent+persistent-non-finite cluster (whose finite surface
-      // never settles, so the settled test never fires). Mirrors chunked_emitter.rs.
+      // div-by-zero whose finite inputs settled, so it will never warm); a generous
+      // absolute cap also covers a divergent+persistent-non-finite cluster (whose finite
+      // surface never settles, so the settled test never fires). Mirrors chunked_emitter.rs.
       _deltaHist.length = 0;
       _nonFiniteSettled++;
-      if ((_ci > 0 && maxDelta < TOL && _nonFiniteSettled >= 4) || _nonFiniteSettled >= 50) break;
+      if ((maxDelta < TOL && _nonFiniteSettled >= 4) || _nonFiniteSettled >= 50) break;
       continue;
     }
     _nonFiniteSettled = 0;
-    if (_ci > 0 && maxDelta < TOL) { _conv = true; _nonFinite = null; break; }
+    if (maxDelta < TOL) { _conv = true; _nonFinite = null; break; }
     // Divergence detection (#61 — mirrors chunked_emitter.rs): a divergent (monotone-up)
     // or stuck-non-zero (flat-hot) cluster breaks early instead of churning to MAX_ITER
     // and then NaN-filling. A genuine contraction shrinks the delta, so it never matches.
@@ -571,14 +609,20 @@ try {
   }
 } catch (e) { _err = e.message; }
 
-// Honesty contract (mirrors chunked_emitter.rs NaN-fill on !_conv): a cluster that did
-// NOT converge is not a fixed point — NaN-fill the cells it wrote so compareOne and the
-// named-output harvest below report NaN (detectably unusable) instead of leaving the
-// warm-seeded GT values, which would over-report accuracy on a cluster the SHIPPED engine
-// (eng.run) NaN-fills. Without this the fast harness and the engine disagree on a
-// non-converged returns/MIP cluster (the lite/cone accuracy numbers read from here).
+// Honesty contract (mirrors chunked_emitter.rs NaN-fill on !_conv): a cluster that
+// did NOT converge is not a fixed point — NaN-fill the numeric cells on the
+// cluster's OWN sheets (the engine's exact surface) so compareOne and the
+// named-output harvest below report NaN (detectably unusable) instead of leaving
+// the warm-seeded GT values, which would over-report accuracy on a cluster the
+// SHIPPED engine (eng.run) NaN-fills. The lite/cone accuracy numbers read from here.
 if (!_conv) {
-  for (const k of ctx._written) { if (typeof ctx.values[k] === 'number') ctx.values[k] = NaN; }
+  for (const key in ctx.values) {
+    const _b = key.indexOf('!');
+    if (_b > 0 && _clusterSet.has(key.slice(0, _b)) && typeof ctx.values[key] === 'number'
+        && !(ctx._locked && ctx._locked.has(key))) {
+      ctx.values[key] = NaN;
+    }
+  }
 }
 
 const compareOne = (sheetGt) => {
@@ -620,7 +664,7 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
       const { stdout: evalOut } = await execAsync(
         'node',
         [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript],
-        { timeout: EVAL_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
+        { timeout: EVAL_CLUSTER_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
       );
       const out = JSON.parse(evalOut);
       const elapsed = Date.now() - evalStart;
