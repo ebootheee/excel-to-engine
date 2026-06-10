@@ -229,6 +229,66 @@ console.log('Testing: EDATE clamp, EOMONTH last-day/leap-year, DATE integer seri
   cleanup();
 }
 
+// ---------------------------------------------------------------------------
+// YEAR/MONTH/DAY timezone independence. The old lowering used LOCAL-time
+// getters (`new Date((s - 25569) * 86400000).getDate()`), so any runtime west
+// of UTC read every serial one day early: DAY(Jun-30-2023) = 29, and the
+// DATE(YEAR(x),MONTH(x),DAY(x)) reconstruction idiom (live on A-1
+// Valuation!G7) rebuilt the date one serial low — shifting every date-keyed
+// COUNTIFS/SUMIFS window downstream by a day. The engine must give the same
+// (Excel-exact) answer in every timezone, so we run it in CHILD processes with
+// TZ pinned west (America/Denver) and east (Pacific/Auckland) of UTC.
+// ---------------------------------------------------------------------------
+console.log('Testing: YEAR/MONTH/DAY are timezone-independent (UTC serial math)');
+{
+  const JUN30 = ser(2023, 6, 30); // 45107
+  const TZS = { '!ref': 'A1:B5' };
+  TZS['A1'] = { t: 'n', v: JUN30 };
+  TZS['B1'] = { t: 'n', v: 0, f: 'DAY(A1)' };
+  TZS['B2'] = { t: 'n', v: 0, f: 'MONTH(A1)' };
+  TZS['B3'] = { t: 'n', v: 0, f: 'YEAR(A1)' };
+  // The Valuation!G7 idiom: rebuild a date from its own parts.
+  TZS['B4'] = { t: 'n', v: 0, f: 'DATE(YEAR(A1),MONTH(A1),DAY(A1))' };
+  TZS['A5'] = { t: 'n', v: ser(2024, 3, 1) };
+  TZS['B5'] = { t: 'n', v: 0, f: 'DAY(A5)' }; // month boundary, leap year
+
+  // Build once; run the engine in TZ-pinned children.
+  const wb = { SheetNames: ['TZS'], Sheets: { TZS } };
+  const tmp = mkdtempSync(join(tmpdir(), 'date47tz-'));
+  writeFileSync(join(tmp, 'm.xlsx'), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  execFileSync(PARSER, [join(tmp, 'm.xlsx'), join(tmp, 'out'), '--chunked'], { encoding: 'utf-8', stdio: 'pipe' });
+
+  const childScript = `
+    import e from ${JSON.stringify(pathToFileURL(join(tmp, 'out', 'chunked', 'engine.js')).href)};
+    const r = e.run();
+    // Hazard probe: what the OLD local-time lowering would compute for DAY in
+    // THIS child's TZ (proves the negative control actually discriminates).
+    const oldDay = new Date((${JUN30} - 25569) * 86400000).getDate();
+    process.stdout.write(JSON.stringify({ oldDay,
+      d: r.values['TZS!B1'], m: r.values['TZS!B2'], y: r.values['TZS!B3'],
+      rebuilt: r.values['TZS!B4'], leapD: r.values['TZS!B5'] }));
+  `;
+  const runInTz = (tz) => JSON.parse(execFileSync(
+    process.execPath, ['--input-type=module', '-e', childScript],
+    { encoding: 'utf-8', env: { ...process.env, TZ: tz }, stdio: ['ignore', 'pipe', 'pipe'] }
+  ));
+
+  const west = runInTz('America/Denver');
+  // Negative control: in a west-of-UTC runtime the OLD lowering reads Jun 30 as
+  // 29 — if this ever stops holding, the test is no longer exercising the hazard.
+  assert(west.oldDay === 29, `negative control: old local-time DAY() reads Jun-30 as 29 in America/Denver (got ${west.oldDay})`);
+  assert(west.d === 30, `DAY(Jun-30-2023) = 30 in a west-of-UTC runtime (got ${west.d})`);
+  assert(west.m === 6, `MONTH(Jun-30-2023) = 6 in a west-of-UTC runtime (got ${west.m})`);
+  assert(west.y === 2023, `YEAR(Jun-30-2023) = 2023 in a west-of-UTC runtime (got ${west.y})`);
+  assert(west.rebuilt === JUN30, `DATE(YEAR,MONTH,DAY) round-trips the serial exactly (got ${west.rebuilt}, want ${JUN30})`);
+  assert(west.leapD === 1, `DAY(Mar-1-2024) = 1 in a west-of-UTC runtime (got ${west.leapD})`);
+
+  const east = runInTz('Pacific/Auckland');
+  assert(east.d === 30 && east.rebuilt === JUN30, `east-of-UTC runtime agrees (DAY=${east.d}, rebuilt=${east.rebuilt})`);
+
+  rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log('');
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
 process.exit(failed > 0 ? 1 : 0);

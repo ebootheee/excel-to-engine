@@ -566,9 +566,14 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         // ----------------------------------------------------------------
         "TODAY" => "/* TODAY */ 0".to_string(),
         "NOW" => "/* NOW */ 0".to_string(),
-        "YEAR" => format!("/* YEAR */ new Date(({} - 25569) * 86400000).getFullYear()", arg(0)),
-        "MONTH" => format!("/* MONTH */ (new Date(({} - 25569) * 86400000).getMonth() + 1)", arg(0)),
-        "DAY" => format!("/* DAY */ new Date(({} - 25569) * 86400000).getDate()", arg(0)),
+        // YEAR/MONTH/DAY must use the UTC/epoch-quirk-aware serial helper. The old
+        // `new Date((s - 25569) * 86400000).getMonth()` used LOCAL-time getters, so
+        // any runtime west of UTC read every serial one day early (DAY(Jun-30)=29),
+        // shifting date-keyed COUNTIFS/SUMIFS windows and DATE(y,MONTH(x),DAY(x))
+        // reconstructions by one day.
+        "YEAR" => format!("/* YEAR */ _serialToYMD({}).y", arg(0)),
+        "MONTH" => format!("/* MONTH */ _serialToYMD({}).m", arg(0)),
+        "DAY" => format!("/* DAY */ _serialToYMD({}).d", arg(0)),
         // DATE/EDATE/EOMONTH return INTEGER Excel day-serials via calendar-exact
         // helpers. The old `*365.25`/`*30.44` float approximation drifted up to
         // ~2.88 days/year, breaking exact-equality SUMIFS/MINIFS date-key lookups
