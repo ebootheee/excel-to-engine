@@ -13,8 +13,8 @@ use crate::transpiler::{transpile, TranspileConfig};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Write;
-use std::path::Path;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -28,6 +28,7 @@ pub fn emit_chunked(
     workbook: &WorkbookData,
     output_dir: &Path,
     lazy_engine: bool,
+    max_module_bytes: usize,
 ) -> Result<String, String> {
     let t_start = Instant::now();
 
@@ -84,19 +85,37 @@ pub fn emit_chunked(
     // sequential (heavy) passes below. All captures are Sync, so this is usable
     // as a rayon map operator.
     let emit_one = |partition: &SheetPartition| -> Result<(String, usize, usize), String> {
-        let file_name = format!("{}.mjs", sanitize_sheet_name(&partition.name));
-        let path = sheets_dir.join(&file_name);
+        let base = sanitize_sheet_name(&partition.name);
+        let file_name = format!("{}.mjs", base);
         let n_formulas = partition.formula_cells.len();
         // Stream the module straight to the file — no full-module String ever
         // materializes (the #33 fix; a monster sheet was held twice via Vec+join).
-        let file = fs::File::create(&path)
-            .map_err(|e| format!("Failed to create {}: {}", file_name, e))?;
-        let mut bw = std::io::BufWriter::with_capacity(1 << 20, file);
-        write_sheet_module(partition, &mut bw)
+        // The PartEmitter additionally rotates to a new part module whenever the
+        // current file crosses max_module_bytes (#46): V8 fatally allocates ~2x a
+        // module's bytes to UTF-16-decode it at import, so a ~300MB monster sheet
+        // crashed node before compute ever ran. A sheet that fits under the cap is
+        // emitted byte-identically to the old single-file form.
+        let mut pe = PartEmitter::new(
+            &sheets_dir,
+            &base,
+            &partition.name,
+            sheet_deps_js(partition),
+            max_module_bytes,
+        )
+        .map_err(|e| format!("Failed to create {}: {}", file_name, e))?;
+        write_sheet_module(partition, &mut pe)
             .map_err(|e| format!("Failed to write {}: {}", file_name, e))?;
-        bw.flush().map_err(|e| format!("Failed to flush {}: {}", file_name, e))?;
-        drop(bw);
-        let code_len = fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+        let (n_parts, code_len) = pe
+            .finish()
+            .map_err(|e| format!("Failed to finalize {}: {}", file_name, e))?;
+        if n_parts > 1 {
+            eprintln!(
+                "\n[chunked]   {} row-chunked into {} parts ({} cap per part)",
+                file_name,
+                n_parts,
+                human_size(max_module_bytes)
+            );
+        }
         let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
         if done % 5 == 0 || done == total_sheets {
             eprint!("\r[chunked]   [{}/{}] modules written...", done, total_sheets);
@@ -260,6 +279,229 @@ pub fn emit_chunked(
 // Per-sheet module generation
 // ---------------------------------------------------------------------------
 
+/// The shared runtime-helpers import line every sheet module (and every row-chunk
+/// continuation part) carries. Kept as one constant so the part header can never
+/// drift from the main module header.
+const HELPERS_IMPORT: &str = "import { _div, _aggNum, _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _serialToYMD, _edate, _eomonth, _yearfrac, _offsetAddr, _dynRange } from './_helpers.mjs';";
+
+/// The `SHEET_DEPENDENCIES` array literal for a sheet, shared by the module
+/// header and the row-chunk facade.
+fn sheet_deps_js(partition: &SheetPartition<'_>) -> String {
+    partition
+        .sheet_dependencies
+        .iter()
+        .map(|d| format!("\"{}\"", escape_js_string(d)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Sink that `write_sheet_module` streams into. `checkpoint()` is called at safe
+/// split points — statement boundaries in the linear regions of compute(), never
+/// inside a convergence loop — and may rotate the underlying file (row-chunking,
+/// #46). The default is a no-op so plain writers (unit tests) behave as before.
+trait ModuleSink: Write {
+    fn checkpoint(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A ModuleSink over any plain writer — never rotates (single-file emission).
+/// Production emission always goes through PartEmitter (cap 0 = never rotate);
+/// this exists for the in-memory unit tests.
+#[cfg_attr(not(test), allow(dead_code))]
+struct PlainSink<W: Write>(W);
+
+impl<W: Write> Write for PlainSink<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+impl<W: Write> ModuleSink for PlainSink<W> {}
+
+/// Row-chunking sink (#46). Streams the sheet module to `<base>.mjs`; whenever
+/// `checkpoint()` finds the current file past `cap` bytes it closes the current
+/// `compute()` and continues in `<base>.partNNN.mjs` (renaming the in-progress
+/// `<base>.mjs` to `<base>.part000.mjs` on the first rotation). `finish()` then
+/// writes a small `<base>.mjs` facade that imports each part and invokes them in
+/// order — ONE logical compute(), identical write sequence, so engine.js,
+/// per-sheet-eval, cone emission and every other consumer import the sheet by
+/// the same path as before. A sheet that never crosses the cap stays a single
+/// byte-identical `<base>.mjs` (cap = 0 disables rotation entirely).
+struct PartEmitter {
+    sheets_dir: PathBuf,
+    base: String,       // sanitized file base, e.g. "Debt"
+    sheet_name: String, // raw sheet name (facade exports / part SHEET_NAME)
+    deps_js: String,
+    cap: usize,
+    parts: Vec<String>, // part file names in emission order
+    cur: Option<BufWriter<fs::File>>,
+    cur_bytes: usize,
+    total_bytes: usize,
+}
+
+impl PartEmitter {
+    fn new(
+        sheets_dir: &Path,
+        base: &str,
+        sheet_name: &str,
+        deps_js: String,
+        cap: usize,
+    ) -> std::io::Result<PartEmitter> {
+        let first = format!("{}.mjs", base);
+        let f = fs::File::create(sheets_dir.join(&first))?;
+        Ok(PartEmitter {
+            sheets_dir: sheets_dir.to_path_buf(),
+            base: base.to_string(),
+            sheet_name: sheet_name.to_string(),
+            deps_js,
+            cap,
+            parts: vec![first],
+            cur: Some(BufWriter::with_capacity(1 << 20, f)),
+            cur_bytes: 0,
+            total_bytes: 0,
+        })
+    }
+
+    /// Close the current part's compute() and continue in the next part module.
+    fn rotate(&mut self) -> std::io::Result<()> {
+        writeln!(self, "}}")?;
+        if let Some(mut w) = self.cur.take() {
+            w.flush()?;
+        }
+        // First rotation: the in-progress <base>.mjs becomes part000 and the
+        // facade takes the <base>.mjs name at finish().
+        let facade = format!("{}.mjs", self.base);
+        if self.parts.len() == 1 && self.parts[0] == facade {
+            let part0 = format!("{}.part000.mjs", self.base);
+            let to = self.sheets_dir.join(&part0);
+            // A stale part from a previous build would make Windows' rename fail.
+            let _ = fs::remove_file(&to);
+            fs::rename(self.sheets_dir.join(&facade), &to)?;
+            self.parts[0] = part0;
+        }
+        let next = format!("{}.part{:03}.mjs", self.base, self.parts.len());
+        let f = fs::File::create(self.sheets_dir.join(&next))?;
+        self.cur = Some(BufWriter::with_capacity(1 << 20, f));
+        self.parts.push(next.clone());
+        self.cur_bytes = 0;
+        writeln!(
+            self,
+            "// sheets/{} — AUTO-GENERATED by rust-parser (chunked mode)",
+            next
+        )?;
+        let cont_line = format!(
+            "// Row-chunked continuation of \"{}\" (#46) — invoked in order by the {}.mjs",
+            escape_js_string(&self.sheet_name),
+            self.base
+        );
+        writeln!(self, "{}", cont_line)?;
+        writeln!(
+            self,
+            "// facade. Splits happen only at statement boundaries, never inside a convergence loop."
+        )?;
+        writeln!(self, "{}", HELPERS_IMPORT)?;
+        writeln!(
+            self,
+            "const SHEET_NAME = \"{}\";",
+            escape_js_string(&self.sheet_name)
+        )?;
+        writeln!(self)?;
+        writeln!(self, "export function compute(ctx) {{")?;
+        Ok(())
+    }
+
+    /// Flush the last part, write the facade when the sheet was split, and clean
+    /// up stale part files a previous (differently-sized) build may have left —
+    /// consumers sweep `sheets/*.mjs`, so a stale part would inject stale cells.
+    /// Returns (part count, total bytes across parts + facade).
+    fn finish(mut self) -> std::io::Result<(usize, usize)> {
+        if let Some(mut w) = self.cur.take() {
+            w.flush()?;
+        }
+        let facade = format!("{}.mjs", self.base);
+        if self.parts.len() > 1 {
+            let mut s = String::new();
+            s.push_str(&format!(
+                "// sheets/{} — AUTO-GENERATED by rust-parser (chunked mode)\n",
+                facade
+            ));
+            s.push_str("// Row-chunked facade (#46): this sheet's transpiled body exceeded the per-module\n");
+            s.push_str("// byte cap (--max-module-mb), so its compute body is split across the part\n");
+            s.push_str("// modules below and invoked in order — ONE logical compute(), identical write\n");
+            s.push_str("// sequence, splits only at statement boundaries outside any convergence loop.\n");
+            s.push_str("// Import this module exactly as before; the parts are an implementation detail.\n\n");
+            s.push_str(&format!(
+                "export const SHEET_NAME = \"{}\";\n",
+                escape_js_string(&self.sheet_name)
+            ));
+            s.push_str(&format!(
+                "export const SHEET_DEPENDENCIES = [{}];\n",
+                self.deps_js
+            ));
+            let parts_js: Vec<String> = self.parts.iter().map(|p| format!("\"{}\"", p)).collect();
+            s.push_str(&format!(
+                "export const SHEET_PARTS = [{}];\n\n",
+                parts_js.join(", ")
+            ));
+            for (i, p) in self.parts.iter().enumerate() {
+                s.push_str(&format!("import {{ compute as _part{} }} from './{}';\n", i, p));
+            }
+            s.push_str("\nexport function compute(ctx) {\n");
+            for i in 0..self.parts.len() {
+                s.push_str(&format!("  _part{}(ctx);\n", i));
+            }
+            s.push_str("}\n");
+            fs::write(self.sheets_dir.join(&facade), &s)?;
+            self.total_bytes += s.len();
+        }
+        // Remove stale higher-numbered parts (previous build split this sheet
+        // into more parts, or split it when this build did not).
+        let mut idx = if self.parts[0] == facade { 0 } else { self.parts.len() };
+        loop {
+            let stale = self
+                .sheets_dir
+                .join(format!("{}.part{:03}.mjs", self.base, idx));
+            if !stale.exists() {
+                break;
+            }
+            let _ = fs::remove_file(&stale);
+            idx += 1;
+        }
+        Ok((self.parts.len(), self.total_bytes))
+    }
+}
+
+impl Write for PartEmitter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let w = self
+            .cur
+            .as_mut()
+            .expect("PartEmitter: write after finish()");
+        let n = w.write(buf)?;
+        self.cur_bytes += n;
+        self.total_bytes += n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self.cur.as_mut() {
+            Some(w) => w.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl ModuleSink for PartEmitter {
+    fn checkpoint(&mut self) -> std::io::Result<()> {
+        if self.cap > 0 && self.cur_bytes >= self.cap {
+            self.rotate()?;
+        }
+        Ok(())
+    }
+}
+
 /// Stream the JavaScript module code for a single sheet directly to `w`.
 ///
 /// Previously this built a `Vec<String>` of every line and `.join("\n")`d it
@@ -271,7 +513,12 @@ pub fn emit_chunked(
 ///
 /// Output is line-for-line identical to the old `join("\n")` form (trailing
 /// newline after the closing brace).
-fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> std::io::Result<()> {
+///
+/// `w.checkpoint()` is invoked before each statement in the linear regions
+/// (inputs, linear formulas, pre-cycle, post-cycle) — a rotating sink may split
+/// the module there (#46). The convergence-loop block is indivisible: one
+/// checkpoint before it, none inside.
+fn write_sheet_module(partition: &SheetPartition<'_>, w: &mut dyn ModuleSink) -> std::io::Result<()> {
     let sheet_name = &partition.name;
 
     // Header
@@ -282,16 +529,11 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     // Exports: SHEET_NAME, SHEET_DEPENDENCIES
     writeln!(w, "export const SHEET_NAME = \"{}\";", escape_js_string(sheet_name))?;
 
-    let deps_arr: Vec<String> = partition
-        .sheet_dependencies
-        .iter()
-        .map(|d| format!("\"{}\"", escape_js_string(d)))
-        .collect();
-    writeln!(w, "export const SHEET_DEPENDENCIES = [{}];", deps_arr.join(", "))?;
+    writeln!(w, "export const SHEET_DEPENDENCIES = [{}];", sheet_deps_js(partition))?;
     writeln!(w)?;
 
     // Runtime helpers for Excel functions — import from shared module
-    writeln!(w, "{}", "import { _div, _aggNum, _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _serialToYMD, _edate, _eomonth, _yearfrac, _offsetAddr, _dynRange } from './_helpers.mjs';")?;
+    writeln!(w, "{}", HELPERS_IMPORT)?;
     writeln!(w)?;
 
     // compute(ctx) function
@@ -305,6 +547,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     if !partition.input_cells.is_empty() {
         writeln!(w, "  // ── Literal / input cells ──")?;
         for cell in &partition.input_cells {
+            w.checkpoint()?;
             let qualified = format!("{}!{}", sheet_name, cell.address);
             let val_js = cell_value_to_js(&cell.value);
             writeln!(w, "  ctx.set(\"{}\", {});", qualified, val_js)?;
@@ -345,6 +588,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
             // No cycles — emit linearly
             writeln!(w, "  // ── Formula cells ──")?;
             for (addr, expr) in &cell_exprs {
+                w.checkpoint()?;
                 writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
             }
         } else {
@@ -377,10 +621,16 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
             if !pre.is_empty() {
                 writeln!(w, "  // ── Formula cells (pre-cycle) ──")?;
                 for (addr, expr) in &pre {
+                    w.checkpoint()?;
                     writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
                 }
                 writeln!(w)?;
             }
+
+            // The convergence loop is INDIVISIBLE — a rotating sink may split
+            // before it, never inside (the loop scaffolding, cycle re-evaluation,
+            // NaN-fill and telemetry must share one function scope).
+            w.checkpoint()?;
 
             // Convergence loop for circular cells.
             //
@@ -489,6 +739,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
                 writeln!(w)?;
                 writeln!(w, "  // ── Formula cells (post-cycle) ──")?;
                 for (addr, expr) in &post {
+                    w.checkpoint()?;
                     writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
                 }
             }
@@ -2088,7 +2339,7 @@ mod tests {
     /// just lets the assertions inspect the generated module in memory.
     fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookData) -> String {
         let mut buf: Vec<u8> = Vec::new();
-        write_sheet_module(partition, &mut buf).expect("writing to a Vec never fails");
+        write_sheet_module(partition, &mut PlainSink(&mut buf)).expect("writing to a Vec never fails");
         String::from_utf8(buf).expect("generated module must be valid UTF-8")
     }
 

@@ -1,5 +1,35 @@
 # excel-to-engine — Changelog
 
+## 2026-06-10 — #33 warm-convergence measured (2 passes, fixed point == GT); per-sheet-eval fits the box; #46 row-chunked modules
+
+- **#33 warm-seed convergence measure (the post-v0.3.1 unblock, posted to #33):** the lean
+  warm-GT probe against the v0.3.1 build (`a1-66c`, identity verified) — **converged=true in
+  exactly 2 passes** (12.2 + 12.6 min/pass, 6GB working set), nonFinite=0 on every pass, fixed
+  point vs GT **290,767/290,781 = 100.00%** (all 14 divergent cells previously documented:
+  Debt fidelity-floor rows + 1 sub-1e-6 jitter + 2 cosmetic TEXT labels), **all 17 cluster-
+  resident named outputs exact**. Pass-2 maxDelta = 5.96e-8 @ Debt!CQ2724 — the documented
+  dust constant churns but sits 2 orders of magnitude below tolerance. The GT fixed point is
+  stable under recompute; only the cold-start pass count remains (deferred overnight run).
+- **PR #69 MERGED** (`9150af5`, FF) — per-sheet-eval cluster child slimmed to the ENGINE's
+  exact loop (it OOMed 16GB/61min on A-1): GT parsed directly into ctx (was two full copies),
+  the `_written` Set (~4.7M fresh strings) + per-cell `prevSnapshot` object replaced by the
+  engine's sampled surface + `_before` baseline array — which is simultaneously a lockstep
+  fix (the old surface diffed/NaN-filled non-member-sheet writes and skipped member-sheet
+  input cells). **A cluster member is never size-skipped** (`MAX_SHEET_SIZE_MB` silently
+  dropped the monster sheets from the cluster → partial-cluster wrong fixed point; regression
+  red pre-fix with `clustersTotal=0`). New `EVAL_CLUSTER_TIMEOUT_MS` (default 60min).
+- **#46 row-chunked sheet modules** (`--max-module-mb=N`, default 64, 0 disables): any sheet
+  module crossing the cap rotates into `<Sheet>.partNNN.mjs` modules behind a same-named
+  facade — ONE logical `compute()`, identical write sequence, statement-boundary splits only,
+  never inside a convergence loop; under-cap sheets stay byte-identical single files; stale
+  parts from previous builds are swept. Fixes the import-time fatal alloc (V8 UTF-16-decodes
+  ~2x the module bytes at import — A-2's ~305MB Debt = the 609,447,784-byte crash). The
+  per-sheet-eval dynamic-read scan now follows facade part imports (red pre-fix: it approved
+  GT-seed scoping for exactly the monster sheets most likely to use OFFSET). Regression
+  `test-row-chunked-modules.mjs` (19 asserts: facade/parts/sizes, loop indivisibility, GT
+  reproduction, split-vs-single identical values, cell-exprs parity, stale-part sweep,
+  eval-scan companion).
+
 ## 2026-06-09 — v0.3.1: #66 CLOSED same day — 5.9M → 266 divergent cells (−99.995%), 14/17 sheets exact
 
 **PR #67 MERGED** (`77b2959`, FF, 3 commits) — all #66 structure-fidelity classes fixed, each

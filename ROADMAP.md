@@ -8,18 +8,20 @@ seed, one pass each): pre-#62 **1/17 clean / ~5.9M** → #62 9/17 / 391k → #64
 the 266 = the documented fidelity floor (250 Debt cells downstream of `=0` gates on half-ULP
 GT dust like −5.96e-8, + 16 sub-1e-6 jitter cells). #47/#57/#66 closed.
 
-Next, in order:
-1. **Re-run the full-cluster convergence measure (#33)** — now unblocked: with 14/17 exact the
-   warm-seeded fixed point should hold (~2 passes × ~12 min). Use the lean probe
-   (`engines/a1-after/diag-cluster-converge.mjs`) first; then a cold `eng.run()` overnight for
-   the true pass count. Watch the Debt float-dust gates — they may inject small churn.
-2. **Slim per-sheet-eval's cluster child** — single GT copy (parse directly into ctx), and
-   never size-skip a CLUSTER member (the default `MAX_SHEET_SIZE_MB=150` silently drops
-   monster modules from the convergence loop). Target: canonical harness fits 31 GB.
-3. **Row-chunk monster modules at emit (#46/#33)** — the 609 MB fatal alloc on A-2 is the
-   UTF-16 decode at module import (~2× the 305 MB source); chunked sub-modules fix #46, shrink
-   per-pass working set, and serve the #33 row-chunk direction. Then the VM measurement day
-   (canonical full-cluster eval + ADR-026 cone re-gate) — see the #33 thread.
+Status (2026-06-10 — all three "next" items executed in one session):
+1. **#33 warm-seed convergence MEASURED ✅** — lean probe vs `a1-66c`: **converged in exactly
+   2 passes** (12.2 + 12.6 min), nonFinite=0 throughout, sampled fixed point 100.00% vs GT
+   (14/290,781 divergent, all previously documented), all 17 named cluster outputs exact.
+   Pass-2 maxDelta = 5.96e-8 @ Debt!CQ2724 — the dust gates churn 2 orders below tolerance.
+   Posted to #33. **Remaining: the cold-start `eng.run()` pass count (overnight run).**
+2. **per-sheet-eval slimmed ✅ (PR #69 merged)** — cluster child mirrors the engine loop
+   verbatim (single GT copy, sampled surface, engine NaN-fill scope); cluster members are
+   never size-skipped; `EVAL_CLUSTER_TIMEOUT_MS`. Canonical harness now sized for the 31GB
+   box — the canonical A-1 cluster eval run is the next measurement.
+3. **#46 row-chunked module emission ✅ (feat/row-chunk-monster-modules)** — `--max-module-mb`
+   facade+parts emission, synthetic-gated (19 asserts incl. split-vs-single value identity and
+   the per-sheet-eval scan companion). Real-model gate: A-2 rebuild + Debt import (in flight).
+   Then the VM measurement day (canonical full-cluster eval + ADR-026 cone re-gate) — #33 thread.
 - Cosmetic follow-ups: `TEXT()` format codes (labels only); `CELL("filename")` → "null" label.
 - #54 remediation unblocked from the returns cone (A-1 fallbacks file is empty).
 

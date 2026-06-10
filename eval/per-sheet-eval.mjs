@@ -287,11 +287,21 @@ async function main() {
         // static edge map can't see — scoping would drop those external boundary
         // reads and the cluster would read 0 (a silently wrong, still-finite value).
         // Detect them in the member modules and keep the FULL seed for that cluster.
+        // A row-chunked sheet (#46) is a thin facade whose compute body lives in
+        // `<Sheet>.partNNN.mjs` part modules — the dynamic reads live in the parts,
+        // so the scan must follow the facade's part imports or it would silently
+        // approve scoping for exactly the monster sheets most likely to use OFFSET.
         let _dynamicRead = false;
+        const _hasDynamicRead = (src) => src.includes('_offset(') || src.includes('ctx.get(String(');
         for (const m of ct.members) {
           try {
             const src = await readFile(m.modulePath, 'utf8');
-            if (src.includes('_offset(') || src.includes('ctx.get(String(')) { _dynamicRead = true; break; }
+            if (_hasDynamicRead(src)) { _dynamicRead = true; break; }
+            const partFiles = [...src.matchAll(/from '\.\/([^']+\.part\d{3}\.mjs)'/g)].map(x => x[1]);
+            for (const pf of partFiles) {
+              if (_hasDynamicRead(await readFile(join(dirname(m.modulePath), pf), 'utf8'))) { _dynamicRead = true; break; }
+            }
+            if (_dynamicRead) break;
           } catch { _dynamicRead = true; break; } // unreadable -> be safe, don't scope
         }
         if (_dynamicRead) {

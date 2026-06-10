@@ -1,5 +1,20 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-10 — post-v0.3.1 queue executed: #33 warm measure (2 passes, == GT), eval harness fits the box (PR #69), #46 row-chunking landed + real-A-2 gated
+
+All three "next" items from the v0.3.1 entry, one session. (1) **#33 warm-seed convergence
+measured**: 2 passes exactly, nonFinite=0, sampled fixed point 100.00% vs GT, all 17 named
+cluster outputs exact — posted to #33; cold-start pass count is the only remainder (overnight
+run). (2) **per-sheet-eval cluster child** now mirrors the engine loop verbatim (single GT
+copy, sampled surface, engine NaN-fill scope, never size-skip a cluster member,
+`EVAL_CLUSTER_TIMEOUT_MS`) — PR #69 merged. (3) **#46 row-chunked emission**
+(`--max-module-mb`, facade+parts, convergence loops indivisible, stale-part sweep, eval-scan
+follows part imports): synthetic-gated 19/19 with split-vs-single value identity, and
+real-model gated — **A-2's ~305MB Debt now imports in 2.4s as 5 parts; the full 21-sheet A-2
+engine imports in 8.9s** (pre-fix: the 609MB fatal V8 alloc, no A-2 base obtainable). NEXT:
+canonical A-1 cluster eval on the slimmed harness → cold-start run → VM measurement day
+(canonical eval + ADR-026 cone re-gate).
+
 ## Status: 2026-06-09 (late) — v0.3.1: #66 root-caused, fixed, CLOSED same day (PR #67) — fidelity at the floor
 
 The #66 hunt ran the full playbook in one session: xlsx `<f>` extraction → three defect
