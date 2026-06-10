@@ -18,6 +18,12 @@
   input cells). **A cluster member is never size-skipped** (`MAX_SHEET_SIZE_MB` silently
   dropped the monster sheets from the cluster → partial-cluster wrong fixed point; regression
   red pre-fix with `clustersTotal=0`). New `EVAL_CLUSTER_TIMEOUT_MS` (default 60min).
+- **per-sheet-eval dynamic-read scan knows the #66 helpers** — the v0.3.1 emitter lowers
+  `ref:OFFSET(...)` through `_dynRange`/`_offsetAddr` with no bare `_offset(` call, so the
+  GT-seed-scoping scan approved scoping on exactly the builds where ranges are runtime-
+  addressed (observed live on the a1-66c canonical eval). Markers added (red pre-fix in the
+  new MODEL C). Defense-in-depth today: `_dynRange` anchors are same-sheet-only because a
+  sheet-qualified computed-endpoint range refuses to parse (honest NaN) — filed **#71**.
 - **#46 row-chunked sheet modules** (`--max-module-mb=N`, default 64, 0 disables): any sheet
   module crossing the cap rotates into `<Sheet>.partNNN.mjs` modules behind a same-named
   facade — ONE logical `compute()`, identical write sequence, statement-boundary splits only,

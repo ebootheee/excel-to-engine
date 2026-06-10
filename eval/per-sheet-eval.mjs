@@ -292,7 +292,13 @@ async function main() {
         // so the scan must follow the facade's part imports or it would silently
         // approve scoping for exactly the monster sheets most likely to use OFFSET.
         let _dynamicRead = false;
-        const _hasDynamicRead = (src) => src.includes('_offset(') || src.includes('ctx.get(String(');
+        // _dynRange/_offsetAddr are the #66 computed-endpoint-range helpers — the
+        // v0.3.1 emitter lowers `ref:OFFSET(...)` through them WITHOUT any bare
+        // `_offset(` call, so a scan that only knows the scalar markers silently
+        // approves scoping for exactly the builds where ranges are runtime-addressed
+        // (observed live on the a1-66c canonical eval).
+        const _hasDynamicRead = (src) => src.includes('_offset(') || src.includes('_dynRange(')
+          || src.includes('_offsetAddr(') || src.includes('ctx.get(String(');
         for (const m of ct.members) {
           try {
             const src = await readFile(m.modulePath, 'utf8');

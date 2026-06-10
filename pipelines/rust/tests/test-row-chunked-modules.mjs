@@ -206,6 +206,47 @@ console.log('Testing: row-chunked module emission (#46) — facade + parts, one 
   }
 }
 
+// ── MODEL C: the ONLY dynamic construct is a computed-endpoint range (_dynRange) ──
+{
+  // The v0.3.1 emitter (#66) lowers `ref:OFFSET(...)` through _dynRange/_offsetAddr
+  // with NO bare `_offset(` call — observed live on the a1-66c canonical eval, where
+  // the scan found no `_offset(` and approved GT-seed scoping. _dynRange anchors are
+  // currently same-sheet only (a sheet-qualified anchor refuses to parse -> honest
+  // NaN), so cluster-scope warm-starts cover its reads today and this is
+  // defense-in-depth — but the scan must still refuse to scope what it cannot
+  // statically bound. No row-chunking needed: the scan reads plain modules too.
+  const Loop1 = {
+    '!ref': 'A1:C3',
+    A1: n(2, '0.5*Loop2!A1+1'),
+    B1: n(6, 'SUM(C1:OFFSET(C1,2,0))+0*Loop2!A1'),
+    C1: n(1), C2: n(2), C3: n(3),
+  };
+  const Loop2 = { '!ref': 'A1:A1', A1: n(2, '0.5*Loop1!A1+1') };
+
+  const { tmp, chunked } = build({ Loop1, Loop2 }, ['Loop1', 'Loop2'], CAP_MB);
+  try {
+    const src = readFileSync(join(chunked, 'sheets', 'Loop1.mjs'), 'utf-8');
+    assert(src.includes('_dynRange(') && !src.includes('_offset('),
+      'fixture emits _dynRange with no bare _offset( (else this model discriminates nothing)');
+
+    const EVAL = join(ROOT, 'eval', 'per-sheet-eval.mjs');
+    const out = join(tmp, 'report.json');
+    let stdout = '';
+    try {
+      stdout = execFileSync('node', [EVAL, chunked, '--output', out, '--sample', '50000'],
+        { encoding: 'utf-8', stdio: 'pipe', maxBuffer: 64 * 1024 * 1024 });
+    } catch (e) { stdout = String(e.stdout || ''); }
+    const report = existsSync(out) ? JSON.parse(readFileSync(out, 'utf-8')) : null;
+
+    assert(/keeping FULL GT seed/.test(stdout),
+      'per-sheet-eval flags _dynRange as a runtime-addressed read and refuses to scope');
+    assert(report !== null && report.summary.clustersConverged === 1 && report.summary.overallAccuracy === 100,
+      `cluster converged at 100% (got ${report && report.summary.clustersConverged}, ${report && report.summary.overallAccuracy}%)`);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 console.log('');
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
 process.exit(failed > 0 ? 1 : 0);
