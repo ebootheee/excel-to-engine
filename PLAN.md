@@ -1,5 +1,17 @@
 # excel-to-engine — Plan
 
+## Status: 2026-06-09 (late) — v0.3.1: #66 root-caused, fixed, CLOSED same day (PR #67) — fidelity at the floor
+
+The #66 hunt ran the full playbook in one session: xlsx `<f>` extraction → three defect
+classes (computed-endpoint ranges + silent-partial-parse truncation; Excel-exact YEARFRAC
+30/360, three GT-corrected iterations; array-criteria SUMIFS) → negative-controlled
+synthetics (13/13, RED pre-fix with predicted values) → four A-1 rebuild+sweep cycles.
+**Final: 14/17 sheets EXACT from a warm seed, 266 residual cells (−99.995% from 5.9M) = the
+documented float-dust floor** (Debt `=0` gates on half-ULP GT values; bit-exactness out of
+scope). Plus durable honesty hardening: `parse_formula` refuses partial parses; parse errors
+emit NaN. CHANGELOG v0.3.1 entry has the full table. NEXT: convergence measure (#33, now
+unblocked) → per-sheet-eval slimming → row-chunking (#46) → VM measurement day.
+
 ## Status: 2026-06-09 (release) — v0.3.0 TAGGED: #62/#63 merged, #47 closed, convergence re-measured on the fixed build
 
 Release day. **PR #62 merged** (FF, `e5072bd`) and **PR #63 merged** (FF, `20aedcc` — CLI-side

@@ -1,5 +1,37 @@
 # excel-to-engine — Changelog
 
+## 2026-06-09 — v0.3.1: #66 CLOSED same day — 5.9M → 266 divergent cells (−99.995%), 14/17 sheets exact
+
+**PR #67 MERGED** (`77b2959`, FF, 3 commits) — all #66 structure-fidelity classes fixed, each
+negative-controlled in `test-structure-fidelity.mjs` (13/13; RED pre-fix with the predicted
+wrong values) and validated by four A-1 rebuild+sweep cycles (~25 min each):
+
+- **Computed-endpoint ranges** `ref:OFFSET(...)` (Technology 284,568 → **0**): the parser had
+  no rule for a bare `:` — it stopped at the colon and silently returned the partial AST
+  (dropping whole trailing factors). New `Expr::DynRange` + `_dynRange`/`_offsetAddr`.
+  **`parse_formula` now refuses partial parses** (trailing tokens → None) and parse-error
+  cells emit **NaN, not 0**, in both emitters. Also fixed: the EMPTY-argument bug
+  (`OFFSET(x,,n)`'s comma was eaten, misaligning later args) and `A1:MAX(...)` folding the
+  function name into a column-range endpoint.
+- **YEARFRAC basis-0 = Excel's exact 30/360** (PP&E 84,468 → **0**, Lease Am 7,300 → **0**):
+  was `(b−a)/365.25`. Took THREE iterations, each corrected by the model's own ground truth:
+  textbook NASD → Excel orders the d2=31 rule BEFORE the Feb adjustment
+  (`YEARFRAC(Feb28-2023, May31-2023)=91/360`, hand-verified to 1/360 on PP&E row 92) → the
+  both-Feb rule DOES apply (Feb→Feb anniversary columns are exact integers). The middle
+  iteration's test PASSED while wrong — it validated the hypothesis against itself; only
+  real-model GT is the oracle. Bases 0–4 implemented.
+- **Array-criteria SUMIFS** (Debt array formulas): `SUM(SUMIFS(vals, cats, $EK$973:$EK$977))`
+  yields one sum per criteria element (Excel array semantics); previously matched nothing → 0.
+- **The fidelity floor, documented (not fixable):** Debt's residual 250 cells gate `=0`
+  against GT values like **−5.96e-8** — half-ULP dust from Excel's own computation; our
+  recompute produces a clean 0 (value-identical at 1e-6) and the gate flips. Bit-exact
+  reproduction of Excel's FP operation order is out of scope. Plus 16 cells of sub-1e-6
+  jitter (Financial Statements 14, Existing Owned 2).
+
+**Final sweep: 14/17 cluster sheets reproduce GT exactly from a warm seed; 17/17 within
+float-noise-or-documented-floor; every named output's sheet at ZERO. #66 closed.**
+Full-cluster convergence measurement (#33) is now unblocked.
+
 ## 2026-06-09 — v0.3.0 RELEASED: "Never a Silent Wrong Number" (first tagged release)
 
 **Booked the correctness campaign as the first tagged release** (`v0.3.0`, notes at

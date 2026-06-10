@@ -1,26 +1,25 @@
 # excel-to-engine — Roadmap
 
-## Now — post-v0.3.0: scale wall (#33/#46) is the remaining lock-grade blocker (2026-06-09)
+## Now — post-v0.3.1: fidelity DONE to the floor; next = convergence measure + scale (2026-06-09)
 
-**v0.3.0 shipped** — PR #62 (calamine $-anchors) + PR #63 (CLI XIRR 365) merged, #47 closed,
-help crash fixed, README/release notes/blog booked. See `docs/releases/v0.3.0.md`.
+**v0.3.0 + v0.3.1 shipped same day.** Sweep progression (all 17 cluster sheets, fresh warm-GT
+seed, one pass each): pre-#62 **1/17 clean / ~5.9M** → #62 9/17 / 391k → #64 11/17 / 383k →
+**#67 (v0.3.1): 14/17 EXACT, 266 residual (−99.995%)** — every named output's sheet at ZERO;
+the 266 = the documented fidelity floor (250 Debt cells downstream of `=0` gates on half-ULP
+GT dust like −5.96e-8, + 16 sub-1e-6 jitter cells). #47/#57/#66 closed.
 
-**Convergence re-measure:** per-sheet warm-GT sweep of all 17 cluster sheets — pre-#62
-1/17 clean (~5.9M numeric divergences) → post-#62 9/17 (391k) → **post-#64 11/17 exactly
-clean, 383k residual (−93.5%)**; returns/promote/equity chain all ZERO. The sweep found #64
-(YEAR/MONTH/DAY local-time getters → TZ-dependent answers; fixed same day, PR #64).
-
-Remaining:
-- **Residual structural fidelity (NEW, highest-priority fidelity work):** 4 sheets
-  (Technology 285k, Owned Asset PP&E 84k, Lease Amortization 7.3k, Debt 6.7k) where the
-  transpiled AST ≠ the workbook formula (`Technology!CG14`: exact-GT inputs → ours 1, Excel 0).
-  Attack: xlsx `<f>`-vs-AST diff on each sheet's first divergent cell (the #57 playbook).
-  Until these are exact, full-cluster convergence measurement (#33) is moot.
-- **#46** — A-2's Debt module (315 MB emitted) breaks V8's ~537 MB string limit on multi-pass
-  recompute → A-2 cannot reach a converged base case until the emitter row-chunks/streams
-  monster modules. Fix direction unchanged (chunk `generate_sheet_module` output).
-- **#33** — row-chunk the monster sheets + cluster scoping so interactive/returns consumers
-  don't pay the ~780 MB cluster load; per-pass cost is the lever for cold-start convergence.
+Next, in order:
+1. **Re-run the full-cluster convergence measure (#33)** — now unblocked: with 14/17 exact the
+   warm-seeded fixed point should hold (~2 passes × ~12 min). Use the lean probe
+   (`engines/a1-after/diag-cluster-converge.mjs`) first; then a cold `eng.run()` overnight for
+   the true pass count. Watch the Debt float-dust gates — they may inject small churn.
+2. **Slim per-sheet-eval's cluster child** — single GT copy (parse directly into ctx), and
+   never size-skip a CLUSTER member (the default `MAX_SHEET_SIZE_MB=150` silently drops
+   monster modules from the convergence loop). Target: canonical harness fits 31 GB.
+3. **Row-chunk monster modules at emit (#46/#33)** — the 609 MB fatal alloc on A-2 is the
+   UTF-16 decode at module import (~2× the 305 MB source); chunked sub-modules fix #46, shrink
+   per-pass working set, and serve the #33 row-chunk direction. Then the VM measurement day
+   (canonical full-cluster eval + ADR-026 cone re-gate) — see the #33 thread.
 - Cosmetic follow-ups: `TEXT()` format codes (labels only); `CELL("filename")` → "null" label.
 - #54 remediation unblocked from the returns cone (A-1 fallbacks file is empty).
 

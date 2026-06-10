@@ -1,6 +1,6 @@
 {
   "name": "excel-to-engine",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Convert complex financial Excel models into JavaScript computation engines with scenario analysis CLI",
   "type": "module",
   "license": "MIT",
