@@ -18,6 +18,12 @@
   input cells). **A cluster member is never size-skipped** (`MAX_SHEET_SIZE_MB` silently
   dropped the monster sheets from the cluster → partial-cluster wrong fixed point; regression
   red pre-fix with `clustersTotal=0`). New `EVAL_CLUSTER_TIMEOUT_MS` (default 60min).
+- **per-sheet-eval exit gate is crash-honest** — a hard-failed sheet (crash/OOM/error)
+  contributes zero tested cells, so the accuracy-only exit gate exited 0 on a run where the
+  17-sheet cluster child OOMed and only 3 standalone sheets were scored (observed live:
+  "99.94%, exit 0" with `sheetsWithErrors: 17`). Hard failures now force exit 1 (regression
+  red pre-fix). Same live run measured the cluster child's true heap need: >12GB (the earlier
+  6GB probe reading was mid-run, not peak) — set `NODE_HEAP_MB` accordingly.
 - **per-sheet-eval dynamic-read scan knows the #66 helpers** — the v0.3.1 emitter lowers
   `ref:OFFSET(...)` through `_dynRange`/`_offsetAddr` with no bare `_offset(` call, so the
   GT-seed-scoping scan approved scoping on exactly the builds where ranges are runtime-

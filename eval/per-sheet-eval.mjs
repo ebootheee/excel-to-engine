@@ -812,8 +812,15 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
   console.log('='.repeat(60));
   console.log('');
 
-  // Exit code: 0 if >85% accuracy, 1 otherwise
-  process.exit(overallAccuracy >= 0.85 ? 0 : 1);
+  // Exit code: 0 only when nothing hard-failed AND accuracy clears 85%. A
+  // crashed/OOMed sheet contributes ZERO tested cells, so accuracy alone is a
+  // dishonest gate: a run where the 17-sheet cluster child died scored 99.9%
+  // on the three standalone sheets and exited 0 — a confident wrong summary.
+  const hardFailures = sheetsError + sheetsOom;
+  if (hardFailures > 0) {
+    console.log(`  ! ${hardFailures} sheet(s) crashed/errored — exiting non-zero regardless of tested-cell accuracy.`);
+  }
+  process.exit(hardFailures === 0 && overallAccuracy >= 0.85 ? 0 : 1);
 }
 
 main().catch(err => {
