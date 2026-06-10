@@ -83,9 +83,11 @@ SF['A6'] = { t: 'n', v: 0, f: 'SUM(A1:INDIRECT("C1"))*2' };
 // Excel-vs-NASD YEARFRAC quirk cases (Feb-end starts)
 SF['D6'] = { t: 'n', v: ser(2023, 2, 28) };
 SF['E6'] = { t: 'n', v: ser(2023, 5, 31) };
-SF['F6'] = { t: 'n', v: 0, f: 'YEARFRAC(D6,E6)' };  // Excel 91/360; NASD 90/360
-SF['G6'] = { t: 'n', v: 0, f: 'YEARFRAC(D6,H6)' };  // Excel 359/360; NASD 1
+SF['F6'] = { t: 'n', v: 0, f: 'YEARFRAC(D6,E6)' };  // Excel 91/360 (d2=31 kept for Feb-end start)
+SF['G6'] = { t: 'n', v: 0, f: 'YEARFRAC(D6,H6)' };  // Excel exactly 1 (both-Feb rule)
 SF['H6'] = { t: 'n', v: ser(2024, 2, 29) };
+SF['G5'] = { t: 'n', v: ser(2026, 2, 28) };
+SF['H5'] = { t: 'n', v: 0, f: 'YEARFRAC(H6,G5)' };  // leap→non-leap Feb pair: exactly 2
 
 const wb = { SheetNames: ['SF'], Sheets: { SF } };
 const tmp = mkdtempSync(join(tmpdir(), 'sf66-'));
@@ -116,14 +118,15 @@ console.log('Testing: YEARFRAC US-NASD 30/360 default basis (issue #66 class A)'
   assert(v('F4') === 1, `YEARFRAC(Jun30-2024, Jun30-2025) = exactly 1 (got ${v('F4')})`);
   assert(v('G4') === 1, `MOD(YEARFRAC(Jun30, Dec31), 0.5) = 0 → flag 1 (got ${v('G4')}; the LeaseAm anniversary gate)`);
   assert(v('H4') === 13, `YEARFRAC*12+1 month count = exactly 13 (got ${v('H4')}; the AR158/PP&E idiom)`);
-  // Excel's basis-0 is NOT textbook NASD: the d2=31 adjustment runs BEFORE
-  // the Feb rule and requires d1=30/31, so a Feb-end start keeps the 31st →
-  // one extra day. Hand-verified against the real model: PP&E
-  // YEARFRAC(Feb-28-2023, May-31-2023) = 91/360 (NASD says 90/360), and
-  // there is NO both-Feb rule: YEARFRAC(Feb-28-2023, Feb-29-2024) = 359/360
-  // (NASD says exactly 1).
+  // Excel's basis-0 differs from textbook NASD in rule ORDER: the d2=31
+  // adjustment tests d1 BEFORE the Feb rule, so a Feb-end start keeps the
+  // 31st (one extra day) — but the both-Feb rule DOES apply. Both values are
+  // evidenced by the real model's ground truth (issue #66): PP&E row 92's
+  // GT 465.9667 needs 91/360, and its Feb-to-Feb anniversary columns are
+  // EXACT integers, which needs YEARFRAC(Feb28-2023, Feb29-2024) = 1.
   assert(Math.abs(v('F6') - 91 / 360) < 1e-12, `Excel quirk: YEARFRAC(Feb28-2023, May31-2023) = 91/360 (got ${v('F6')}; textbook NASD gives 90/360)`);
-  assert(Math.abs(v('G6') - 359 / 360) < 1e-12, `Excel quirk: YEARFRAC(Feb28-2023, Feb29-2024) = 359/360, no both-Feb rule (got ${v('G6')}; textbook NASD gives 1)`);
+  assert(v('G6') === 1, `Excel both-Feb rule: YEARFRAC(Feb28-2023, Feb29-2024) = exactly 1 (got ${v('G6')}; skipping the both-Feb rule gives 359/360)`);
+  assert(v('H5') === 2, `leap-to-nonleap Feb pair: YEARFRAC(Feb29-2024, Feb28-2026)*1 = exactly 2 (got ${v('H5')}; without both-Feb this is 718/360)`);
 }
 
 console.log('Testing: unsupported computed endpoint is honest NaN (never partial)');

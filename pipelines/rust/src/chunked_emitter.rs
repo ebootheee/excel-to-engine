@@ -1769,15 +1769,17 @@ function _yearfrac(start, end, basis) {
     if (d1 === 31) d1 = 30;
     if (d2 === 31) d2 = 30;
   } else {
-    // EXCEL's actual basis-0 algorithm, NOT textbook SIA/NASD: the d2=31
-    // check runs BEFORE the last-day-of-February adjustment and tests d1
-    // (after the 31-rule only), and there is NO both-Feb d2 rule. So a
-    // Feb-end start keeps a day-31 end: YEARFRAC(Feb28-2023, May31-2023)
-    // = 91/360 in Excel (textbook NASD: 90/360). Verified against the
-    // real A-1 PP&E/Lease Amortization rows (issue #66 residual).
+    // EXCEL's actual basis-0 algorithm (verified against the real A-1 model,
+    // issue #66). It differs from textbook SIA/NASD in ORDER: the d2=31 rule
+    // tests d1 BEFORE the February adjustment, so a Feb-end start keeps a
+    // day-31 end — YEARFRAC(Feb28-2023, May31-2023) = 91/360 (NASD: 90/360).
+    // The both-Feb rule DOES apply: YEARFRAC(Feb28-2023, Feb29-2024) = 1
+    // exactly (the model's Feb-to-Feb anniversary columns are exact integers).
+    const lastFeb = (p) => p.m === 2 && p.d === _daysInMonth(p.y, 2);
+    if (lastFeb(A) && lastFeb(B)) d2 = 30;
     if (d1 === 31) d1 = 30;
-    if (d2 === 31 && d1 === 30) d2 = 30;
-    if (A.m === 2 && A.d === _daysInMonth(A.y, 2)) d1 = 30;
+    if (d2 === 31 && d1 === 30) d2 = 30; // d1 here is pre-Feb-adjustment
+    if (lastFeb(A)) d1 = 30;             // February adjustment LAST
   }
   return ((B.y - A.y) * 360 + (B.m - A.m) * 30 + (d2 - d1)) / 360;
 }
