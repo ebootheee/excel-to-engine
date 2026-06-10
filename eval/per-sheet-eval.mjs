@@ -503,10 +503,12 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
 
     const evalScript = `
 import { readFile } from 'fs/promises';
+import { appendFileSync } from 'fs';
 ${importLines}
 
 const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
+const _TEL_LOG = ${JSON.stringify(join(dirname(resolve(OUTPUT_FILE)), '_cluster-progress.log').replace(/\\/g, '/'))};
 const ctx = {
   // Seeded with the (scoped or full) ground truth, parsed DIRECTLY into
   // ctx.values — single copy. The old parse-allGt-then-copy-every-entry pattern
@@ -554,12 +556,24 @@ const clusterFns = [${members.map((_, i) => `compute_${i}`).join(', ')}];
 const MAX_ITER = 200, TOL = 1e-6;
 const _clusterSet = new Set(${JSON.stringify(clusterSheets)});
 const _SAMPLE_SAFETY_CAP = 4000;
+// Per-pass telemetry to stderr (stdout carries the result JSON). A real-model
+// pass is ~12+ minutes; a child that dies on pass N must leave a record of
+// passes 1..N-1 (delta trajectory + heap) or the crash is undiagnosable — the
+// first A-1 canonical runs died silent at ~56 min under TWO different heap caps.
+const _t0 = Date.now();
+const _tel = (m) => {
+  const line = '[cluster ' + ((Date.now() - _t0) / 60000).toFixed(1) + 'm] ' + m + String.fromCharCode(10);
+  try { process.stderr.write(line); } catch {}
+  try { appendFileSync(_TEL_LOG, line); } catch {}
+};
+_tel('seeded ' + Object.keys(ctx.values).length + ' GT cells; starting convergence loop');
 let _sampleKeys = null, _before = null;
 const _deltaHist = [];
 let _iters = 0, _conv = false, _nonFinite = null, _err = null, _nonFiniteSettled = 0;
 try {
   for (let _ci = 0; _ci < MAX_ITER; _ci++) {
     _iters = _ci + 1;
+    const _tp = Date.now();
     for (const fn of clusterFns) fn(ctx);
     const v = ctx.values;
     if (_sampleKeys === null) {
@@ -596,6 +610,10 @@ try {
       const d = Math.abs(_cur - _b);
       if (d > maxDelta) maxDelta = d;
       _before[i] = _cur;
+    }
+    {
+      const _mu = process.memoryUsage();
+      _tel('pass ' + _iters + ': ' + ((Date.now() - _tp) / 60000).toFixed(1) + 'min, maxDelta=' + (Number.isFinite(maxDelta) ? maxDelta.toExponential(2) : String(maxDelta)) + ', nonFinite=' + (anyNonFinite ? ('YES @' + _nonFinite) : 'no') + ', heapUsed=' + (_mu.heapUsed / 1073741824).toFixed(1) + 'GB, rss=' + (_mu.rss / 1073741824).toFixed(1) + 'GB, sample=' + _sampleKeys.length);
     }
     if (anyNonFinite) {
       // Keep iterating so a TRANSIENT cold-0 can warm. Bound the churn (#61): stop fast
@@ -677,13 +695,17 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
     try {
       const safeEnv = { ...process.env };
       delete safeEnv.ANTHROPIC_API_KEY;
-      const { stdout: evalOut } = await execAsync(
+      const { stdout: evalOut, stderr: evalErr } = await execAsync(
         'node',
         [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript],
         { timeout: EVAL_CLUSTER_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
       );
       const out = JSON.parse(evalOut);
       const elapsed = Date.now() - evalStart;
+      // Surface the child's per-pass telemetry (delta trajectory, heap) in the
+      // orchestrator log — a multi-pass real-model cluster is ~12 min/pass and
+      // must not be a black box.
+      for (const l of String(evalErr || '').split('\n').filter(l => l.startsWith('[cluster '))) console.log(`     ${l}`);
       clusterMeta.push({ clusterSheets, iters: out.iters, converged: !!out.converged, nonFiniteCell: out.nonFiniteCell || null });
       Object.assign(namedCellValues, out.namedCellValues || {});
       if (out.error) {
@@ -700,11 +722,19 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
       });
     } catch (err) {
       const elapsed = Date.now() - evalStart;
-      const isOOM = err.killed || err.signal === 'SIGKILL' || (err.message && err.message.includes('ENOMEM'));
+      // V8's fatal heap dump ("<--- Last few GCs --->" + which space exhausted)
+      // lands on stderr — keep a real tail of it, not 200 chars of err.message
+      // (two silent ~56-min A-1 cluster deaths were undiagnosable from the
+      // truncated message alone). The child's per-pass telemetry is also on
+      // stderr / in _cluster-progress.log next to the report.
+      const stderrTail = (err.stderr ? String(err.stderr) : String(err.message || '')).slice(-2500);
+      const isOOM = err.killed || err.signal === 'SIGKILL' || (err.message && err.message.includes('ENOMEM'))
+        || /heap out of memory|Last few GCs/i.test(stderrTail);
       const reason = isOOM ? 'OOM' : (err.signal || 'crash');
       console.log(`  XX cluster [${clusterSheets.join(', ')}]: ${reason}  ${elapsed}ms`);
+      if (stderrTail) console.log(`     stderr tail:\n${stderrTail.split('\n').slice(-12).map(l => '     | ' + l).join('\n')}`);
       clusterMeta.push({ clusterSheets, iters: 0, converged: false, nonFiniteCell: null });
-      return members.map(m => { completed++; return { sheetName: m.sheetName, accuracy: 0, correct: 0, total: 0, failures: [], elapsed, status: isOOM ? 'oom' : 'crash', error: isOOM ? `OOM (killed after ${(elapsed / 1000).toFixed(1)}s)` : err.message?.slice(0, 200) }; });
+      return members.map(m => { completed++; return { sheetName: m.sheetName, accuracy: 0, correct: 0, total: 0, failures: [], elapsed, status: isOOM ? 'oom' : 'crash', error: `${reason} after ${(elapsed / 1000).toFixed(1)}s; stderr tail: ${stderrTail.slice(-1200)}` }; });
     }
   }
 

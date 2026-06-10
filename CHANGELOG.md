@@ -18,6 +18,13 @@
   input cells). **A cluster member is never size-skipped** (`MAX_SHEET_SIZE_MB` silently
   dropped the monster sheets from the cluster → partial-cluster wrong fixed point; regression
   red pre-fix with `clustersTotal=0`). New `EVAL_CLUSTER_TIMEOUT_MS` (default 60min).
+- **cluster child per-pass telemetry + full crash capture** — the canonical A-1 cluster
+  child died at ~56 min under BOTH a 12GB and a 20GB heap (cap-independent death time),
+  and the 200-char error truncation discarded the V8 GC dump that says which space
+  exhausted. The child now logs pass/delta/heap per pass (stderr + `_cluster-progress.log`
+  next to the report) and the orchestrator keeps a real stderr tail. The probe-vs-canonical
+  discrepancy (probe: 2 passes, <6GB observed; canonical child: dead at ~56 min) is the
+  open diagnosis.
 - **per-sheet-eval exit gate is crash-honest** — a hard-failed sheet (crash/OOM/error)
   contributes zero tested cells, so the accuracy-only exit gate exited 0 on a run where the
   17-sheet cluster child OOMed and only 3 standalone sheets were scored (observed live:
