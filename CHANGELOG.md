@@ -18,6 +18,20 @@
   input cells). **A cluster member is never size-skipped** (`MAX_SHEET_SIZE_MB` silently
   dropped the monster sheets from the cluster → partial-cluster wrong fixed point; regression
   red pre-fix with `clustersTotal=0`). New `EVAL_CLUSTER_TIMEOUT_MS` (default 60min).
+- **OFFSET/_dynRange #REF! bounds (the mid-pass OOM root)** — the instrumented canonical run
+  revealed the crash class: heap steady at 6.5GB through pass 4, death mid-pass-5 needing
+  >13GB in ONE spike. `_offsetAddr`/`_offset` had no upper bounds, so a displacement (or
+  OFFSET height) fed by a poisoned/oscillating cell (~1e7-scale) materialized a value-sized
+  rectangle — an allocation proportional to the VALUE, fatal at any heap cap (hence identical
+  ~56-min deaths under 12GB and 20GB). Past Excel's sheet bounds (1,048,576 × 16,384) the
+  helpers now answer honest NaN, exactly where Excel shows #REF! (scalar OFFSET previously
+  returned a SILENT 0 there). Negative-controlled `test-offset-ref-bounds.mjs` (7 asserts,
+  red pre-fix with the predicted silent values). Also instrumented: cluster telemetry now
+  names the max-delta cell. **Canonical A-1 verdict so far (honest): NOT a 2-pass story —
+  `GPP Promote!C465` is Excel's own #DIV/0! (0/0, absent from GT) so a persistent non-finite
+  is CORRECT, and the finite surface oscillates at e7 scale (1.5e7→3.0e7→2.0e7 by pass 4);
+  the probe's "2 passes, converged" was a stride-20 sampling illusion. Oscillation-cell
+  diagnosis = next session.**
 - **cluster child per-pass telemetry + full crash capture** — the canonical A-1 cluster
   child died at ~56 min under BOTH a 12GB and a 20GB heap (cap-independent death time),
   and the 200-char error truncation discarded the V8 GC dump that says which space

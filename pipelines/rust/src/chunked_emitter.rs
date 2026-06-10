@@ -2035,6 +2035,14 @@ function _yearfrac(start, end, basis) {
   return ((B.y - A.y) * 360 + (B.m - A.m) * 30 + (d2 - d1)) / 360;
 }
 
+// Excel's hard sheet bounds. An address computed past them is #REF! in Excel —
+// and, critically, a displacement that comes from a poisoned/diverging cell can
+// be ~1e7+: materializing that rectangle is a multi-GB allocation that fatally
+// OOMs the engine MID-PASS at any heap size (observed: the A-1 canonical eval
+// died at ~56 min under both 12GB and 20GB caps while steady at 6.5GB heap).
+// Out-of-bounds => honest NaN, exactly where Excel shows #REF!.
+const _XL_MAX_ROW = 1048576, _XL_MAX_COL = 16384;
+
 function _offsetAddr(refAddr, rows, cols) {
   // Pure address arithmetic for a computed range endpoint (no dereference).
   const m = String(refAddr).match(/^(.*)!([A-Z]+)([0-9]+)$/);
@@ -2042,6 +2050,7 @@ function _offsetAddr(refAddr, rows, cols) {
   const col = _colNum(m[2]) + Math.trunc(+cols || 0);
   const row = +m[3] + Math.trunc(+rows || 0);
   if (col < 1 || row < 1) return refAddr; // Excel #REF!; clamp to base (finite, sweep-visible)
+  if (col > _XL_MAX_COL || row > _XL_MAX_ROW) return null; // Excel #REF! — _dynRange maps to NaN
   return m[1] + '!' + _numToCol(col) + row;
 }
 
@@ -2051,6 +2060,7 @@ function _dynRange(ctx, corners) {
   // ctx.range(). Issue #66.
   let sheet = null, c1 = Infinity, r1 = Infinity, c2 = -1, r2 = -1;
   for (const addr of corners) {
+    if (addr === null) return [NaN]; // #REF! endpoint (out of sheet bounds) — poison the aggregate honestly
     const m = String(addr).match(/^(.*)!([A-Z]+)([0-9]+)$/);
     if (!m) return [];
     if (sheet === null) sheet = m[1];
@@ -2084,6 +2094,10 @@ function _offset(ctx, refAddr, rowOffset, colOffset, height, width) {
   const newCol = _colNum(col) + (+colOffset || 0);
   const h = +height || 1;
   const w = +width || 1;
+  // Target rectangle past Excel's sheet bounds is #REF! — and a poisoned
+  // offset/height of ~1e7 would otherwise allocate a value-sized array (the
+  // mid-pass OOM class). Honest NaN, like Excel's error.
+  if (newRow < 1 || newCol < 1 || newRow + h - 1 > _XL_MAX_ROW || newCol + w - 1 > _XL_MAX_COL) return NaN;
   if (h === 1 && w === 1) {
     return ctx.get(`${sheet}!${_numToCol(newCol)}${newRow}`);
   }

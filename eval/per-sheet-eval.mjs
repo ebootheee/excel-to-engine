@@ -593,7 +593,7 @@ try {
       // let an empty scan read maxDelta=0 and falsely converge on pass 0.
       if (_sampleKeys.length === 0) break; // converged stays false (honest)
     }
-    let maxDelta = 0, anyNonFinite = false;
+    let maxDelta = 0, anyNonFinite = false, _maxCell = '';
     for (let i = 0; i < _sampleKeys.length; i++) {
       const _cur = v[_sampleKeys[i]];
       if (typeof _cur !== 'number') continue;
@@ -606,14 +606,14 @@ try {
       if (!Number.isFinite(_cur)) { anyNonFinite = true; _nonFinite = _sampleKeys[i]; _before[i] = _cur; continue; }
       const _b = _before[i];
       // A cell going undefined -> number is a change, not convergence.
-      if (typeof _b !== 'number') { maxDelta = Infinity; _before[i] = _cur; continue; }
+      if (typeof _b !== 'number') { if (maxDelta !== Infinity) { maxDelta = Infinity; _maxCell = _sampleKeys[i]; } _before[i] = _cur; continue; }
       const d = Math.abs(_cur - _b);
-      if (d > maxDelta) maxDelta = d;
+      if (d > maxDelta) { maxDelta = d; _maxCell = _sampleKeys[i]; }
       _before[i] = _cur;
     }
     {
       const _mu = process.memoryUsage();
-      _tel('pass ' + _iters + ': ' + ((Date.now() - _tp) / 60000).toFixed(1) + 'min, maxDelta=' + (Number.isFinite(maxDelta) ? maxDelta.toExponential(2) : String(maxDelta)) + ', nonFinite=' + (anyNonFinite ? ('YES @' + _nonFinite) : 'no') + ', heapUsed=' + (_mu.heapUsed / 1073741824).toFixed(1) + 'GB, rss=' + (_mu.rss / 1073741824).toFixed(1) + 'GB, sample=' + _sampleKeys.length);
+      _tel('pass ' + _iters + ': ' + ((Date.now() - _tp) / 60000).toFixed(1) + 'min, maxDelta=' + (Number.isFinite(maxDelta) ? maxDelta.toExponential(2) : String(maxDelta)) + ' @' + _maxCell + ', nonFinite=' + (anyNonFinite ? ('YES @' + _nonFinite) : 'no') + ', heapUsed=' + (_mu.heapUsed / 1073741824).toFixed(1) + 'GB, rss=' + (_mu.rss / 1073741824).toFixed(1) + 'GB, sample=' + _sampleKeys.length);
     }
     if (anyNonFinite) {
       // Keep iterating so a TRANSIENT cold-0 can warm. Bound the churn (#61): stop fast
