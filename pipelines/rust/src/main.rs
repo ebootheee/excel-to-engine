@@ -42,6 +42,11 @@ fn main() {
         eprintln!("             of eagerly at module-load time. run() stays synchronous: await");
         eprintln!("             load() first. Avoids pulling all sheet modules into memory just");
         eprintln!("             to import the engine. Per-sheet modules are emitted either way.");
+        eprintln!("  --max-module-mb=N  Row-chunk any sheet module larger than N MB into");
+        eprintln!("             part modules behind a same-named facade (#46: V8 fatally");
+        eprintln!("             allocates ~2x a module's bytes to UTF-16-decode it at import,");
+        eprintln!("             so a ~300MB monster sheet crashes node before compute runs).");
+        eprintln!("             Default 64. 0 disables splitting (single file per sheet).");
         std::process::exit(1);
     }
 
@@ -49,6 +54,13 @@ fn main() {
     let chunked_flag = args.iter().any(|a| a == "--chunked");
     let emit_debug = args.iter().any(|a| a == "--emit-debug");
     let lazy_engine = args.iter().any(|a| a == "--lazy-engine");
+    // Single-token `--max-module-mb=N` form on purpose: the positional-arg filter
+    // below drops `--`-prefixed tokens only, so a space-separated value would
+    // be mistaken for a positional path.
+    let max_module_mb: usize = args
+        .iter()
+        .find_map(|a| a.strip_prefix("--max-module-mb=").and_then(|v| v.parse().ok()))
+        .unwrap_or(64);
 
     // Filter out flags from positional args
     let positional: Vec<&String> = args.iter().skip(1).filter(|a| !a.starts_with("--")).collect();
@@ -363,7 +375,12 @@ fn main() {
         let chunked_dir = output_dir.join("chunked");
         fs::create_dir_all(&chunked_dir).expect("Failed to create chunked/ directory");
 
-        match chunked_emitter::emit_chunked(&workbook, &chunked_dir, lazy_engine) {
+        match chunked_emitter::emit_chunked(
+            &workbook,
+            &chunked_dir,
+            lazy_engine,
+            max_module_mb.saturating_mul(1024 * 1024),
+        ) {
             Ok(summary) => {
                 println!(
                     "[rust-parser] Chunked output written in {}ms: {}",

@@ -21,6 +21,48 @@ The remaining Mippy-side work is the audited two-person upload/publish/activate
 workflow; the generic converter and real-workbook proof are complete.
 
 ## Now — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
+## Now — post-v0.3.1: fidelity DONE to the floor; next = convergence measure + scale (2026-06-09)
+
+**v0.3.0 + v0.3.1 shipped same day.** Sweep progression (all 17 cluster sheets, fresh warm-GT
+seed, one pass each): pre-#62 **1/17 clean / ~5.9M** → #62 9/17 / 391k → #64 11/17 / 383k →
+**#67 (v0.3.1): 14/17 EXACT, 266 residual (−99.995%)** — every named output's sheet at ZERO;
+the 266 = the documented fidelity floor (250 Debt cells downstream of `=0` gates on half-ULP
+GT dust like −5.96e-8, + 16 sub-1e-6 jitter cells). #47/#57/#66 closed.
+
+Status (2026-06-10 — all three "next" items executed in one session):
+1. **#33 warm-seed convergence MEASURED ✅** — lean probe vs `a1-66c`: **converged in exactly
+   2 passes** (12.2 + 12.6 min), nonFinite=0 throughout, sampled fixed point 100.00% vs GT
+   (14/290,781 divergent, all previously documented), all 17 named cluster outputs exact.
+   Pass-2 maxDelta = 5.96e-8 @ Debt!CQ2724 — the dust gates churn 2 orders below tolerance.
+   Posted to #33. **Remaining: the cold-start `eng.run()` pass count (overnight run).**
+2. **per-sheet-eval slimmed ✅ (PR #69 merged)** — cluster child mirrors the engine loop
+   verbatim (single GT copy, sampled surface, engine NaN-fill scope); cluster members are
+   never size-skipped; `EVAL_CLUSTER_TIMEOUT_MS`. Canonical harness now sized for the 31GB
+   box — the canonical A-1 cluster eval run is the next measurement.
+3. **#46 row-chunked module emission ✅ (feat/row-chunk-monster-modules)** — `--max-module-mb`
+   facade+parts emission, synthetic-gated (19 asserts incl. split-vs-single value identity and
+   the per-sheet-eval scan companion). Real-model gate: A-2 rebuild + Debt import (in flight).
+   Then the VM measurement day (canonical full-cluster eval + ADR-026 cone re-gate) — #33 thread.
+- Cosmetic follow-ups: `TEXT()` format codes (labels only); `CELL("filename")` → "null" label.
+- #54 remediation unblocked from the returns cone (A-1 fallbacks file is empty).
+
+The lock-grade cluster non-convergence (T-076) was **multi-root** (div-by-zero leaking ±Inf/NaN). **ALL
+in-repo div-by-zero roots are merged**: **#55** IFERROR-treats-Infinity, **#56** per-sheet-eval
+`_sheetConvergence`, **#57 Commit A** transient-tolerant convergence (PR #58), **#59** per-sheet-eval
+lockstep NaN-fill, **#60** `_div` + NaN-propagating reducers (`fdf1b1d`), **#61** churn-cap + divergence
+detector (`fdf1b1d`). All synthetic-proven with negative controls; full `npm test` green.
+
+**The real A-1 run (2026-06-09) reframed #57** — see PLAN.md + the #57 thread:
+- **#60 real-A-1 gate PASSED** — 13/23 named outputs unchanged & matching GT; the 10 it moved
+  (`totalCarry`, `equityBasis`, …) were already-wrong silently-dropped `#DIV/0!` zeros, now honest NaN.
+- **The blocker is STRUCTURAL, not convergence:** from a warm GT seed the returns denominators
+  (`Equity!AN122`, `GPP Promote!D88`) compute `0` where Excel has nonzero → `#DIV/0!`. Likely a #47
+  date-keyed `SUMIFS` miss or a #54 unsupported-fn stub. **Next: trace the `#DIV/0!` feeding those cells.**
+- **Scale wall (#33/#46):** the 17-sheet cluster is ~11–13 min/PASS → full convergence (~10 hrs) is
+  infeasible on a 31 GB box (both per-sheet-eval runs timed out). The convergence machinery is correct
+  (synthetic-proven); making the real recompute feasible is the separate perf track.
+
+## Earlier — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
 
 1. **Re-gate the real-model scoped cone (ADR-026 Tier 2) — re-gate was VACUOUS; label STAYS.** The
    Wave-2 A-1 cone gate failed *only* because of the `COL$ROW` `* `COL`` transpiler NaN bug, fixed on

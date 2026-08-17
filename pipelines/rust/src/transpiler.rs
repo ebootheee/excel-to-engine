@@ -160,6 +160,25 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
 
         Expr::Range(r1, r2) => expand_range_to_vars(r1, r2, config),
 
+        Expr::DynRange { start, end } => {
+            // Computed-endpoint range (`CF14:OFFSET(CF14,,-($F$12-2))`):
+            // resolve both endpoints to corner-address expressions and span
+            // the rectangle at runtime. An endpoint we cannot resolve to an
+            // address (INDEX/INDIRECT/...) is an HONEST NaN — never a
+            // truncated partial range (issue #66).
+            if !config.use_ctx_get {
+                return "(NaN /* computed range endpoint unsupported in flat-var mode */)".to_string();
+            }
+            match (dyn_range_corners(start, config), dyn_range_corners(end, config)) {
+                (Some(a), Some(b)) => {
+                    let mut corners = a;
+                    corners.extend(b);
+                    format!("_dynRange(ctx, [{}])", corners.join(", "))
+                }
+                _ => "(NaN /* unsupported computed range endpoint */)".to_string(),
+            }
+        }
+
         Expr::UnaryOp { op, operand } => {
             let inner = transpile(operand, config);
             match op.as_str() {
@@ -177,6 +196,12 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
                 "<>" => format!("({} !== {})", l, r),
                 "^" => format!("Math.pow({}, {})", l, r),
                 "&" => format!("(String({}) + String({}))", l, r),
+                // Excel `A/0` and `0/0` both produce #DIV/0!. Route every division through
+                // _div so both collapse to ONE canonical sentinel (NaN) that IFERROR/
+                // ISERROR/ISNUMBER already catch (post-#55, they test !Number.isFinite) —
+                // instead of bare `(l / r)` which yields signed Infinity for `A/0` (which the
+                // SUM reducer then PROPAGATES) and NaN for `0/0` (which it silently DROPS).
+                "/" => format!("_div({}, {})", l, r),
                 _ => format!("({} {} {})", l, op, r),
             }
         }
@@ -193,6 +218,54 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
 // ---------------------------------------------------------------------------
 // Function transpilation
 // ---------------------------------------------------------------------------
+
+/// Resolve a DynRange endpoint to the JS expression(s) for its corner
+/// address(es): a `"Sheet!A1"` literal for refs, `_offsetAddr(...)` calls for
+/// an OFFSET endpoint (near + far corner when height/width are present).
+/// `None` = the endpoint cannot be resolved to an address statically.
+fn dyn_range_corners(e: &Expr, config: &TranspileConfig) -> Option<Vec<String>> {
+    let lit = |r: &crate::formula_ast::CellRef| {
+        let sheet_owned;
+        let sheet = match &r.sheet {
+            Some(s) => s.as_str(),
+            None => {
+                sheet_owned = config.default_sheet.clone();
+                sheet_owned.as_str()
+            }
+        };
+        let escaped = sheet.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{}!{}{}\"", escaped, r.col, r.row)
+    };
+    match e {
+        Expr::CellRef(r) => Some(vec![lit(r)]),
+        Expr::Range(r1, r2) => Some(vec![lit(r1), lit(r2)]),
+        Expr::FunctionCall { name, args } if name.to_uppercase() == "OFFSET" && !args.is_empty() => {
+            let base = match &args[0] {
+                Expr::CellRef(r) => lit(r),
+                _ => return None,
+            };
+            let t = |i: usize, dflt: &str| {
+                args.get(i)
+                    .map(|a| transpile(a, config))
+                    .unwrap_or_else(|| dflt.to_string())
+            };
+            let rows = t(1, "0");
+            let cols = t(2, "0");
+            let mut corners = vec![format!("_offsetAddr({}, ({}), ({}))", base, rows, cols)];
+            if args.len() >= 4 {
+                // height/width extend the endpoint to its far corner
+                let h = t(3, "1");
+                let w = t(4, "1");
+                corners.push(format!(
+                    "_offsetAddr({}, ({}) + ({}) - 1, ({}) + ({}) - 1)",
+                    base, rows, h, cols, w
+                ));
+            }
+            Some(corners)
+        }
+        _ => None,
+    }
+}
 
 fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> String {
     // Excel stores newer functions with future-function prefixes in the file
@@ -234,21 +307,22 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
             let parts: Vec<String> = sum_args.iter().map(|a| {
                 transpile(a, config)
             }).collect();
-            format!("[{}].flat().reduce((a,b)=>a+(+b||0),0)", parts.join(","))
+            format!("[{}].flat().reduce((a,b)=>a+_aggNum(b),0)", parts.join(","))
         }
 
         "SUMPRODUCT" => {
-            // SUMPRODUCT(array1, array2, ...) → zip and multiply then sum
+            // SUMPRODUCT(array1, array2, ...) → zip and multiply then sum.
+            // _aggNum propagates a non-finite NUMBER (#DIV/0!) as NaN but treats text as 0.
             if args.len() == 1 {
                 let arr = transpile(&args[0], config);
-                return format!("[{}].flat().reduce((a,b)=>a+(+b||0),0)", arr);
+                return format!("[{}].flat().reduce((a,b)=>a+_aggNum(b),0)", arr);
             }
             if args.len() == 2 {
                 let a0 = transpile(&args[0], config);
                 let a1 = transpile(&args[1], config);
                 // Wrap in IIFE to make self-contained expression
                 // (prevents paren mismatches when used in SUMPRODUCT/SUM or IFERROR)
-                return format!("(()=>{{const _a=[{}].flat(),_b=[{}].flat();return _a.reduce((acc,v,i)=>acc+((+v||0)*(+_b[i]||0)),0);}})()", a0, a1);
+                return format!("(()=>{{const _a=[{}].flat(),_b=[{}].flat();return _a.reduce((acc,v,i)=>acc+(_aggNum(v)*_aggNum(_b[i])),0);}})()", a0, a1);
             }
             // 3+ arrays: multiply element-wise then sum (IIFE-wrapped)
             let arrays: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
@@ -256,10 +330,10 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
                 .map(|(i, a)| format!("const _a{}=[{}].flat()", i, a))
                 .collect();
             let products: String = (1..arrays.len())
-                .map(|i| format!("(+_a{}[i]||0)", i))
+                .map(|i| format!("_aggNum(_a{}[i])", i))
                 .collect::<Vec<_>>()
                 .join("*");
-            format!("(()=>{{{};return _a0.reduce((acc,v,i)=>acc+((+v||0)*{}),0);}})()",
+            format!("(()=>{{{};return _a0.reduce((acc,v,i)=>acc+(_aggNum(v)*{}),0);}})()",
                 arr_decls.join(","), products)
         }
 
@@ -405,9 +479,18 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "NOT" => format!("(!({}))", arg(0)),
         "TRUE" => "true".to_string(),
         "FALSE" => "false".to_string(),
-        "IFERROR" => format!("((() => {{ try {{ const _v = ({}); return (isNaN(_v) && typeof _v === 'number') ? ({}) : _v; }} catch(e) {{ return {}; }} }})())", arg(0), arg(1), arg(1)),
-        "ISERROR" | "ISERR" => format!("(isNaN({}) || ({}) === null)", arg(0), arg(0)),
-        "ISNUMBER" => format!("(typeof ({}) === 'number' && !isNaN({}))", arg(0), arg(0)),
+        // Excel errors include #DIV/0! — which surfaces in JS as ±Infinity (x/0,
+        // x!=0), NOT NaN. These predicates must treat any NON-FINITE number (NaN
+        // AND ±Infinity) as an error, else IFERROR(x/0, fallback) leaks Infinity
+        // and poisons the circular-cluster convergence (the lock-grade T-076
+        // non-convergence root cause: ~194k IFERROR cells on Outpost A-1). The
+        // `0/0`->NaN case was already caught; `x/0`->Infinity was the gap.
+        "IFERROR" => format!("((() => {{ try {{ const _v = ({}); return (typeof _v === 'number' && !Number.isFinite(_v)) ? ({}) : _v; }} catch(e) {{ return {}; }} }})())", arg(0), arg(1), arg(1)),
+        // `IF(ISERROR(x/0),…)` is the pre-IFERROR idiom and leaked the same Infinity.
+        // `!isFinite` (coercing, like the old `isNaN`) catches NaN AND ±Infinity.
+        "ISERROR" | "ISERR" => format!("(!isFinite({}) || ({}) === null)", arg(0), arg(0)),
+        // #DIV/0! (Infinity) is not a number in Excel — `isFinite` excludes NaN/±Inf.
+        "ISNUMBER" => format!("(typeof ({}) === 'number' && isFinite({}))", arg(0), arg(0)),
         "ISBLANK" => format!("(({}) == null || ({}) === ``)", arg(0), arg(0)),
         "ISTEXT" => format!("(typeof ({}) === 'string')", arg(0)),
         "ISLOGICAL" => format!("(typeof ({}) === 'boolean')", arg(0)),
@@ -550,9 +633,14 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         // ----------------------------------------------------------------
         "TODAY" => "/* TODAY */ 0".to_string(),
         "NOW" => "/* NOW */ 0".to_string(),
-        "YEAR" => format!("/* YEAR */ new Date(({} - 25569) * 86400000).getFullYear()", arg(0)),
-        "MONTH" => format!("/* MONTH */ (new Date(({} - 25569) * 86400000).getMonth() + 1)", arg(0)),
-        "DAY" => format!("/* DAY */ new Date(({} - 25569) * 86400000).getDate()", arg(0)),
+        // YEAR/MONTH/DAY must use the UTC/epoch-quirk-aware serial helper. The old
+        // `new Date((s - 25569) * 86400000).getMonth()` used LOCAL-time getters, so
+        // any runtime west of UTC read every serial one day early (DAY(Jun-30)=29),
+        // shifting date-keyed COUNTIFS/SUMIFS windows and DATE(y,MONTH(x),DAY(x))
+        // reconstructions by one day.
+        "YEAR" => format!("/* YEAR */ _serialToYMD({}).y", arg(0)),
+        "MONTH" => format!("/* MONTH */ _serialToYMD({}).m", arg(0)),
+        "DAY" => format!("/* DAY */ _serialToYMD({}).d", arg(0)),
         // DATE/EDATE/EOMONTH return INTEGER Excel day-serials via calendar-exact
         // helpers. The old `*365.25`/`*30.44` float approximation drifted up to
         // ~2.88 days/year, breaking exact-equality SUMIFS/MINIFS date-key lookups
@@ -560,7 +648,14 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "DATE" => format!("/* DATE */ _excelSerialFromYMD({}, {}, {})", arg(0), arg(1), arg(2)),
         "DAYS" => format!("({} - {})", arg(0), arg(1)),
         "DATEDIF" => format!("/* DATEDIF */ ({} - {})", arg(1), arg(0)),
-        "YEARFRAC" => format!("/* YEARFRAC */ (({} - {}) / 365.25)", arg(1), arg(0)),
+        // YEARFRAC's default basis 0 is US-NASD 30/360 — month-aligned spans
+        // are EXACT (1, 0.5), which real models gate on with equality tests
+        // like `MOD(YEARFRAC(...), x) = 0` and month counts `YEARFRAC*12+1`.
+        // The old `(b-a)/365.25` drifted every such gate (issue #66).
+        "YEARFRAC" => {
+            let basis = if args.len() >= 3 { arg(2) } else { "0".to_string() };
+            format!("_yearfrac({}, {}, {})", arg(0), arg(1), basis)
+        }
         "EDATE" => format!("_edate({}, {})", arg(0), arg(1)),
         "EOMONTH" => format!("_eomonth({}, {})", arg(0), arg(1)),
         "NETWORKDAYS" => format!("/* NETWORKDAYS */ ({} - {})", arg(1), arg(0)),
@@ -608,8 +703,10 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         // Statistical
         // ----------------------------------------------------------------
         "AVERAGE" | "MEAN" => {
+            // _aggNum propagates a #DIV/0! (non-finite number) into the numerator as NaN, so
+            // AVERAGE over a #DIV/0! cell is #DIV/0! (was silently dropped, yielding e.g. 1.333).
             let parts: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
-            format!("(()=>{{const _a=[{}].flat();return _a.reduce((a,b)=>a+(+b||0),0)/_a.filter(v=>v!=null).length}})()", parts.join(","))
+            format!("(()=>{{const _a=[{}].flat();return _a.reduce((a,b)=>a+_aggNum(b),0)/_a.filter(v=>v!=null).length}})()", parts.join(","))
         }
         "COUNT" | "COUNTA" => {
             let parts: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
@@ -738,5 +835,46 @@ mod date_lowering_tests {
         let js = lower("EOMONTH(A1,0)");
         assert!(js.contains("_eomonth("), "EOMONTH should call _eomonth, got: {js}");
         assert!(!js.contains("30.44"), "EOMONTH must not use *30.44, got: {js}");
+    }
+}
+
+#[cfg(test)]
+mod error_guard_lowering_tests {
+    use super::*;
+    use crate::formula_ast::parse_formula;
+
+    fn lower(formula: &str) -> String {
+        let ast = parse_formula(formula).expect("formula should parse");
+        transpile(&ast, &TranspileConfig::default())
+    }
+
+    // Excel #DIV/0! surfaces as ±Infinity in JS (x/0, x!=0), NOT NaN. IFERROR /
+    // ISERROR / ISNUMBER must treat any non-finite NUMBER as an error, else
+    // IFERROR(x/0, fallback) leaks Infinity and poisons circular-cluster
+    // convergence (lock-grade T-076 root cause).
+
+    #[test]
+    fn iferror_guards_infinity_not_just_nan() {
+        let js = lower("IFERROR(A1/A2,0)");
+        assert!(js.contains("!Number.isFinite(_v)"),
+            "IFERROR must guard non-finite (NaN AND Infinity), got: {js}");
+        assert!(!js.contains("isNaN(_v) &&"),
+            "IFERROR must not use the NaN-only guard that leaks Infinity, got: {js}");
+    }
+
+    #[test]
+    fn iserror_is_true_for_div_by_zero() {
+        let js = lower("ISERROR(A1)");
+        assert!(js.contains("!isFinite("),
+            "ISERROR must be true for ±Infinity (#DIV/0!), got: {js}");
+    }
+
+    #[test]
+    fn isnumber_is_false_for_div_by_zero() {
+        let js = lower("ISNUMBER(A1)");
+        assert!(js.contains("isFinite("),
+            "ISNUMBER must exclude ±Infinity/NaN via isFinite, got: {js}");
+        assert!(!js.contains("!isNaN("),
+            "ISNUMBER must not use the NaN-only test that admits Infinity, got: {js}");
     }
 }

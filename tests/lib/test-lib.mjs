@@ -46,6 +46,19 @@ console.log('Testing: lib/irr.mjs');
     { date: new Date('2021-01-01'), amount: 1100 },
   ]);
   near(xirr, 0.10, 2e-3, 'XIRR of -1000 → +1100 one year later ≈ 10%');
+
+  // Excel XIRR uses a 365-day basis (not 365.25) — discriminate on a leap span:
+  // -100 on 2020-01-01 → +110 on 2021-01-01 spans 366 days (leap 2020), so
+  // Excel solves (1+r)^(366/365) = 1.1 → r = 1.1^(365/366) − 1. The old
+  // 365.25 basis lands ~3.6e-5 away, well outside the 1e-6 gate.
+  const leapXirr = computeXIRR([
+    { date: new Date('2020-01-01'), amount: -100 },
+    { date: new Date('2021-01-01'), amount: 110 },
+  ]);
+  const xirr365 = Math.pow(1.1, 365 / 366) - 1;
+  const xirr36525 = Math.pow(1.1, 365.25 / 366) - 1;
+  assert(Math.abs(xirr365 - xirr36525) > 1e-5, 'negative control: 365 vs 365.25 basis differ measurably');
+  near(leapXirr, xirr365, 1e-6, "XIRR on a 366-day leap span uses Excel's 365-day basis");
 }
 
 // ── Waterfall ────────────────────────────────────────────────────────────────

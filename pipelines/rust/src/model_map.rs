@@ -51,8 +51,10 @@ pub fn build_formulas_json(workbook: &WorkbookData) -> Vec<FormulaEntry> {
 
                 let (js_expr, parse_error) = match parse_formula(formula) {
                     Some(ast) => (transpile(&ast, &config), None),
+                    // Honest sentinel (issue #66): unparseable or PARTIALLY
+                    // parseable formulas emit NaN, never a silent 0.
                     None => (
-                        "/* parse error */ 0".to_string(),
+                        "/* parse error */ NaN".to_string(),
                         Some(format!("Could not parse: {}", formula)),
                     ),
                 };
@@ -345,6 +347,20 @@ pub fn generate_raw_engine(
 
 fn generate_runtime_helpers() -> String {
     r#"// ── Runtime helpers ──────────────────────────────────────────────────────
+
+// #DIV/0! canonicalization: x/0 (->Infinity) and 0/0 (->NaN) collapse to ONE sentinel
+// (NaN) that IFERROR/ISERROR/ISNUMBER catch. The transpiler emits _div for every division.
+function _div(a, b) {
+  const q = a / b;
+  return Number.isFinite(q) ? q : NaN;
+}
+// SUM/SUMPRODUCT/AVERAGE operand coercion: a finite number passes; a non-finite NUMBER
+// (#DIV/0!) propagates as NaN; text/blank contribute 0 (Excel ignores text in SUM).
+function _aggNum(b) {
+  if (typeof b === 'number') return Number.isFinite(b) ? b : NaN;
+  const n = +b;
+  return Number.isFinite(n) ? n : 0;
+}
 
 // VLOOKUP implementation
 function _vlookup(val, table, colIdx, exact) {

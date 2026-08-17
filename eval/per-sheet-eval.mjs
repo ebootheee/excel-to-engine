@@ -47,8 +47,12 @@ const NODE_HEAP_MB = parseInt(process.env.NODE_HEAP_MB || '8192');
 const MAX_SHEET_SIZE_MB = parseInt(process.env.MAX_SHEET_SIZE_MB || '150');
 // Per-task child timeout. A real cross-sheet cluster (17 sheets, millions of
 // formulas, seeded from a multi-GB ground truth) needs more than the per-sheet
-// default — raise EVAL_TIMEOUT_MS for the single-pass cone measurement.
+// default, so cluster tasks get their own ceiling: a warm-seeded real cluster is
+// ~2-3 passes at ~10-15 min/pass, and the #61 divergence detector bounds a
+// hopeless cluster's churn — 60 min covers the healthy case without letting a
+// stuck child run forever.
 const EVAL_TIMEOUT_MS = parseInt(process.env.EVAL_TIMEOUT_MS || '300000');
+const EVAL_CLUSTER_TIMEOUT_MS = parseInt(process.env.EVAL_CLUSTER_TIMEOUT_MS || String(Math.max(EVAL_TIMEOUT_MS, 3600000)));
 
 // ── Validate inputs ────────────────────────────────────────────────────────
 const gtPath = join(chunkedDir, '_ground-truth.json');
@@ -80,7 +84,7 @@ async function main() {
   console.log(`  Ground truth: ${totalCells} cells`);
 
   // Group ground truth by sheet
-  const gtBySheet = {};
+  let gtBySheet = {};
   for (const [addr, val] of Object.entries(allGt)) {
     const bang = addr.indexOf('!');
     if (bang < 0) continue;
@@ -169,11 +173,12 @@ async function main() {
   }
   const namedCells = namedOfInterest.map(o => o.cell);
 
-  // Write full ground truth to a temp file for child processes
+  // Children read the full ground truth straight from the build's own file —
+  // re-serializing a ~5.8M-cell copy into _eval_tmp doubled parent peak memory
+  // (a ~170MB transient string) and disk for no isolation benefit.
   const tmpDir = join(chunkedDir, '_eval_tmp');
   await mkdir(tmpDir, { recursive: true });
-  const gtTmpPath = join(tmpDir, '_gt_full.json');
-  await writeFile(gtTmpPath, JSON.stringify(allGt));
+  const gtTmpPath = gtPath;
 
   // Build task list. Cross-sheet circular clusters become a SINGLE task (one
   // convergence, all members scored); standalone sheets stay one task each.
@@ -190,20 +195,30 @@ async function main() {
       continue;
     }
 
-    // Check module size
+    const cluster = clusterSheetSet.has(entry.name) ? sheetClusters.find(c => c.includes(entry.name)) : null;
+
+    // Check module size — STANDALONE sheets only. A cluster member must NEVER be
+    // size-skipped: the cluster would converge WITHOUT it to a silently wrong
+    // fixed point and every member would be scored against garbage. An oversized
+    // member is included loudly — if the import then OOMs, the cluster reports
+    // an honest crash instead of a confident wrong number.
     try {
       const modStat = await stat(modulePath);
       const sizeMB = modStat.size / (1024 * 1024);
       if (sizeMB > MAX_SHEET_SIZE_MB) {
-        skipped.push({ name: entry.name, reason: `module too large (${sizeMB.toFixed(0)}MB > ${MAX_SHEET_SIZE_MB}MB limit)` });
-        continue;
+        if (cluster) {
+          console.log(`  ! ${entry.name}: ${sizeMB.toFixed(0)}MB exceeds the ${MAX_SHEET_SIZE_MB}MB cap but is a cluster member — included anyway (a partial cluster is a silently wrong fixed point).`);
+        } else {
+          skipped.push({ name: entry.name, reason: `module too large (${sizeMB.toFixed(0)}MB > ${MAX_SHEET_SIZE_MB}MB limit)` });
+          continue;
+        }
       }
     } catch {
       skipped.push({ name: entry.name, reason: 'stat failed' });
       continue;
     }
 
-    if (SKIP_CLUSTERS && clusterSheetSet.has(entry.name)) {
+    if (SKIP_CLUSTERS && cluster) {
       skipped.push({ name: entry.name, reason: 'circular cluster (--skip-clusters; needs single-pass orchestrator eval)' });
       continue;
     }
@@ -222,6 +237,7 @@ async function main() {
     // Write per-sheet GT to temp
     const sheetGtPath = join(tmpDir, `_gt_${sanitized}.json`);
     await writeFile(sheetGtPath, JSON.stringify(sampleGt));
+    entry.gt = null; // sampled to disk — free the parent's per-sheet copy
 
     const member = {
       sheetName: entry.name,
@@ -235,7 +251,6 @@ async function main() {
 
     // Route cluster members into one shared cluster task; standalone sheets each
     // get their own task.
-    const cluster = clusterSheetSet.has(entry.name) ? sheetClusters.find(c => c.includes(entry.name)) : null;
     if (cluster) {
       const key = cluster.join('|');
       if (!clusterTasks.has(key)) {
@@ -251,6 +266,13 @@ async function main() {
   // standalone sheets still start first under the concurrency window).
   for (const ct of clusterTasks.values()) tasks.push(ct);
 
+  // The grouped-by-sheet GT (a second full set of ~N-million property slots) is
+  // no longer needed — every evaluated sheet's sample is on disk. Free it so the
+  // parent holds ONE full GT copy (allGt, still needed for seed scoping and the
+  // named-output report) instead of two.
+  for (const e of sheetEntries) e.gt = null;
+  gtBySheet = null;
+
   // GT-seed scoping (#33): give each cluster child only the GT it needs — its
   // external reads (+ a warm start for its own cells) — instead of the whole
   // ~5.8M-cell ground truth, which OOMs an 8GB heap. Write a per-cluster scoped
@@ -265,11 +287,27 @@ async function main() {
         // static edge map can't see — scoping would drop those external boundary
         // reads and the cluster would read 0 (a silently wrong, still-finite value).
         // Detect them in the member modules and keep the FULL seed for that cluster.
+        // A row-chunked sheet (#46) is a thin facade whose compute body lives in
+        // `<Sheet>.partNNN.mjs` part modules — the dynamic reads live in the parts,
+        // so the scan must follow the facade's part imports or it would silently
+        // approve scoping for exactly the monster sheets most likely to use OFFSET.
         let _dynamicRead = false;
+        // _dynRange/_offsetAddr are the #66 computed-endpoint-range helpers — the
+        // v0.3.1 emitter lowers `ref:OFFSET(...)` through them WITHOUT any bare
+        // `_offset(` call, so a scan that only knows the scalar markers silently
+        // approves scoping for exactly the builds where ranges are runtime-addressed
+        // (observed live on the a1-66c canonical eval).
+        const _hasDynamicRead = (src) => src.includes('_offset(') || src.includes('_dynRange(')
+          || src.includes('_offsetAddr(') || src.includes('ctx.get(String(');
         for (const m of ct.members) {
           try {
             const src = await readFile(m.modulePath, 'utf8');
-            if (src.includes('_offset(') || src.includes('ctx.get(String(')) { _dynamicRead = true; break; }
+            if (_hasDynamicRead(src)) { _dynamicRead = true; break; }
+            const partFiles = [...src.matchAll(/from '\.\/([^']+\.part\d{3}\.mjs)'/g)].map(x => x[1]);
+            for (const pf of partFiles) {
+              if (_hasDynamicRead(await readFile(join(dirname(m.modulePath), pf), 'utf8'))) { _dynamicRead = true; break; }
+            }
+            if (_dynamicRead) break;
           } catch { _dynamicRead = true; break; } // unreadable -> be safe, don't scope
         }
         if (_dynamicRead) {
@@ -306,47 +344,20 @@ async function main() {
   async function evalOneSheet(task) {
     const { sheetName, sanitized, modulePath, sheetGtPath, gtTmpPath: gtFullPath, gtCount } = task;
 
-    // Determine if this sheet is in a circular cluster
-    const cluster = sheetClusters.find(c => c.includes(sheetName));
-    const clusterModules = cluster ? cluster.map(s => {
-      const san = s.replace(/[^a-zA-Z0-9]/g, '_');
-      const modPath = join(sheetsDir, `${san}.mjs`);
-      return { name: s, sanitized: san, path: modPath };
-    }).filter(m => existsSync(m.path)) : [];
+    // evalOneSheet handles STANDALONE (non-cluster) sheets only — cross-sheet circular
+    // clusters are routed to evalOneCluster (a sheet reaches here only when it is NOT in
+    // clusterSheetSet; see the task dispatch above). The pre-#57 cluster convergence loop
+    // that used to live here (non-finite-poisoning, no NaN-fill / no divergence detector)
+    // was DEAD and is removed (#61) so a future routing change can't silently reactivate
+    // the old, dishonest convergence contract. All cluster recompute now goes through the
+    // single transient-tolerant + NaN-fill loop in evalOneCluster.
 
-    // Build a child process script that loads the sheet module(s) and compares.
-    // Paths flow into JS source — interpolate them as JSON-quoted strings so a
-    // path containing `'` or `\` can't break out and inject code.
-    const clusterImports = clusterModules.length > 0
-      ? clusterModules.map(m => `import { compute as compute_${m.sanitized} } from ${JSON.stringify(pathToFileURL(m.path).href)};`).join('\n')
-      : '';
-    const clusterComputeBlock = clusterModules.length > 0
-      ? `
-  // Convergence loop for circular cluster (${clusterModules.length} sheets)
-  const clusterFns = [${clusterModules.map(m => `compute_${m.sanitized}`).join(', ')}];
-  const MAX_ITER = 200;
-  const TOL = 1e-6;
-  const prevSnapshot = {};
-  for (let _ci = 0; _ci < MAX_ITER; _ci++) {
-    for (const fn of clusterFns) fn(ctx);
-    // Convergence is about the cluster's *computed* cells stabilizing, so diff
-    // only the cells the cluster wrote (ctx._written) — not every seeded
-    // ground-truth cell. On a model with millions of seeded cells the old
-    // O(all-cells)-per-iteration diff was a dominant cost (and × 200 iters).
-    let maxDelta = 0;
-    for (const k of ctx._written) {
-      const v = ctx.values[k];
-      if (typeof v !== 'number') continue;
-      const prev = prevSnapshot[k] || 0;
-      const d = Math.abs(v - prev);
-      if (d > maxDelta) maxDelta = d;
-      prevSnapshot[k] = v;
-    }
-    if (_ci > 0 && maxDelta < TOL) break;
-  }
-`
-      : `
-  // Single sheet (not in circular cluster)
+    // Build a child process script that loads the sheet module and compares. Paths flow
+    // into JS source — interpolate them as JSON-quoted strings so a path containing a
+    // quote or backslash can't break out and inject code.
+    const clusterImports = '';
+    const clusterComputeBlock = `
+  // Single sheet (standalone; circular clusters are handled by evalOneCluster).
   compute(ctx);
 `;
 
@@ -355,16 +366,18 @@ import { readFile } from 'fs/promises';
 import { compute } from ${JSON.stringify(pathToFileURL(modulePath).href)};
 ${clusterImports}
 
-const allGt = JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8'));
 const sheetGt = JSON.parse(await readFile(${JSON.stringify(sheetGtPath.replace(/\\/g, '/'))}, 'utf8'));
 
 const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
 const ctx = {
-  values: {},
-  _written: new Set(),  // cells written by compute() — the cluster convergence diffs only these
+  // Seeded with the full ground truth (upstream sheet values) — parsed DIRECTLY
+  // into ctx.values. The old pattern (parse allGt, then copy every entry in a
+  // loop) held TWO full copies of a multi-GB object; this holds one.
+  values: JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8')),
+  _sheetConvergence: {},  // intra-sheet cycle telemetry sink (PR #52): an emitted sheet with an internal convergence loop writes ctx._sheetConvergence[SHEET_NAME]; without this it throws "Cannot set properties of undefined"
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
-  set(addr, value) { this.values[addr] = value; this._written.add(addr); },
+  set(addr, value) { this.values[addr] = value; },
   _parseRange(rangeStr) {
     const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
     if (!m) return null;
@@ -393,11 +406,6 @@ const ctx = {
     return result;
   }
 };
-
-// Seed context with full ground truth (upstream sheet values)
-for (const [addr, val] of Object.entries(allGt)) {
-  ctx.values[addr] = val;
-}
 
 // Run compute (with convergence loop for circular clusters)
 try {
@@ -495,17 +503,21 @@ process.stdout.write(JSON.stringify({ accuracy: total > 0 ? correct/total : 0, c
 
     const evalScript = `
 import { readFile } from 'fs/promises';
+import { appendFileSync } from 'fs';
 ${importLines}
-
-const allGt = JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8'));
 
 const cn = s => { let n=0; for(const c of s) n = n*26+c.charCodeAt(0)-64; return n; };
 const nc = n => { let s=''; while(n>0){n--;s=String.fromCharCode(65+(n%26))+s;n=Math.floor(n/26);} return s; };
+const _TEL_LOG = ${JSON.stringify(join(dirname(resolve(OUTPUT_FILE)), '_cluster-progress.log').replace(/\\/g, '/'))};
 const ctx = {
-  values: {},
-  _written: new Set(),
+  // Seeded with the (scoped or full) ground truth, parsed DIRECTLY into
+  // ctx.values — single copy. The old parse-allGt-then-copy-every-entry pattern
+  // held TWO full copies of a multi-GB object and was one leg of the 16GB OOM
+  // on real-model clusters.
+  values: JSON.parse(await readFile(${JSON.stringify(gtFullPath.replace(/\\/g, '/'))}, 'utf8')),
+  _sheetConvergence: {},  // intra-sheet cycle telemetry sink (PR #52): an emitted sheet with an internal convergence loop writes ctx._sheetConvergence[SHEET_NAME]; without this it throws "Cannot set properties of undefined"
   get(addr) { return this.values[addr] !== undefined ? this.values[addr] : 0; },
-  set(addr, value) { this.values[addr] = value; this._written.add(addr); },
+  set(addr, value) { this.values[addr] = value; },
   _parseRange(rangeStr) {
     const m = rangeStr.match(/^(.+)!([A-Z]+)(\\d+):([A-Z]+)(\\d+)$/);
     if (!m) return null;
@@ -526,35 +538,126 @@ const ctx = {
   }
 };
 
-// Seed context with full ground truth (upstream sheet values)
-for (const [addr, val] of Object.entries(allGt)) ctx.values[addr] = val;
-
-// ONE convergence loop over ALL cluster members. Diff only the cells the cluster
-// wrote (ctx._written). A non-finite cell (Inf/NaN from a waterfall/coverage
-// formula dividing by a not-yet-converged 0) is recorded and stops the loop
-// rather than poisoning the delta — converged stays false (honest contract).
+// ONE convergence loop over ALL cluster members, mirroring the SHIPPED engine's
+// emitted cluster loop (chunked_emitter.rs) decision-for-decision so this harness
+// accepts a fixed point on exactly the pass the engine does: the same SAMPLED
+// delta surface (every numeric cell on the cluster's OWN sheets plus a bounded
+// strided safety net over the rest of ctx, captured once after the first pass),
+// the same parallel _before baseline array (undefined slots force an Infinity
+// delta, so a first pass can never falsely converge), the same transient-tolerant
+// non-finite rules (#57), and the same divergence detection and churn caps (#61).
+// The old harness surface — a _written Set of ~4.7M fresh strings plus a per-cell
+// prevSnapshot object — was BOTH a 16GB-OOM leg on real-model clusters AND subtly
+// non-lockstep: it diffed and NaN-filled cells the cluster wrote onto NON-member
+// sheets (the engine does neither) and skipped never-written GT input cells on
+// member sheets (the engine NaN-fills those too on non-convergence).
+// NOTE: comments here must avoid backticks (this is inside a template literal).
 const clusterFns = [${members.map((_, i) => `compute_${i}`).join(', ')}];
 const MAX_ITER = 200, TOL = 1e-6;
-const prevSnapshot = {};
-let _iters = 0, _conv = false, _nonFinite = null, _err = null;
+const _clusterSet = new Set(${JSON.stringify(clusterSheets)});
+const _SAMPLE_SAFETY_CAP = 4000;
+// Per-pass telemetry to stderr (stdout carries the result JSON). A real-model
+// pass is ~12+ minutes; a child that dies on pass N must leave a record of
+// passes 1..N-1 (delta trajectory + heap) or the crash is undiagnosable — the
+// first A-1 canonical runs died silent at ~56 min under TWO different heap caps.
+const _t0 = Date.now();
+const _tel = (m) => {
+  const line = '[cluster ' + ((Date.now() - _t0) / 60000).toFixed(1) + 'm] ' + m + String.fromCharCode(10);
+  try { process.stderr.write(line); } catch {}
+  try { appendFileSync(_TEL_LOG, line); } catch {}
+};
+_tel('seeded ' + Object.keys(ctx.values).length + ' GT cells; starting convergence loop');
+let _sampleKeys = null, _before = null;
+const _deltaHist = [];
+let _iters = 0, _conv = false, _nonFinite = null, _err = null, _nonFiniteSettled = 0;
 try {
   for (let _ci = 0; _ci < MAX_ITER; _ci++) {
     _iters = _ci + 1;
+    const _tp = Date.now();
     for (const fn of clusterFns) fn(ctx);
-    let maxDelta = 0, bad = null;
-    for (const k of ctx._written) {
-      const v = ctx.values[k];
-      if (typeof v !== 'number') continue;
-      if (!Number.isFinite(v)) { bad = k; break; }
-      const prev = prevSnapshot[k] || 0;
-      const d = Math.abs(v - prev);
-      if (d > maxDelta) maxDelta = d;
-      prevSnapshot[k] = v;
+    const v = ctx.values;
+    if (_sampleKeys === null) {
+      // First pass done: the cluster's cells now exist. Capture the sample.
+      _sampleKeys = [];
+      for (const key in v) {
+        const _bang = key.indexOf('!');
+        if (_bang > 0 && _clusterSet.has(key.slice(0, _bang)) && typeof v[key] === 'number') _sampleKeys.push(key);
+      }
+      const _allKeys = Object.keys(v);
+      const _stride = Math.max(1, Math.floor(_allKeys.length / _SAMPLE_SAFETY_CAP));
+      for (let i = 0; i < _allKeys.length; i += _stride) {
+        if (typeof v[_allKeys[i]] === 'number') _sampleKeys.push(_allKeys[i]);
+      }
+      _before = new Array(_sampleKeys.length);
+      // No observable cluster cells: we cannot confirm a fixed point, so do not
+      // let an empty scan read maxDelta=0 and falsely converge on pass 0.
+      if (_sampleKeys.length === 0) break; // converged stays false (honest)
     }
-    if (bad !== null) { _nonFinite = bad; if (_ci >= 2) break; continue; }
-    if (_ci > 0 && maxDelta < TOL) { _conv = true; break; }
+    let maxDelta = 0, anyNonFinite = false, _maxCell = '';
+    for (let i = 0; i < _sampleKeys.length; i++) {
+      const _cur = v[_sampleKeys[i]];
+      if (typeof _cur !== 'number') continue;
+      // TRANSIENT-TOLERANT non-finite handling (#57): a non-finite cell (Inf/NaN
+      // from a divide-by-cold-0 denominator that has not warmed yet) is excluded
+      // from the delta, remembered, and the loop KEEPS iterating; non-finiteness
+      // is judged only at the fixed point. Storing it as the baseline means a
+      // WARMING cell produces a non-finite delta next pass, forcing another pass
+      // exactly like the engine.
+      if (!Number.isFinite(_cur)) { anyNonFinite = true; _nonFinite = _sampleKeys[i]; _before[i] = _cur; continue; }
+      const _b = _before[i];
+      // A cell going undefined -> number is a change, not convergence.
+      if (typeof _b !== 'number') { if (maxDelta !== Infinity) { maxDelta = Infinity; _maxCell = _sampleKeys[i]; } _before[i] = _cur; continue; }
+      const d = Math.abs(_cur - _b);
+      if (d > maxDelta) { maxDelta = d; _maxCell = _sampleKeys[i]; }
+      _before[i] = _cur;
+    }
+    {
+      const _mu = process.memoryUsage();
+      _tel('pass ' + _iters + ': ' + ((Date.now() - _tp) / 60000).toFixed(1) + 'min, maxDelta=' + (Number.isFinite(maxDelta) ? maxDelta.toExponential(2) : String(maxDelta)) + ' @' + _maxCell + ', nonFinite=' + (anyNonFinite ? ('YES @' + _nonFinite) : 'no') + ', heapUsed=' + (_mu.heapUsed / 1073741824).toFixed(1) + 'GB, rss=' + (_mu.rss / 1073741824).toFixed(1) + 'GB, sample=' + _sampleKeys.length);
+    }
+    if (anyNonFinite) {
+      // Keep iterating so a TRANSIENT cold-0 can warm. Bound the churn (#61): stop fast
+      // when the FINITE surface has SETTLED while a cell stays non-finite (STRUCTURAL
+      // div-by-zero whose finite inputs settled, so it will never warm); a generous
+      // absolute cap also covers a divergent+persistent-non-finite cluster (whose finite
+      // surface never settles, so the settled test never fires). Mirrors chunked_emitter.rs.
+      _deltaHist.length = 0;
+      _nonFiniteSettled++;
+      if ((maxDelta < TOL && _nonFiniteSettled >= 4) || _nonFiniteSettled >= 50) break;
+      continue;
+    }
+    _nonFiniteSettled = 0;
+    if (maxDelta < TOL) { _conv = true; _nonFinite = null; break; }
+    // Divergence detection (#61 — mirrors chunked_emitter.rs): a divergent (monotone-up)
+    // or stuck-non-zero (flat-hot) cluster breaks early instead of churning to MAX_ITER
+    // and then NaN-filling. A genuine contraction shrinks the delta, so it never matches.
+    _deltaHist.push(maxDelta);
+    if (_deltaHist.length > 5) _deltaHist.shift();
+    if (_deltaHist.length >= 4) {
+      const _w = _deltaHist;
+      const _mn = Math.min(..._w), _mx = Math.max(..._w);
+      const _monoUp = _w.every((d, i) => i === 0 || d >= _w[i - 1] - TOL) && (_w[_w.length - 1] > _w[0] + TOL);
+      const _flatHot = (_mx - _mn) < TOL && _mn > TOL * 100;
+      if (_monoUp || _flatHot) break;
+    }
   }
 } catch (e) { _err = e.message; }
+
+// Honesty contract (mirrors chunked_emitter.rs NaN-fill on !_conv): a cluster that
+// did NOT converge is not a fixed point — NaN-fill the numeric cells on the
+// cluster's OWN sheets (the engine's exact surface) so compareOne and the
+// named-output harvest below report NaN (detectably unusable) instead of leaving
+// the warm-seeded GT values, which would over-report accuracy on a cluster the
+// SHIPPED engine (eng.run) NaN-fills. The lite/cone accuracy numbers read from here.
+if (!_conv) {
+  for (const key in ctx.values) {
+    const _b = key.indexOf('!');
+    if (_b > 0 && _clusterSet.has(key.slice(0, _b)) && typeof ctx.values[key] === 'number'
+        && !(ctx._locked && ctx._locked.has(key))) {
+      ctx.values[key] = NaN;
+    }
+  }
+}
 
 const compareOne = (sheetGt) => {
   let correct = 0, total = 0; const failures = [];
@@ -592,13 +695,17 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
     try {
       const safeEnv = { ...process.env };
       delete safeEnv.ANTHROPIC_API_KEY;
-      const { stdout: evalOut } = await execAsync(
+      const { stdout: evalOut, stderr: evalErr } = await execAsync(
         'node',
         [`--max-old-space-size=${NODE_HEAP_MB}`, tmpScript],
-        { timeout: EVAL_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
+        { timeout: EVAL_CLUSTER_TIMEOUT_MS, maxBuffer: 50 * 1024 * 1024, env: safeEnv }
       );
       const out = JSON.parse(evalOut);
       const elapsed = Date.now() - evalStart;
+      // Surface the child's per-pass telemetry (delta trajectory, heap) in the
+      // orchestrator log — a multi-pass real-model cluster is ~12 min/pass and
+      // must not be a black box.
+      for (const l of String(evalErr || '').split('\n').filter(l => l.startsWith('[cluster '))) console.log(`     ${l}`);
       clusterMeta.push({ clusterSheets, iters: out.iters, converged: !!out.converged, nonFiniteCell: out.nonFiniteCell || null });
       Object.assign(namedCellValues, out.namedCellValues || {});
       if (out.error) {
@@ -615,11 +722,19 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
       });
     } catch (err) {
       const elapsed = Date.now() - evalStart;
-      const isOOM = err.killed || err.signal === 'SIGKILL' || (err.message && err.message.includes('ENOMEM'));
+      // V8's fatal heap dump ("<--- Last few GCs --->" + which space exhausted)
+      // lands on stderr — keep a real tail of it, not 200 chars of err.message
+      // (two silent ~56-min A-1 cluster deaths were undiagnosable from the
+      // truncated message alone). The child's per-pass telemetry is also on
+      // stderr / in _cluster-progress.log next to the report.
+      const stderrTail = (err.stderr ? String(err.stderr) : String(err.message || '')).slice(-2500);
+      const isOOM = err.killed || err.signal === 'SIGKILL' || (err.message && err.message.includes('ENOMEM'))
+        || /heap out of memory|Last few GCs/i.test(stderrTail);
       const reason = isOOM ? 'OOM' : (err.signal || 'crash');
       console.log(`  XX cluster [${clusterSheets.join(', ')}]: ${reason}  ${elapsed}ms`);
+      if (stderrTail) console.log(`     stderr tail:\n${stderrTail.split('\n').slice(-12).map(l => '     | ' + l).join('\n')}`);
       clusterMeta.push({ clusterSheets, iters: 0, converged: false, nonFiniteCell: null });
-      return members.map(m => { completed++; return { sheetName: m.sheetName, accuracy: 0, correct: 0, total: 0, failures: [], elapsed, status: isOOM ? 'oom' : 'crash', error: isOOM ? `OOM (killed after ${(elapsed / 1000).toFixed(1)}s)` : err.message?.slice(0, 200) }; });
+      return members.map(m => { completed++; return { sheetName: m.sheetName, accuracy: 0, correct: 0, total: 0, failures: [], elapsed, status: isOOM ? 'oom' : 'crash', error: `${reason} after ${(elapsed / 1000).toFixed(1)}s; stderr tail: ${stderrTail.slice(-1200)}` }; });
     }
   }
 
@@ -727,8 +842,15 @@ process.stdout.write(JSON.stringify({ results, iters: _iters, converged: _conv, 
   console.log('='.repeat(60));
   console.log('');
 
-  // Exit code: 0 if >85% accuracy, 1 otherwise
-  process.exit(overallAccuracy >= 0.85 ? 0 : 1);
+  // Exit code: 0 only when nothing hard-failed AND accuracy clears 85%. A
+  // crashed/OOMed sheet contributes ZERO tested cells, so accuracy alone is a
+  // dishonest gate: a run where the 17-sheet cluster child died scored 99.9%
+  // on the three standalone sheets and exited 0 — a confident wrong summary.
+  const hardFailures = sheetsError + sheetsOom;
+  if (hardFailures > 0) {
+    console.log(`  ! ${hardFailures} sheet(s) crashed/errored — exiting non-zero regardless of tested-cell accuracy.`);
+  }
+  process.exit(hardFailures === 0 && overallAccuracy >= 0.85 ? 0 : 1);
 }
 
 main().catch(err => {

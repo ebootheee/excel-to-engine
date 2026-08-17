@@ -209,12 +209,32 @@ node cli/index.mjs carry ./my-model/chunked/                              # from
 node cli/index.mjs carry --peak 500e6 --moc 2.8 --life 4.7 --pref 0.08 --carry 0.20 --ownership 0.06
 ```
 
+### `ete lite` — Right-sized extraction (KB instead of MB)
+
+```bash
+node cli/index.mjs lite ./my-model/chunked/ --output grossIRR,totalCarry --use-case dashboard
+```
+
+When a consumer only needs a handful of outputs (a dashboard tile, a what-if
+slider), it shouldn't have to ship a multi-MB engine. `lite` walks a 4-tier
+ladder — closed-form formula → fitted surrogate → scoped cone → full engine —
+and emits the **smallest artifact that meets the precision budget**, with a
+signed provenance record and an honesty gate: anything non-linear (a waterfall
+kink, a breakpoint) automatically escalates to an exact tier rather than
+shipping a smooth approximation of a cliff.
+
 ### `ete compare`, `ete extract`, `ete explain`, `ete eval`, `ete manifest`
 
 Side-by-side scenarios with attribution; time-series schedules (capital calls,
 distributions, debt); audit trails; exact formula evaluation; and manifest
-configuration. Run `node cli/index.mjs --help` for the full list, or see
+configuration (`generate | validate | refine | doctor | set | export` — run
+`doctor` before trusting carry/basis cells; `export` turns a tuned manifest
+into a reusable template for `ete init --template <name>`). Run
+`node cli/index.mjs --help` for the full list, or see
 [skill/SKILL.md](skill/SKILL.md).
+
+> Iterating on a manifest? `ete init model.xlsx --reuse-parse` skips the Rust
+> parse when `chunked/` already exists — a 60–90s rebuild becomes ~2s.
 
 ---
 
@@ -233,13 +253,16 @@ Excel (.xlsx)
 `ete init` does all of this in one step and finishes by emitting the developer
 handoff bundle (`INTEGRATION.md` + `example.mjs`) into the output folder.
 
-### Two ways to compute a scenario
+### Three ways to compute a scenario
 
 - **`engine.run()`** executes the model's actual transpiled formulas — exact,
   the right choice for an app's production math.
 - **The CLI's `scenario`/`sensitivity`** use a fast first-order approximation (a
   "delta cascade") for instant analyst queries. Great for exploration; use
   `run()` when you need numbers that tie out to the penny.
+- **`ete lite`** emits a KB-sized artifact (closed-form or fitted surrogate,
+  escalating to exact tiers when the math has kinks) for consumers that only
+  need a few outputs and don't want to ship the engine at all.
 
 ### Downstream contract artifacts
 
@@ -362,7 +385,7 @@ excel-to-engine/
 │   └── js-reasoning/            # Claude-driven pipeline for smaller models
 ├── eval/                        # Blind eval, per-sheet eval, golden-master gate, auto-iteration
 ├── lib/                         # Financial libraries (IRR, waterfall, calibration, sensitivity, manifest)
-└── tests/cli/                   # 166 tests (34 integration + 132 use-case scenarios)
+└── tests/                       # 37 suites in npm test (CLI integration, use-case, engine/transpiler regressions)
 ```
 
 ### Libraries
@@ -378,6 +401,34 @@ excel-to-engine/
 | `lib/calibration.mjs` | Scale factor calibration against Excel targets |
 | `lib/sensitivity.mjs` | Surface extraction, slope comparison, breakpoint detection |
 | `lib/excel-parser.mjs` | Cell reading, sheet fingerprinting, year detection, field mapping |
+
+## Correctness & honesty
+
+Financial numbers that are *plausible but wrong* are worse than no numbers.
+The engine is built around a small set of non-negotiable rules:
+
+- **Ground truth is the oracle.** Every cell value Excel computed ships with
+  the build (`_ground-truth.json`); every claim the engine makes is checkable
+  against it. The eval harness seeds a recompute from those values — a faithful
+  formula must reproduce them exactly, so any divergence is a transpiler defect
+  by definition, not a "model quirk."
+- **Never a silent wrong number.** Excel's `#DIV/0!` propagates as `NaN`
+  through `SUM`/`SUMIFS`/`AVERAGE`/… (the naive `(+x||0)` reducer would quietly
+  turn `=SUM(100, 0/0, 250)` into `350`). `IFERROR`/`ISERROR` catch it exactly
+  where Excel would.
+- **Honest convergence.** Real models have circular references (returns ↔ debt
+  ↔ fees). The engine converges them transient-tolerantly — a divide-by-cold-0
+  that warms as the cluster solves is fine — but a cluster that does **not**
+  reach a fixed point reports `converged: false` and NaN-fills its cells:
+  detectably unusable beats confidently stale. The fast eval harness applies
+  the *same* contract in lockstep, so measured accuracy is the accuracy you
+  get from `run()`.
+- **Excel fidelity down to the quirks.** Dates are integer Excel day-serials
+  (including the phantom 1900-02-29 epoch quirk: `EOMONTH(0,1) = 59`), XIRR and
+  XNPV use Excel's 365-day basis, and shared-formula groups expand with exact
+  `$`-anchor semantics — each one a class of bug found on real models and now
+  pinned by a negative-controlled regression (the test must fail on the old
+  code with the predicted wrong value before the fix counts).
 
 ## Accuracy
 
@@ -396,6 +447,13 @@ randomized financial questions per model:
 
 ~60 Excel functions transpiled: `SUM`, `IF`, `VLOOKUP`, `INDEX/MATCH`, `IRR`,
 `XIRR`, `NPV`, `PMT`, `SUMIFS`, `COUNTIFS`, `INDIRECT`, `OFFSET`, and more.
+
+Cell-level fidelity is gated by a warm-ground-truth sweep (seed every cell with
+Excel's value, recompute, diff every write — any divergence is a transpiler
+defect by definition). On the largest real model (5.8M cells, a 17-sheet
+circular cluster), 11/17 cluster sheets currently reproduce Excel **exactly**,
+including every sheet a named output lives on; the residual is tracked openly
+in the issues.
 
 ---
 

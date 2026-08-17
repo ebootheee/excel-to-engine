@@ -13,8 +13,8 @@ use crate::transpiler::{transpile, TranspileConfig};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Write;
-use std::path::Path;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -28,6 +28,7 @@ pub fn emit_chunked(
     workbook: &WorkbookData,
     output_dir: &Path,
     lazy_engine: bool,
+    max_module_bytes: usize,
 ) -> Result<String, String> {
     let t_start = Instant::now();
 
@@ -84,19 +85,37 @@ pub fn emit_chunked(
     // sequential (heavy) passes below. All captures are Sync, so this is usable
     // as a rayon map operator.
     let emit_one = |partition: &SheetPartition| -> Result<(String, usize, usize), String> {
-        let file_name = format!("{}.mjs", sanitize_sheet_name(&partition.name));
-        let path = sheets_dir.join(&file_name);
+        let base = sanitize_sheet_name(&partition.name);
+        let file_name = format!("{}.mjs", base);
         let n_formulas = partition.formula_cells.len();
         // Stream the module straight to the file — no full-module String ever
         // materializes (the #33 fix; a monster sheet was held twice via Vec+join).
-        let file = fs::File::create(&path)
-            .map_err(|e| format!("Failed to create {}: {}", file_name, e))?;
-        let mut bw = std::io::BufWriter::with_capacity(1 << 20, file);
-        write_sheet_module(partition, &mut bw)
+        // The PartEmitter additionally rotates to a new part module whenever the
+        // current file crosses max_module_bytes (#46): V8 fatally allocates ~2x a
+        // module's bytes to UTF-16-decode it at import, so a ~300MB monster sheet
+        // crashed node before compute ever ran. A sheet that fits under the cap is
+        // emitted byte-identically to the old single-file form.
+        let mut pe = PartEmitter::new(
+            &sheets_dir,
+            &base,
+            &partition.name,
+            sheet_deps_js(partition),
+            max_module_bytes,
+        )
+        .map_err(|e| format!("Failed to create {}: {}", file_name, e))?;
+        write_sheet_module(partition, &mut pe)
             .map_err(|e| format!("Failed to write {}: {}", file_name, e))?;
-        bw.flush().map_err(|e| format!("Failed to flush {}: {}", file_name, e))?;
-        drop(bw);
-        let code_len = fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
+        let (n_parts, code_len) = pe
+            .finish()
+            .map_err(|e| format!("Failed to finalize {}: {}", file_name, e))?;
+        if n_parts > 1 {
+            eprintln!(
+                "\n[chunked]   {} row-chunked into {} parts ({} cap per part)",
+                file_name,
+                n_parts,
+                human_size(max_module_bytes)
+            );
+        }
         let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
         if done % 5 == 0 || done == total_sheets {
             eprint!("\r[chunked]   [{}/{}] modules written...", done, total_sheets);
@@ -260,6 +279,229 @@ pub fn emit_chunked(
 // Per-sheet module generation
 // ---------------------------------------------------------------------------
 
+/// The shared runtime-helpers import line every sheet module (and every row-chunk
+/// continuation part) carries. Kept as one constant so the part header can never
+/// drift from the main module header.
+const HELPERS_IMPORT: &str = "import { _div, _aggNum, _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _serialToYMD, _edate, _eomonth, _yearfrac, _offsetAddr, _dynRange } from './_helpers.mjs';";
+
+/// The `SHEET_DEPENDENCIES` array literal for a sheet, shared by the module
+/// header and the row-chunk facade.
+fn sheet_deps_js(partition: &SheetPartition<'_>) -> String {
+    partition
+        .sheet_dependencies
+        .iter()
+        .map(|d| format!("\"{}\"", escape_js_string(d)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Sink that `write_sheet_module` streams into. `checkpoint()` is called at safe
+/// split points — statement boundaries in the linear regions of compute(), never
+/// inside a convergence loop — and may rotate the underlying file (row-chunking,
+/// #46). The default is a no-op so plain writers (unit tests) behave as before.
+trait ModuleSink: Write {
+    fn checkpoint(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A ModuleSink over any plain writer — never rotates (single-file emission).
+/// Production emission always goes through PartEmitter (cap 0 = never rotate);
+/// this exists for the in-memory unit tests.
+#[cfg_attr(not(test), allow(dead_code))]
+struct PlainSink<W: Write>(W);
+
+impl<W: Write> Write for PlainSink<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+impl<W: Write> ModuleSink for PlainSink<W> {}
+
+/// Row-chunking sink (#46). Streams the sheet module to `<base>.mjs`; whenever
+/// `checkpoint()` finds the current file past `cap` bytes it closes the current
+/// `compute()` and continues in `<base>.partNNN.mjs` (renaming the in-progress
+/// `<base>.mjs` to `<base>.part000.mjs` on the first rotation). `finish()` then
+/// writes a small `<base>.mjs` facade that imports each part and invokes them in
+/// order — ONE logical compute(), identical write sequence, so engine.js,
+/// per-sheet-eval, cone emission and every other consumer import the sheet by
+/// the same path as before. A sheet that never crosses the cap stays a single
+/// byte-identical `<base>.mjs` (cap = 0 disables rotation entirely).
+struct PartEmitter {
+    sheets_dir: PathBuf,
+    base: String,       // sanitized file base, e.g. "Debt"
+    sheet_name: String, // raw sheet name (facade exports / part SHEET_NAME)
+    deps_js: String,
+    cap: usize,
+    parts: Vec<String>, // part file names in emission order
+    cur: Option<BufWriter<fs::File>>,
+    cur_bytes: usize,
+    total_bytes: usize,
+}
+
+impl PartEmitter {
+    fn new(
+        sheets_dir: &Path,
+        base: &str,
+        sheet_name: &str,
+        deps_js: String,
+        cap: usize,
+    ) -> std::io::Result<PartEmitter> {
+        let first = format!("{}.mjs", base);
+        let f = fs::File::create(sheets_dir.join(&first))?;
+        Ok(PartEmitter {
+            sheets_dir: sheets_dir.to_path_buf(),
+            base: base.to_string(),
+            sheet_name: sheet_name.to_string(),
+            deps_js,
+            cap,
+            parts: vec![first],
+            cur: Some(BufWriter::with_capacity(1 << 20, f)),
+            cur_bytes: 0,
+            total_bytes: 0,
+        })
+    }
+
+    /// Close the current part's compute() and continue in the next part module.
+    fn rotate(&mut self) -> std::io::Result<()> {
+        writeln!(self, "}}")?;
+        if let Some(mut w) = self.cur.take() {
+            w.flush()?;
+        }
+        // First rotation: the in-progress <base>.mjs becomes part000 and the
+        // facade takes the <base>.mjs name at finish().
+        let facade = format!("{}.mjs", self.base);
+        if self.parts.len() == 1 && self.parts[0] == facade {
+            let part0 = format!("{}.part000.mjs", self.base);
+            let to = self.sheets_dir.join(&part0);
+            // A stale part from a previous build would make Windows' rename fail.
+            let _ = fs::remove_file(&to);
+            fs::rename(self.sheets_dir.join(&facade), &to)?;
+            self.parts[0] = part0;
+        }
+        let next = format!("{}.part{:03}.mjs", self.base, self.parts.len());
+        let f = fs::File::create(self.sheets_dir.join(&next))?;
+        self.cur = Some(BufWriter::with_capacity(1 << 20, f));
+        self.parts.push(next.clone());
+        self.cur_bytes = 0;
+        writeln!(
+            self,
+            "// sheets/{} — AUTO-GENERATED by rust-parser (chunked mode)",
+            next
+        )?;
+        let cont_line = format!(
+            "// Row-chunked continuation of \"{}\" (#46) — invoked in order by the {}.mjs",
+            escape_js_string(&self.sheet_name),
+            self.base
+        );
+        writeln!(self, "{}", cont_line)?;
+        writeln!(
+            self,
+            "// facade. Splits happen only at statement boundaries, never inside a convergence loop."
+        )?;
+        writeln!(self, "{}", HELPERS_IMPORT)?;
+        writeln!(
+            self,
+            "const SHEET_NAME = \"{}\";",
+            escape_js_string(&self.sheet_name)
+        )?;
+        writeln!(self)?;
+        writeln!(self, "export function compute(ctx) {{")?;
+        Ok(())
+    }
+
+    /// Flush the last part, write the facade when the sheet was split, and clean
+    /// up stale part files a previous (differently-sized) build may have left —
+    /// consumers sweep `sheets/*.mjs`, so a stale part would inject stale cells.
+    /// Returns (part count, total bytes across parts + facade).
+    fn finish(mut self) -> std::io::Result<(usize, usize)> {
+        if let Some(mut w) = self.cur.take() {
+            w.flush()?;
+        }
+        let facade = format!("{}.mjs", self.base);
+        if self.parts.len() > 1 {
+            let mut s = String::new();
+            s.push_str(&format!(
+                "// sheets/{} — AUTO-GENERATED by rust-parser (chunked mode)\n",
+                facade
+            ));
+            s.push_str("// Row-chunked facade (#46): this sheet's transpiled body exceeded the per-module\n");
+            s.push_str("// byte cap (--max-module-mb), so its compute body is split across the part\n");
+            s.push_str("// modules below and invoked in order — ONE logical compute(), identical write\n");
+            s.push_str("// sequence, splits only at statement boundaries outside any convergence loop.\n");
+            s.push_str("// Import this module exactly as before; the parts are an implementation detail.\n\n");
+            s.push_str(&format!(
+                "export const SHEET_NAME = \"{}\";\n",
+                escape_js_string(&self.sheet_name)
+            ));
+            s.push_str(&format!(
+                "export const SHEET_DEPENDENCIES = [{}];\n",
+                self.deps_js
+            ));
+            let parts_js: Vec<String> = self.parts.iter().map(|p| format!("\"{}\"", p)).collect();
+            s.push_str(&format!(
+                "export const SHEET_PARTS = [{}];\n\n",
+                parts_js.join(", ")
+            ));
+            for (i, p) in self.parts.iter().enumerate() {
+                s.push_str(&format!("import {{ compute as _part{} }} from './{}';\n", i, p));
+            }
+            s.push_str("\nexport function compute(ctx) {\n");
+            for i in 0..self.parts.len() {
+                s.push_str(&format!("  _part{}(ctx);\n", i));
+            }
+            s.push_str("}\n");
+            fs::write(self.sheets_dir.join(&facade), &s)?;
+            self.total_bytes += s.len();
+        }
+        // Remove stale higher-numbered parts (previous build split this sheet
+        // into more parts, or split it when this build did not).
+        let mut idx = if self.parts[0] == facade { 0 } else { self.parts.len() };
+        loop {
+            let stale = self
+                .sheets_dir
+                .join(format!("{}.part{:03}.mjs", self.base, idx));
+            if !stale.exists() {
+                break;
+            }
+            let _ = fs::remove_file(&stale);
+            idx += 1;
+        }
+        Ok((self.parts.len(), self.total_bytes))
+    }
+}
+
+impl Write for PartEmitter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let w = self
+            .cur
+            .as_mut()
+            .expect("PartEmitter: write after finish()");
+        let n = w.write(buf)?;
+        self.cur_bytes += n;
+        self.total_bytes += n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        match self.cur.as_mut() {
+            Some(w) => w.flush(),
+            None => Ok(()),
+        }
+    }
+}
+
+impl ModuleSink for PartEmitter {
+    fn checkpoint(&mut self) -> std::io::Result<()> {
+        if self.cap > 0 && self.cur_bytes >= self.cap {
+            self.rotate()?;
+        }
+        Ok(())
+    }
+}
+
 /// Stream the JavaScript module code for a single sheet directly to `w`.
 ///
 /// Previously this built a `Vec<String>` of every line and `.join("\n")`d it
@@ -271,7 +513,12 @@ pub fn emit_chunked(
 ///
 /// Output is line-for-line identical to the old `join("\n")` form (trailing
 /// newline after the closing brace).
-fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> std::io::Result<()> {
+///
+/// `w.checkpoint()` is invoked before each statement in the linear regions
+/// (inputs, linear formulas, pre-cycle, post-cycle) — a rotating sink may split
+/// the module there (#46). The convergence-loop block is indivisible: one
+/// checkpoint before it, none inside.
+fn write_sheet_module(partition: &SheetPartition<'_>, w: &mut dyn ModuleSink) -> std::io::Result<()> {
     let sheet_name = &partition.name;
 
     // Header
@@ -282,16 +529,11 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     // Exports: SHEET_NAME, SHEET_DEPENDENCIES
     writeln!(w, "export const SHEET_NAME = \"{}\";", escape_js_string(sheet_name))?;
 
-    let deps_arr: Vec<String> = partition
-        .sheet_dependencies
-        .iter()
-        .map(|d| format!("\"{}\"", escape_js_string(d)))
-        .collect();
-    writeln!(w, "export const SHEET_DEPENDENCIES = [{}];", deps_arr.join(", "))?;
+    writeln!(w, "export const SHEET_DEPENDENCIES = [{}];", sheet_deps_js(partition))?;
     writeln!(w)?;
 
     // Runtime helpers for Excel functions — import from shared module
-    writeln!(w, "{}", "import { _index, _match, _vlookup, _hlookup, _large, _small, _rank, _fn, _sumif, _sumifs, _countif, _countifs, _offset, _matchesCriteria, _colNum, _numToCol, computeNPV, computeIRR, computeXIRR, computePMT, computePV, computeFV, computeRATE, computeNPER, computeXNPV, _minifs, _maxifs, _averageif, _averageifs, _filter, _excelSerialFromYMD, _edate, _eomonth } from './_helpers.mjs';")?;
+    writeln!(w, "{}", HELPERS_IMPORT)?;
     writeln!(w)?;
 
     // compute(ctx) function
@@ -305,6 +547,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
     if !partition.input_cells.is_empty() {
         writeln!(w, "  // ── Literal / input cells ──")?;
         for cell in &partition.input_cells {
+            w.checkpoint()?;
             let qualified = format!("{}!{}", sheet_name, cell.address);
             let val_js = cell_value_to_js(&cell.value);
             writeln!(w, "  ctx.set(\"{}\", {});", qualified, val_js)?;
@@ -329,7 +572,10 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
                 };
                 let js_expr = match parse_formula(formula) {
                     Some(ast) => transpile(&ast, &cell_config),
-                    None => format!("/* parse error: {} */ 0", escape_js_string(formula)),
+                    // Honest sentinel: an unparseable (or PARTIALLY parseable —
+                    // see parse_formula's trailing-token guard, issue #66)
+                    // formula must be detectably unusable, never a silent 0.
+                    None => format!("/* parse error: {} */ NaN", escape_js_string(formula)),
                 };
                 cell_exprs.push((qualified, js_expr));
             }
@@ -342,6 +588,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
             // No cycles — emit linearly
             writeln!(w, "  // ── Formula cells ──")?;
             for (addr, expr) in &cell_exprs {
+                w.checkpoint()?;
                 writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
             }
         } else {
@@ -374,10 +621,16 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
             if !pre.is_empty() {
                 writeln!(w, "  // ── Formula cells (pre-cycle) ──")?;
                 for (addr, expr) in &pre {
+                    w.checkpoint()?;
                     writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
                 }
                 writeln!(w)?;
             }
+
+            // The convergence loop is INDIVISIBLE — a rotating sink may split
+            // before it, never inside (the loop scaffolding, cycle re-evaluation,
+            // NaN-fill and telemetry must share one function scope).
+            w.checkpoint()?;
 
             // Convergence loop for circular cells.
             //
@@ -486,6 +739,7 @@ fn write_sheet_module<W: Write>(partition: &SheetPartition<'_>, w: &mut W) -> st
                 writeln!(w)?;
                 writeln!(w, "  // ── Formula cells (post-cycle) ──")?;
                 for (addr, expr) in &post {
+                    w.checkpoint()?;
                     writeln!(w, "  ctx.set(\"{}\", {});", addr, expr)?;
                 }
             }
@@ -795,15 +1049,20 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             if (_sampleKeys.length === 0) break; // converged stays false (honest)
           }
           let maxDelta = 0;
-          let _badCell = null;
+          let _anyNonFinite = false;
           for (let i = 0; i < _sampleKeys.length; i++) {
             const _cur = v[_sampleKeys[i]];
             if (typeof _cur !== 'number') continue;
-            // Lock-grade NaN-guard: a non-finite cell (Inf/NaN — typically a
-            // waterfall/coverage formula dividing by a cold-started 0) must never
-            // look like convergence. Record it; a persistent non-finite fixed point
-            // is reported converged=false rather than silently poisoning the result.
-            if (!Number.isFinite(_cur)) { _badCell = _sampleKeys[i]; break; }
+            // TRANSIENT-TOLERANT non-finite handling (#57). A non-finite cell (Inf/NaN
+            // — typically a coverage/amortization formula dividing by a denominator
+            // that is a COLD 0 at iteration 0 and WARMS to nonzero as the cluster
+            // solves) must NOT abort the loop the way the old streak>=3 break did
+            // (it quit before the denominator could warm, NaN-filling a cluster whose
+            // true fixed point is finite — the Debt!AR84 lock-grade symptom). Instead:
+            // exclude it from the delta, remember it, and KEEP iterating. Non-finiteness
+            // is judged ONLY at the fixed point (below) — a TRANSIENT cold-0 warms and
+            // converges; a STRUCTURAL #DIV/0! stays non-finite and stays converged=false.
+            if (!Number.isFinite(_cur)) { _anyNonFinite = true; _nonFiniteCell = _sampleKeys[i]; _before[i] = _cur; continue; }
             const _b = _before[i];
             // A cell going undefined -> number is a change, not convergence.
             // (Skipping these would let the first pass — every cluster cell newly
@@ -813,24 +1072,28 @@ export function run(inputs = {}, options = {}) {"#.to_string());
             maxDelta = Math.max(maxDelta, Math.abs(_cur - _b));
             _before[i] = _cur;
           }
-          if (_badCell !== null) {
-            _nonFiniteCell = _badCell;
-            _nonFiniteStreak++;
+          if (_anyNonFinite) {
+            // A non-finite pass can never be a fixed point. Force a non-converging
+            // delta and keep iterating so a TRANSIENT cold-0 denominator can warm.
+            // Stop early in two cases (#61 — bound the churn instead of running all
+            // MAX_ITER passes on a hopeless cluster): (a) STRUCTURAL — the FINITE
+            // surface has SETTLED (maxDelta<TOL) while a cell stays non-finite for a
+            // few passes (a genuine #DIV/0! whose finite inputs settled, so it will
+            // never warm); (b) a generous absolute warm-up cap that also covers a
+            // cluster that is BOTH divergent AND carries a persistent non-finite (the
+            // finite surface never settles, so case (a) never fires). converged stays
+            // false either way and the NaN-fill below blanks the cluster (PR #52).
             _lastDelta = Infinity;
             _clusterDeltaHist.length = 0;
-            // The mid-scan break above left _before STALE for every sample cell
-            // ordered after the non-finite one. Invalidate the whole baseline so the
-            // next finite pass recomputes it (-> maxDelta=Infinity once) instead of
-            // diffing across two iterations — otherwise a recovering oscillator could
-            // be compared to a same-phase stale value and falsely report converged.
-            // A non-finite pass can't converge anyway, so this costs <=1 iteration.
-            _before = new Array(_sampleKeys.length);
-            if (_nonFiniteStreak >= 3) break; // not recovering — stop churning to MAX_ITER
+            _nonFiniteStreak++;
+            if ((maxDelta < TOL && _nonFiniteStreak >= 4) || _nonFiniteStreak >= 50) break;
             continue;
           }
           _nonFiniteStreak = 0;
           _lastDelta = maxDelta;
-          if (maxDelta < TOL) { _conv = true; break; }
+          // Fixed point reached with the whole sampled surface finite: a transient
+          // cold-0 (if any) has fully warmed, so clear its residual telemetry.
+          if (maxDelta < TOL) { _conv = true; _nonFiniteCell = null; break; }
           // Real divergence detection (replaces the old constant-delta stale
           // break). Keep a short window of deltas; once we have a few, declare
           // divergence when the delta is NOT trending down: either strictly
@@ -1408,6 +1671,20 @@ fn detect_intra_sheet_cycles(partition: &SheetPartition<'_>, sheet_name: &str) -
 /// that the transpiler emits as _fn() calls.
 fn generate_runtime_helpers() -> String {
     r#"// ── Runtime helpers ──
+function _div(a, b) {
+  // Excel #DIV/0!: both x/0 (->Infinity) and 0/0 (->NaN) collapse to ONE sentinel (NaN)
+  // so downstream detection is a single predicate and IFERROR/ISERROR/ISNUMBER catch it.
+  const q = a / b;
+  return Number.isFinite(q) ? q : NaN;
+}
+function _aggNum(b) {
+  // Coerce a SUM/SUMPRODUCT/AVERAGE operand: a finite number passes; a NON-FINITE NUMBER
+  // (Inf/NaN — an Excel #DIV/0! that reached the aggregate) propagates as NaN (Excel's SUM
+  // of a #DIV/0! cell IS #DIV/0!); text/blank/null contribute 0 (Excel ignores text in SUM).
+  if (typeof b === 'number') return Number.isFinite(b) ? b : NaN;
+  const n = +b;
+  return Number.isFinite(n) ? n : 0;
+}
 function _index(arr, rowNum, colNum) {
   if (arr == null) return 0;
   if (!Array.isArray(arr)) return arr;
@@ -1551,7 +1828,7 @@ function _sumif(range, criteria, sumRange) {
   let total = 0;
   for (let i = 0; i < range.length; i++) {
     if (_matchesCriteria(range[i], criteria)) {
-      total += (+sr[i] || 0);
+      total += _aggNum(sr[i]); // propagate a #DIV/0! (non-finite number) as NaN; text -> 0
     }
   }
   return total;
@@ -1559,13 +1836,24 @@ function _sumif(range, criteria, sumRange) {
 
 function _sumifs(sumRange, criteriaPairs) {
   if (!Array.isArray(sumRange)) return 0;
+  // ARRAY criteria (Excel array semantics, issue #66): a criteria VALUE that
+  // is itself a range — `SUM(SUMIFS(vals, cats, $EK$973:$EK$977))` — yields
+  // one sum per criteria element; the surrounding SUM() flattens them. The
+  // first array criteria is mapped; any others stay scalar per element.
+  const arrIdx = criteriaPairs.findIndex(([, cv]) => Array.isArray(cv));
+  if (arrIdx >= 0) {
+    return criteriaPairs[arrIdx][1].map((cv) => {
+      const pairs = criteriaPairs.map(([cr, v], j) => (j === arrIdx ? [cr, cv] : [cr, v]));
+      return _sumifs(sumRange, pairs);
+    });
+  }
   let total = 0;
   for (let i = 0; i < sumRange.length; i++) {
     let allMatch = true;
     for (const [cr, cv] of criteriaPairs) {
       if (!Array.isArray(cr) || !_matchesCriteria(cr[i], cv)) { allMatch = false; break; }
     }
-    if (allMatch) total += (+sumRange[i] || 0);
+    if (allMatch) total += _aggNum(sumRange[i]); // propagate a #DIV/0! as NaN; text -> 0
   }
   return total;
 }
@@ -1658,13 +1946,27 @@ function _filter(array, include, ifEmpty) {
 function _excelSerialFromYMD(y, m, d) {
   y = Math.trunc(+y); m = Math.trunc(+m); d = Math.trunc(+d);
   // Excel DATE normalises out-of-range month/day by rolling over (Date.UTC does too).
-  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(1899, 11, 30)) / 86400000);
+  const ms = Date.UTC(y, m - 1, d);
+  let serial = Math.round((ms - Date.UTC(1899, 11, 30)) / 86400000);
+  // Excel's phantom 1900-02-29 (the Lotus leap-year bug): real dates BEFORE
+  // 1900-03-01 sit one serial LOWER (Jan 1 1900 = 1, Feb 28 1900 = 59), so an
+  // EOMONTH chain seeded from a degenerate 0 (e.g. a no-match MINIFS) matches
+  // Excel exactly: EOMONTH(0,1) = 59, not 60.
+  if (ms < Date.UTC(1900, 2, 1)) serial -= 1;
+  return serial;
 }
 
 function _serialToYMD(serial) {
-  // Inverse of _excelSerialFromYMD for normal modern dates (serial >= 61, i.e.
-  // 1900-03-01 onward, where Excel's leap-year-1900 bug does not apply).
-  const ms = Math.round(+serial) * 86400000 + Date.UTC(1899, 11, 30);
+  serial = Math.round(+serial);
+  // Inverse of _excelSerialFromYMD. Serials 0..60 predate the phantom
+  // 1900-02-29: 0 = "Jan 0" (month January 1900), 60 = the phantom Feb 29 —
+  // EOMONTH/EDATE month math must land these in Excel's month, not the epoch's.
+  if (serial >= 0 && serial <= 60) {
+    if (serial === 0) return { y: 1900, m: 1, d: 0 };
+    if (serial === 60) return { y: 1900, m: 2, d: 29 };
+    serial += 1; // real dates Jan 1..Feb 28 1900: undo the phantom-day gap
+  }
+  const ms = serial * 86400000 + Date.UTC(1899, 11, 30);
   const dt = new Date(ms);
   return { y: dt.getUTCFullYear(), m: dt.getUTCMonth() + 1, d: dt.getUTCDate() };
 }
@@ -1696,6 +1998,80 @@ function _eomonth(serial, months) {
   return _excelSerialFromYMD(ny, nm, _daysInMonth(ny, nm));
 }
 
+function _yearfrac(start, end, basis) {
+  // Excel YEARFRAC. Basis 0 (the default) is US-NASD 30/360 — month-aligned
+  // spans are EXACT (1, 0.5), which models gate on with equality tests
+  // (MOD(YEARFRAC(...), x) = 0) and month counts (YEARFRAC*12+1). Issue #66.
+  let a = Math.round(+start || 0), b = Math.round(+end || 0);
+  basis = Math.trunc(+basis || 0);
+  if (a > b) { const t = a; a = b; b = t; } // Excel YEARFRAC is symmetric
+  if (basis === 2) return (b - a) / 360;
+  if (basis === 3) return (b - a) / 365;
+  const A = _serialToYMD(a), B = _serialToYMD(b);
+  if (basis === 1) {
+    // actual/actual: actual days over the average year length of the span
+    let denom = 0;
+    for (let y = A.y; y <= B.y; y++) denom += (((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365);
+    return (b - a) / (denom / (B.y - A.y + 1));
+  }
+  // basis 0 (Excel's 30/360) and 4 (European 30/360)
+  let d1 = A.d, d2 = B.d;
+  if (basis === 4) {
+    if (d1 === 31) d1 = 30;
+    if (d2 === 31) d2 = 30;
+  } else {
+    // EXCEL's actual basis-0 algorithm (verified against the real A-1 model,
+    // issue #66). It differs from textbook SIA/NASD in ORDER: the d2=31 rule
+    // tests d1 BEFORE the February adjustment, so a Feb-end start keeps a
+    // day-31 end — YEARFRAC(Feb28-2023, May31-2023) = 91/360 (NASD: 90/360).
+    // The both-Feb rule DOES apply: YEARFRAC(Feb28-2023, Feb29-2024) = 1
+    // exactly (the model's Feb-to-Feb anniversary columns are exact integers).
+    const lastFeb = (p) => p.m === 2 && p.d === _daysInMonth(p.y, 2);
+    if (lastFeb(A) && lastFeb(B)) d2 = 30;
+    if (d1 === 31) d1 = 30;
+    if (d2 === 31 && d1 === 30) d2 = 30; // d1 here is pre-Feb-adjustment
+    if (lastFeb(A)) d1 = 30;             // February adjustment LAST
+  }
+  return ((B.y - A.y) * 360 + (B.m - A.m) * 30 + (d2 - d1)) / 360;
+}
+
+// Excel's hard sheet bounds. An address computed past them is #REF! in Excel —
+// and, critically, a displacement that comes from a poisoned/diverging cell can
+// be ~1e7+: materializing that rectangle is a multi-GB allocation that fatally
+// OOMs the engine MID-PASS at any heap size (observed: the A-1 canonical eval
+// died at ~56 min under both 12GB and 20GB caps while steady at 6.5GB heap).
+// Out-of-bounds => honest NaN, exactly where Excel shows #REF!.
+const _XL_MAX_ROW = 1048576, _XL_MAX_COL = 16384;
+
+function _offsetAddr(refAddr, rows, cols) {
+  // Pure address arithmetic for a computed range endpoint (no dereference).
+  const m = String(refAddr).match(/^(.*)!([A-Z]+)([0-9]+)$/);
+  if (!m) return refAddr;
+  const col = _colNum(m[2]) + Math.trunc(+cols || 0);
+  const row = +m[3] + Math.trunc(+rows || 0);
+  if (col < 1 || row < 1) return refAddr; // Excel #REF!; clamp to base (finite, sweep-visible)
+  if (col > _XL_MAX_COL || row > _XL_MAX_ROW) return null; // Excel #REF! — _dynRange maps to NaN
+  return m[1] + '!' + _numToCol(col) + row;
+}
+
+function _dynRange(ctx, corners) {
+  // Computed-endpoint range (`CF14:OFFSET(CF14,,-($F$12-2))`): the rectangle
+  // spanning every corner address. Returns the flat values array, like
+  // ctx.range(). Issue #66.
+  let sheet = null, c1 = Infinity, r1 = Infinity, c2 = -1, r2 = -1;
+  for (const addr of corners) {
+    if (addr === null) return [NaN]; // #REF! endpoint (out of sheet bounds) — poison the aggregate honestly
+    const m = String(addr).match(/^(.*)!([A-Z]+)([0-9]+)$/);
+    if (!m) return [];
+    if (sheet === null) sheet = m[1];
+    const c = _colNum(m[2]), r = +m[3];
+    if (c < c1) c1 = c; if (c > c2) c2 = c;
+    if (r < r1) r1 = r; if (r > r2) r2 = r;
+  }
+  if (sheet === null) return [];
+  return ctx.range(sheet + '!' + _numToCol(c1) + r1 + ':' + _numToCol(c2) + r2);
+}
+
 function _colNum(col) {
   let n = 0;
   for (const ch of col) n = n * 26 + ch.charCodeAt(0) - 64;
@@ -1718,6 +2094,10 @@ function _offset(ctx, refAddr, rowOffset, colOffset, height, width) {
   const newCol = _colNum(col) + (+colOffset || 0);
   const h = +height || 1;
   const w = +width || 1;
+  // Target rectangle past Excel's sheet bounds is #REF! — and a poisoned
+  // offset/height of ~1e7 would otherwise allocate a value-sized array (the
+  // mid-pass OOM class). Honest NaN, like Excel's error.
+  if (newRow < 1 || newCol < 1 || newRow + h - 1 > _XL_MAX_ROW || newCol + w - 1 > _XL_MAX_COL) return NaN;
   if (h === 1 && w === 1) {
     return ctx.get(`${sheet}!${_numToCol(newCol)}${newRow}`);
   }
@@ -1765,7 +2145,7 @@ function computeXIRR(cashflows, dates, guess) {
   for (let i = 0; i < 200; i++) {
     let f = 0, df = 0;
     for (let t = 0; t < cfs.length; t++) {
-      const years = (ds[t] - d0) / 365.25;
+      const years = (ds[t] - d0) / 365; // Excel XIRR uses a 365-day basis (like XNPV)
       const disc = Math.pow(1 + r, years);
       f += cfs[t] / disc;
       df -= years * cfs[t] / (disc * (1 + r));
@@ -1973,7 +2353,7 @@ mod tests {
     /// just lets the assertions inspect the generated module in memory.
     fn generate_sheet_module(partition: &SheetPartition<'_>, _workbook: &WorkbookData) -> String {
         let mut buf: Vec<u8> = Vec::new();
-        write_sheet_module(partition, &mut buf).expect("writing to a Vec never fails");
+        write_sheet_module(partition, &mut PlainSink(&mut buf)).expect("writing to a Vec never fails");
         String::from_utf8(buf).expect("generated module must be valid UTF-8")
     }
 

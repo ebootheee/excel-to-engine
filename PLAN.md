@@ -27,6 +27,133 @@ complete traces for hurdle formation, B-1 MIP proceeds, and the summary tie-out.
 Re-emission was byte-identical, and build-manifest layout 1.1 identity-hashes
 the proof alongside the workbook-derived engine and ground truth. No proprietary
 cells or values are committed here.
+## Status: 2026-06-10 — post-v0.3.1 queue executed: #33 warm measure (2 passes, == GT), eval harness fits the box (PR #69), #46 row-chunking landed + real-A-2 gated
+
+All three "next" items from the v0.3.1 entry, one session. (1) **#33 warm-seed convergence
+measured**: 2 passes exactly, nonFinite=0, sampled fixed point 100.00% vs GT, all 17 named
+cluster outputs exact — posted to #33; cold-start pass count is the only remainder (overnight
+run). (2) **per-sheet-eval cluster child** now mirrors the engine loop verbatim (single GT
+copy, sampled surface, engine NaN-fill scope, never size-skip a cluster member,
+`EVAL_CLUSTER_TIMEOUT_MS`) — PR #69 merged. (3) **#46 row-chunked emission**
+(`--max-module-mb`, facade+parts, convergence loops indivisible, stale-part sweep, eval-scan
+follows part imports): synthetic-gated 19/19 with split-vs-single value identity, and
+real-model gated — **A-2's ~305MB Debt now imports in 2.4s as 5 parts; the full 21-sheet A-2
+engine imports in 8.9s** (pre-fix: the 609MB fatal V8 alloc, no A-2 base obtainable). NEXT:
+canonical A-1 cluster eval on the slimmed harness → cold-start run → VM measurement day
+(canonical eval + ADR-026 cone re-gate).
+
+## Status: 2026-06-09 (late) — v0.3.1: #66 root-caused, fixed, CLOSED same day (PR #67) — fidelity at the floor
+
+The #66 hunt ran the full playbook in one session: xlsx `<f>` extraction → three defect
+classes (computed-endpoint ranges + silent-partial-parse truncation; Excel-exact YEARFRAC
+30/360, three GT-corrected iterations; array-criteria SUMIFS) → negative-controlled
+synthetics (13/13, RED pre-fix with predicted values) → four A-1 rebuild+sweep cycles.
+**Final: 14/17 sheets EXACT from a warm seed, 266 residual cells (−99.995% from 5.9M) = the
+documented float-dust floor** (Debt `=0` gates on half-ULP GT values; bit-exactness out of
+scope). Plus durable honesty hardening: `parse_formula` refuses partial parses; parse errors
+emit NaN. CHANGELOG v0.3.1 entry has the full table. NEXT: convergence measure (#33, now
+unblocked) → per-sheet-eval slimming → row-chunking (#46) → VM measurement day.
+
+## Status: 2026-06-09 (release) — v0.3.0 TAGGED: #62/#63 merged, #47 closed, convergence re-measured on the fixed build
+
+Release day. **PR #62 merged** (FF, `e5072bd`) and **PR #63 merged** (FF, `20aedcc` — CLI-side
+XIRR 365-day basis, the noted follow-up). Issue write-ups posted to #57/#47; **#47 closed**.
+`ete` help crash fixed (nested backticks in `printHelp`'s template literal parsed as a tagged
+template — `TypeError: "COL" is not a function` on every bare invocation; stale cone help text
+rewritten + smoke test). README gained `ete lite`/templates/`--reuse-parse` and a
+**Correctness & honesty** section; package.json `0.2.0 → 0.3.0`; first tagged release booked
+(`docs/releases/v0.3.0.md` + boothe.io post).
+
+**Convergence re-measure → found TWO more roots, fixed one same-day (#64).** The per-sheet
+warm-GT sweep (`diag-warm-all-sheets.mjs`, all 17 cluster sheets, fresh GT seed each):
+pre-#62 baseline **1/17 clean / ~5.9M numeric divergences** → post-#62 **9/17 clean / 391k**
+→ the residual carried a one-day date-shift signature → **#64: `YEAR`/`MONTH`/`DAY` lowered
+to LOCAL-time `Date` getters** (engines west of UTC read every serial a day early; answers
+depended on machine TZ; fixed via `_serialToYMD` + TZ-pinned-child regression, RED pre-fix)
+→ post-#64 rebuild **11/17 exactly clean, 13/17 within float noise, 383k residual (−93.5%)**,
+returns/promote/equity chain all ZERO. Residual = 4 sheets (Technology 285k, PP&E 84k,
+Lease Am 7.3k, Debt 6.7k) carrying a NEW class: **formula-STRUCTURE mismatch**
+(`Technology!CG14` computes 1 from exact-GT inputs where Excel computed 0 → transpiled AST ≠
+workbook formula; next campaign). Scale-wall characterization: canonical per-sheet-eval
+cluster child **OOMs 16 GB after 61 min on 31 GB** (duplicate GT + 4.7M-string `_written` +
+per-cell snapshots — a lean single-copy/sampled-delta probe ran in <6 GB); ~11–16 min/pass;
+full-cluster convergence measurement stays moot until the 4 sheets are exact (iteration walks
+away from GT through them; the engine's #61 detector correctly NaN-fills, honesty held).
+
+## Status: 2026-06-09 (later) — #57 STRUCTURAL ROOT FOUND & FIXED: calamine $-blind shared-formula expansion (1.75M corrupted A-1 cells)
+
+The "trace the `#DIV/0!` feeding `Equity!AN122` / `GPP Promote!D88`" investigation landed
+(branch `fix/calamine-shared-formula-anchors`). The root was **neither #47 nor #54**: calamine
+0.26.1's shared-formula expansion (`replace_cell_names`) is **`$`-blind** — on fill it SHIFTED
+column-absolute refs (`$AO17`) and FROZE row-anchored column-relative refs (`L$7`, `AO$698`),
+corrupting **1,745,461 member cells (30% of A-1)**; exactly the mixed-anchor AVERAGEIFS/SUMIFS
+financial idioms. Diagnostic: one-pass warm-GT recompute (seeds ctx with all 5.8M GT values; a
+faithful formula must reproduce GT) — Equity diverged at rows 17–19 with the column-shift
+signature `got(Y17)==GT(N17)`.
+
+Fixes: **calamine 0.26 → 0.35** (upstream fixed $ anchors in 0.32 + LOG10-as-ref in 0.35; zero
+API churn) + our own tokenizer's LOG10 guard (`formula_ast.rs`: name followed by `(` is a
+function) + helpers fidelity (Excel 1900-epoch quirk serials ≤ 60 → `EOMONTH(0,1)=59`, live on
+GPP row 116; XIRR 365-day basis, was 365.25 → fixed the 4th-decimal IRR drift). Result:
+**Equity 9,819 → 1 divergence (cosmetic label), GPP Promote → 30 (all cosmetic TEXT() labels);
+`AN122`/`D88`/all IRRs == GT exactly.** Negative-controlled regression
+`test-shared-formula-anchors.mjs` (hand-zipped REAL `<f t="shared">` xlsx — SheetJS never emits
+shared formulas, which is why every prior synthetic gate missed the class). Full `npm test` green.
+
+Remaining for a converged A-1 base case: the scale wall (#33/#46) — unchanged by this fix —
+then a full cluster convergence re-measure. `lib/irr.mjs` 365.25 XIRR (CLI-side) noted as
+follow-up. #47's date-axis mechanism is verified fixed on the current build (row-7 axis 0/301
+divergent); its residual symptom claims are superseded by this root.
+
+## Status: 2026-06-09 — #60 + #61 merged; slow-model run reframes #57 (structural denominator + scale wall)
+
+All in-repo div-by-zero roots are now merged (`fdf1b1d`): **#60** `_div` canonical-NaN + NaN-propagating
+reducers (un-IFERROR'd `SUM`/`AVERAGE` no longer silently drop a `#DIV/0!` → confident wrong number);
+**#61** convergence churn-cap + per-sheet-eval divergence detector + dead-loop removal. Full `npm test`
+green with the Commit-B binary.
+
+Then the real A-1 was run end-to-end (build ~71 min + per-sheet-eval), which **reframed #57**:
+- **#60 real-A-1 gate PASSED.** A 5-pass warm-GT recompute, Commit-A vs Commit-B: **13/23 named outputs
+  byte-identical and matching GT** (IRRs, MOICs, terminalValue, fundSize, paidIn, ltv, …) → #60 corrupts
+  no correct output. **10/23 moved finite→NaN** (`equityBasis×5`, `totalCarry`, `distributed`, `exitDebt`,
+  `outstandingDebt`) — but the Commit-A values were **already wrong** (`totalCarry=0`, `equityBasis=0` vs
+  GT `4.16e7`/`1.32e7`): silently-dropped `#DIV/0!`s. #60 turns those **deceptive zeros into honest NaN**.
+- **#57's real blocker is STRUCTURAL, not convergence.** From a **warm GT seed** the returns-sheet
+  denominators (`Equity!AN122`, `GPP Promote!D88`) compute **0 where Excel has nonzero** → `#DIV/0!`. A
+  warm seed should reproduce GT in ~1 pass, so this is an **unfaithful transpiled formula** (likely a
+  #47 date-keyed `SUMIFS` miss or a #54 unsupported-fn stub), not a cold-start transient. NEXT: trace the
+  `#DIV/0!` feeding those two cells.
+- **Scale wall (#33/#46).** The 17-sheet cluster is **~11–13 min/PASS**; full convergence (~10 hrs) is
+  infeasible on a 31 GB machine — both per-sheet-eval runs timed out. Convergence can't be *measured*
+  here; the machinery (Commit A / #59 / #60 / #61) is synthetic-proven. `#57` stays open, re-scoped to the
+  structural denominator root + the scale work.
+
+## Status: 2026-06-08 — Lock-grade convergence: multi-root div-by-zero, 4 PRs merged (design panel + adversarial verify)
+
+The lock-grade cluster non-convergence (T-076) was confirmed **multi-root** (div-by-zero leaking
+±Inf/NaN) and the in-repo-gateable roots were fixed and merged, each proven on a fast **synthetic
+`.xlsx` → real rust-parser → `eng.run()`** loop (not the 34–70 min A-1 rebuild) with negative-control
+discipline. Approached via a Workflow design panel (4 proposals → 3 judges → synthesis) + an
+independent adversarial verification of the merged fix.
+
+- **#55 (PR `2b273ba`)** — `IFERROR`/`ISERROR`/`ISNUMBER` treat `#DIV/0!` (±Infinity, not just NaN) as an
+  Excel error (~194k IFERROR cells on A-1). `test-iferror-infinity.mjs`.
+- **#56 (PR `0ea9759`)** — `per-sheet-eval` initializes `_sheetConvergence` (PR #52 follow-up crash on
+  intra-sheet-cycle sheets). `test-per-sheet-eval-intracycle.mjs`.
+- **#57 Commit A (PR #58 `6bb2193`)** — the cross-sheet cluster loop is **transient-tolerant**: a
+  divide-by-cold-0 that warms across iterations no longer aborts the cluster (it judges non-finiteness
+  only at the fixed point); a structural `#DIV/0!` stays `converged:false` + NaN-fill (honest). Strictly
+  safe for previously-converging models. `test-cluster-transient-div0.mjs` (negative-controlled).
+- **#57 lockstep (PR #59 `73ee5a8`)** — `per-sheet-eval` now NaN-fills a non-converged cluster +
+  engine-faithful warming delta (it had been over-reporting warm-seed accuracy on clusters the engine
+  NaN-fills). `test-per-sheet-eval-lockstep.mjs`.
+
+**REMAINING (cannot be honestly gated in-repo):** **#60** — un-`IFERROR`'d `SUM`/`AVERAGE` silently DROP a
+`0/0` NaN (confident wrong number on acyclic cells); fix = `_div` canonical-NaN + NaN-propagating
+reducers, **gated on a real-A-1 before/after re-measure** (moves base-case numbers) + a `_div` call-site
+audit across both emitters. **#61** — perf/maintenance follow-ups (per-sheet-eval divergence detector;
+engine divergent+structural churn; dead pre-#57 loop), all correctness-safe. **Real-A-1 convergence
+confirmation** still pending (the slow path). `#57` stays open until A-1 confirms a converged base case.
 
 ## Status: 2026-06-06 — Outstanding-work triage: 6 PRs merged (master-reviewed fan-out)
 

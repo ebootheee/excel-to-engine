@@ -26,6 +26,307 @@
   truncation, expected absence, map-phase emission, source hashes, build hash,
   streamed indexing, explain, stale cleanup, regeneration, preflight ordering,
   early failure, and the completeness gate.
+## 2026-06-10 — #33 warm-convergence measured (2 passes, fixed point == GT); per-sheet-eval fits the box; #46 row-chunked modules
+
+- **#33 warm-seed convergence measure (the post-v0.3.1 unblock, posted to #33):** the lean
+  warm-GT probe against the v0.3.1 build (`a1-66c`, identity verified) — **converged=true in
+  exactly 2 passes** (12.2 + 12.6 min/pass, 6GB working set), nonFinite=0 on every pass, fixed
+  point vs GT **290,767/290,781 = 100.00%** (all 14 divergent cells previously documented:
+  Debt fidelity-floor rows + 1 sub-1e-6 jitter + 2 cosmetic TEXT labels), **all 17 cluster-
+  resident named outputs exact**. Pass-2 maxDelta = 5.96e-8 @ Debt!CQ2724 — the documented
+  dust constant churns but sits 2 orders of magnitude below tolerance. The GT fixed point is
+  stable under recompute; only the cold-start pass count remains (deferred overnight run).
+- **PR #69 MERGED** (`9150af5`, FF) — per-sheet-eval cluster child slimmed to the ENGINE's
+  exact loop (it OOMed 16GB/61min on A-1): GT parsed directly into ctx (was two full copies),
+  the `_written` Set (~4.7M fresh strings) + per-cell `prevSnapshot` object replaced by the
+  engine's sampled surface + `_before` baseline array — which is simultaneously a lockstep
+  fix (the old surface diffed/NaN-filled non-member-sheet writes and skipped member-sheet
+  input cells). **A cluster member is never size-skipped** (`MAX_SHEET_SIZE_MB` silently
+  dropped the monster sheets from the cluster → partial-cluster wrong fixed point; regression
+  red pre-fix with `clustersTotal=0`). New `EVAL_CLUSTER_TIMEOUT_MS` (default 60min).
+- **OFFSET/_dynRange #REF! bounds (the mid-pass OOM root)** — the instrumented canonical run
+  revealed the crash class: heap steady at 6.5GB through pass 4, death mid-pass-5 needing
+  >13GB in ONE spike. `_offsetAddr`/`_offset` had no upper bounds, so a displacement (or
+  OFFSET height) fed by a poisoned/oscillating cell (~1e7-scale) materialized a value-sized
+  rectangle — an allocation proportional to the VALUE, fatal at any heap cap (hence identical
+  ~56-min deaths under 12GB and 20GB). Past Excel's sheet bounds (1,048,576 × 16,384) the
+  helpers now answer honest NaN, exactly where Excel shows #REF! (scalar OFFSET previously
+  returned a SILENT 0 there). Negative-controlled `test-offset-ref-bounds.mjs` (7 asserts,
+  red pre-fix with the predicted silent values). Also instrumented: cluster telemetry now
+  names the max-delta cell. **Canonical A-1 verdict so far (honest): NOT a 2-pass story —
+  `GPP Promote!C465` is Excel's own #DIV/0! (0/0, absent from GT) so a persistent non-finite
+  is CORRECT, and the finite surface oscillates at e7 scale (1.5e7→3.0e7→2.0e7 by pass 4);
+  the probe's "2 passes, converged" was a stride-20 sampling illusion. Oscillation-cell
+  diagnosis = next session.**
+- **cluster child per-pass telemetry + full crash capture** — the canonical A-1 cluster
+  child died at ~56 min under BOTH a 12GB and a 20GB heap (cap-independent death time),
+  and the 200-char error truncation discarded the V8 GC dump that says which space
+  exhausted. The child now logs pass/delta/heap per pass (stderr + `_cluster-progress.log`
+  next to the report) and the orchestrator keeps a real stderr tail. The probe-vs-canonical
+  discrepancy (probe: 2 passes, <6GB observed; canonical child: dead at ~56 min) is the
+  open diagnosis.
+- **per-sheet-eval exit gate is crash-honest** — a hard-failed sheet (crash/OOM/error)
+  contributes zero tested cells, so the accuracy-only exit gate exited 0 on a run where the
+  17-sheet cluster child OOMed and only 3 standalone sheets were scored (observed live:
+  "99.94%, exit 0" with `sheetsWithErrors: 17`). Hard failures now force exit 1 (regression
+  red pre-fix). Same live run measured the cluster child's true heap need: >12GB (the earlier
+  6GB probe reading was mid-run, not peak) — set `NODE_HEAP_MB` accordingly.
+- **per-sheet-eval dynamic-read scan knows the #66 helpers** — the v0.3.1 emitter lowers
+  `ref:OFFSET(...)` through `_dynRange`/`_offsetAddr` with no bare `_offset(` call, so the
+  GT-seed-scoping scan approved scoping on exactly the builds where ranges are runtime-
+  addressed (observed live on the a1-66c canonical eval). Markers added (red pre-fix in the
+  new MODEL C). Defense-in-depth today: `_dynRange` anchors are same-sheet-only because a
+  sheet-qualified computed-endpoint range refuses to parse (honest NaN) — filed **#71**.
+- **#46 row-chunked sheet modules** (`--max-module-mb=N`, default 64, 0 disables): any sheet
+  module crossing the cap rotates into `<Sheet>.partNNN.mjs` modules behind a same-named
+  facade — ONE logical `compute()`, identical write sequence, statement-boundary splits only,
+  never inside a convergence loop; under-cap sheets stay byte-identical single files; stale
+  parts from previous builds are swept. Fixes the import-time fatal alloc (V8 UTF-16-decodes
+  ~2x the module bytes at import — A-2's ~305MB Debt = the 609,447,784-byte crash). The
+  per-sheet-eval dynamic-read scan now follows facade part imports (red pre-fix: it approved
+  GT-seed scoping for exactly the monster sheets most likely to use OFFSET). Regression
+  `test-row-chunked-modules.mjs` (19 asserts: facade/parts/sizes, loop indivisibility, GT
+  reproduction, split-vs-single identical values, cell-exprs parity, stale-part sweep,
+  eval-scan companion).
+
+## 2026-06-09 — v0.3.1: #66 CLOSED same day — 5.9M → 266 divergent cells (−99.995%), 14/17 sheets exact
+
+**PR #67 MERGED** (`77b2959`, FF, 3 commits) — all #66 structure-fidelity classes fixed, each
+negative-controlled in `test-structure-fidelity.mjs` (13/13; RED pre-fix with the predicted
+wrong values) and validated by four A-1 rebuild+sweep cycles (~25 min each):
+
+- **Computed-endpoint ranges** `ref:OFFSET(...)` (Technology 284,568 → **0**): the parser had
+  no rule for a bare `:` — it stopped at the colon and silently returned the partial AST
+  (dropping whole trailing factors). New `Expr::DynRange` + `_dynRange`/`_offsetAddr`.
+  **`parse_formula` now refuses partial parses** (trailing tokens → None) and parse-error
+  cells emit **NaN, not 0**, in both emitters. Also fixed: the EMPTY-argument bug
+  (`OFFSET(x,,n)`'s comma was eaten, misaligning later args) and `A1:MAX(...)` folding the
+  function name into a column-range endpoint.
+- **YEARFRAC basis-0 = Excel's exact 30/360** (PP&E 84,468 → **0**, Lease Am 7,300 → **0**):
+  was `(b−a)/365.25`. Took THREE iterations, each corrected by the model's own ground truth:
+  textbook NASD → Excel orders the d2=31 rule BEFORE the Feb adjustment
+  (`YEARFRAC(Feb28-2023, May31-2023)=91/360`, hand-verified to 1/360 on PP&E row 92) → the
+  both-Feb rule DOES apply (Feb→Feb anniversary columns are exact integers). The middle
+  iteration's test PASSED while wrong — it validated the hypothesis against itself; only
+  real-model GT is the oracle. Bases 0–4 implemented.
+- **Array-criteria SUMIFS** (Debt array formulas): `SUM(SUMIFS(vals, cats, $EK$973:$EK$977))`
+  yields one sum per criteria element (Excel array semantics); previously matched nothing → 0.
+- **The fidelity floor, documented (not fixable):** Debt's residual 250 cells gate `=0`
+  against GT values like **−5.96e-8** — half-ULP dust from Excel's own computation; our
+  recompute produces a clean 0 (value-identical at 1e-6) and the gate flips. Bit-exact
+  reproduction of Excel's FP operation order is out of scope. Plus 16 cells of sub-1e-6
+  jitter (Financial Statements 14, Existing Owned 2).
+
+**Final sweep: 14/17 cluster sheets reproduce GT exactly from a warm seed; 17/17 within
+float-noise-or-documented-floor; every named output's sheet at ZERO. #66 closed.**
+Full-cluster convergence measurement (#33) is now unblocked.
+
+## 2026-06-09 — v0.3.0 RELEASED: "Never a Silent Wrong Number" (first tagged release)
+
+**Booked the correctness campaign as the first tagged release** (`v0.3.0`, notes at
+`docs/releases/v0.3.0.md`). Same-day landings:
+
+- **PR #62 MERGED to main** (`e5072bd`, FF) — the calamine $-anchor fix (entry below). Issue
+  comments posted to #57 (trace + result) and #47; **#47 CLOSED** (date-axis mechanism verified
+  exact 0/301; residual symptoms were the calamine root).
+- **PR #63 MERGED** (`20aedcc`, FF) — `lib/irr.mjs` CLI-side XIRR now Excel's 365-day basis
+  (was 365.25), closing the follow-up noted in the #62 entry. Negative-controlled leap-span
+  regression in `tests/lib/test-lib.mjs` (RED pre-fix with exactly the 365.25-basis value).
+- **`ete` help crash FIXED** — `printHelp()`'s template literal contained nested backticks
+  (`` `* `COL`` ``) from the --emit-cones help text, which parsed as a tagged template and threw
+  `TypeError: "COL" is not a function` on every bare/unknown invocation. Rewrote the stale text
+  (the COL$ROW bug it referenced was fixed in #43; the cone's EXPERIMENTAL label now stems from
+  the vacuous re-gate) + help smoke test in `test-cli.mjs` (36/36).
+- **PR #64 MERGED** (`92ca242`, FF) — found by the release-day re-measure: **`YEAR`/`MONTH`/`DAY`
+  lowerings used LOCAL-time `Date` getters**, so any engine runtime west of UTC read every Excel
+  serial one day early (`DAY(Jun-30-2023)=29`; the `DATE(YEAR(x),MONTH(x),DAY(x))` idiom on
+  `Valuation!G7` rebuilt 45107 as 45106) — date-keyed COUNTIFS/SUMIFS windows shifted a day and
+  0/1 flags flipped across sheets; **the engine's answers depended on the machine timezone.**
+  Now routed through `_serialToYMD` (UTC integer math, epoch-quirk aware). Regression runs the
+  engine in TZ-pinned children (America/Denver + Pacific/Auckland) with a hazard probe as the
+  negative control — RED pre-fix with the A-1-observed values, 26/26 GREEN post.
+- **Convergence re-measured (the discipline that caught #64):** per-sheet warm-GT sweep of all
+  17 cluster sheets — pre-fix baseline 1/17 clean / ~5.9M numeric divergences; post-#62
+  9/17 exactly clean (entire returns chain → 0), ~391k residual (−93%) all carrying the one-day
+  signature; post-#64 rebuild: **11/17 exactly clean, 13/17 within float noise, 383k residual (−93.5% from
+  pre-#62)** — returns/promote/equity chain all at ZERO; residual = 4 sheets (Technology 285k,
+  PP&E 84k, Lease Am 7.3k, Debt 6.7k) carrying a NEW defect class (formula-STRUCTURE mismatch:
+  `Technology!CG14` computes 1 from exact-GT inputs where Excel computed 0 — transpiled AST ≠
+  workbook formula; next campaign, see the residual-fidelity issue). The canonical per-sheet-eval
+  cluster child OOMs a 16 GB heap after 61 min on a 31 GB box (#33 = memory-bound; duplicate GT
+  copy + 4.7M-string `_written` set + per-cell snapshots identified as the avoidable overhead).
+  See `docs/releases/v0.3.0.md` and the #33 thread.
+- README refreshed (`ete lite`, templates, `--reuse-parse`, **Correctness & honesty** section,
+  three-ways-to-compute, test counts); package.json `0.2.0 → 0.3.0` + repository URL fixed
+  (pointed at a nonexistent org); release notes + boothe.io post drafted.
+
+## 2026-06-09 — #57 structural root FOUND & FIXED: calamine $-blind shared-formula expansion corrupted 1.75M A-1 cells
+
+**The trace.** A one-pass warm-GT recompute (`ctx` seeded with all 5.8M ground-truth values,
+one `compute()` sweep, every `set()` diffed against GT — a faithful formula MUST reproduce GT
+from a warm seed) showed 9,819 Equity divergences starting at rows 17–19 (the capital-call
+schedule), with `got(Y17) == GT(N17)`: the row was **column-shifted**. The xlsx master formula
+`AVERAGEIFS($AO17:$MC17, $AO$7:$MC$7, ">"&L$7, …)` (shared group, filled M17:AJ17) was expanded
+by **calamine 0.26.1's `replace_cell_names()`, which is `$`-blind**: a `$` splits the ref token,
+so `$AO17` (column-absolute) was offset as if relative (wrongly SHIFTED) and `L$7`/`AO$698`
+(row-anchored, column-relative) never parsed as refs (wrongly FROZEN). Plain-relative and
+fully-absolute refs both behave by accident — which is why 13/23 named outputs were fine and
+exactly the mixed-anchor financial idioms (AVERAGEIFS/SUMIFS windows, ratio rows) collapsed.
+Blast radius on A-1: **1,745,461 of 4.69M shared-formula member cells (30% of the model)**
+received a corrupted formula. This — not date drift (#47's mechanism is already fixed and
+verified: row-7 axis 0/301 divergent) and not fn stubs (#54: `_fn-fallbacks` is empty) — is what
+zeroed `Equity!AN122` (class equityBasis) and `GPP Promote!D88` (totalCarry): their cash-flow
+rows aggregate corrupted schedule rows to 0, then #60's honest NaN surfaced the 0/0.
+
+**The fixes** (branch `fix/calamine-shared-formula-anchors`):
+1. **calamine 0.26 → 0.35** (`pipelines/rust/Cargo.toml`) — upstream fixed $-anchor handling in
+   shared-formula expansion (0.32) and `LOG10`-parsed-as-cell-ref (0.35). Zero API churn.
+2. **`formula_ast.rs`: a name followed by `(` is a function call, never a cell ref** — our own
+   tokenizer had the same LOG10 bug (parsed as column LOG, row 10 → `#NAME?`-style 0).
+3. **`chunked_emitter.rs` helpers: Excel 1900-epoch quirk for serials ≤ 60** — `EOMONTH(0,1)`
+   now = 59 like Excel (phantom 1900-02-29 / "Jan 0" handling in `_serialToYMD` /
+   `_excelSerialFromYMD`); live on A-1 GPP row 116 where a no-match MINIFS seeds an EOMONTH
+   chain from 0. And **`computeXIRR` now uses Excel's 365-day basis** (was 365.25) — this was
+   the residual 4th-decimal IRR drift on all 14 Equity IRR cells.
+
+**Result (one-pass warm-GT recompute, full rebuild):** Equity 9,819 → **1** divergence (the
+cosmetic `CELL("filename")` label); GPP Promote 4.62M set-divergences → **30** (all cosmetic
+`TEXT()` percent labels). `Equity!AN122` = 1.3191e7 == GT, `GPP Promote!D88` = 4.1613e7 == GT,
+row 116 and every IRR exact. **Zero numeric divergence on both traced sheets.**
+
+New regression `pipelines/rust/tests/test-shared-formula-anchors.mjs` (hand-zipped xlsx with
+REAL `<f t="shared">` groups — SheetJS never writes them, which is why the 78/78 smoke suite
+missed this class; negative-controlled RED on 0.26 with the predicted wrong values 22/23/5/7,
+GREEN on 0.35) + epoch-quirk & XIRR-365 cases in `test-date-axis-sumifs.mjs`. Both in `npm test`.
+
+Follow-up noted: `lib/irr.mjs` (CLI-side XIRR) still uses 365.25 — separate consumer, tracked
+in ROADMAP. #33/#46 (scale wall) unchanged by this fix.
+
+## 2026-06-08 — #DIV/0! honesty (#60) + convergence churn bound (#61)
+
+**#60 — un-IFERROR'd aggregates no longer turn a `#DIV/0!` into a confident wrong number.**
+Excel `#DIV/0!` is `x/0`->±Infinity / `0/0`->NaN in JS. The old reducer `(+b||0)` PROPAGATED
+Infinity but SILENTLY DROPPED NaN (`+NaN||0===0`), so `=SUM(100, 0/0, 250)` returned **350**
+(Excel: `#DIV/0!`) — on **acyclic** cells the #57 convergence machinery never inspects. Fix:
+route every division through `_div` (collapses `x/0` and `0/0` to one **NaN** sentinel that
+`IFERROR`/`ISERROR`/`ISNUMBER` already catch post-#55), and make `SUM`/`SUBTOTAL`/`SUMPRODUCT`/
+`AVERAGE`/`SUMIF`/`SUMIFS` propagate a non-finite **number** as NaN via a shared `_aggNum`
+helper — while still treating **text** as 0 (Excel ignores text in SUM; the naive fix would
+wrongly poison label cells). `_div`+`_aggNum` land in BOTH emitters (`chunked_emitter.rs`
+runtime helpers + the per-sheet-module import list, and `model_map.rs` raw-engine helpers);
+the cone inherits them via its lifted `_helpers.mjs` import. The `isFinite`-filtering
+criteria-aggregators (`MINIFS`/`MAXIFS`/`AVERAGEIF`/`AVERAGEIFS`) already exclude non-finite
+and are left as-is. New regression `pipelines/rust/tests/test-div-nan-propagation.mjs`.
+
+**#61 — bound convergence churn on a hopeless cluster.** The #57 Commit-A non-finite branch
+`continue`s before the divergence detector and only short-circuits when the FINITE surface has
+SETTLED, so a cluster that is BOTH divergent AND carries a persistent structural non-finite
+ran all `MAX_ITER=200` passes (multi-hour on real A-1) before NaN-filling. Added a generous
+absolute non-finite-pass cap (50) in `chunked_emitter.rs`; ported the monotone-up/flat-hot
+divergence detector + the cap into `eval/per-sheet-eval.mjs` (it had neither, so a divergent
+cluster churned to 200 then NaN-filled); and **removed the dead pre-#57 cluster loop** in
+`per-sheet-eval.mjs` `evalOneSheet` (a reactivation hazard — it still had the old
+non-finite-poisoning behavior). Correctness-safe (converged=false + NaN-fill either way). New
+regression `test-cluster-divergent-cap.mjs`. Both tests wired into `npm test`.
+
+NOTE: #60 can move base-case numbers wherever a model relied on the silent drop, so it was
+gated on a real-A-1 before/after re-measure (see the gate run recorded with this change).
+
+## 2026-06-08 — per-sheet-eval true lockstep with the engine: NaN-fill on non-convergence + engine-faithful warming delta (#57 follow-up)
+
+An adversarial verification of #57 Commit A found my "lockstep" claim was overstated: the
+`eval/per-sheet-eval.mjs` cluster loop mirrored the transient-tolerant loop *body*, but the
+shipped engine (`chunked_emitter.rs`) also **NaN-fills every cluster cell when the cluster
+does not converge** (the PR #52 honesty contract), and the eval harness did **not**. So a
+non-converged returns/MIP cluster (a structural `#DIV/0!` or a divergent cycle) had its
+**warm-seeded** ground-truth values left in place and reported as ~100% "measured", while
+`eng.run()` returns NaN for those exact cells — the fast harness over-reported accuracy on a
+cluster the engine refuses to trust (and the lite/cone accuracy numbers are read from here).
+
+Fix: per-sheet-eval now (a) stores the non-finite value as the delta baseline (mirroring the
+engine's `_before[i]=_cur`, and dropping the old `prevSnapshot||0`) so a warming cell is judged
+on the **same pass** the engine judges it; and (b) **NaN-fills the cells a non-converged cluster
+wrote** before the comparison + named-output harvest, so a non-converged cluster reports NaN
+(detectably unusable) instead of warm-seed GT. New regression
+`pipelines/rust/tests/test-per-sheet-eval-lockstep.mjs`: a convergent cross-sheet cluster still
+reports 100%; a structural `#DIV/0!` cluster now reports `clustersConverged=0` and **low**
+accuracy (NaN-filled) — the negative control confirmed pre-fix it reported ~80% by keeping the
+warm seed. Wired into `npm test`.
+
+KNOWN REMAINING GAP (tracked separately, not a correctness issue): per-sheet-eval still lacks the
+engine's monotone-up/flat-hot **divergence detector**, so a divergent cluster churns to
+`MAX_ITER` before the NaN-fill (honest result, just slower); and the engine itself does not
+short-circuit a cluster that is *both* divergent *and* carries a persistent structural non-finite
+(it runs to `MAX_ITER` then NaN-fills — correct, but the Commit-A note's "does not churn to
+MAX_ITER" only holds for the structural-but-*settled* case).
+
+## 2026-06-08 — Transient-tolerant cluster convergence: a divide-by-cold-0 no longer aborts the cluster (#57, Commit A)
+
+The cross-sheet cluster convergence loop (`chunked_emitter.rs`) aborted on the **first** non-finite
+sampled cell (`_nonFiniteStreak >= 3` early break) and then NaN-filled the **whole** cluster. On the
+real Outpost A-1 returns cluster a coverage/amortization ratio divides by a denominator that is a
+**cold 0 at iteration 0** and **warms** to nonzero as the cluster solves; the bare division was
+transiently `Infinity`, poisoned a downstream `SUM` (`Debt!AR84`), and the loop quit at iteration 3 —
+**before** the denominator warmed — reporting `converged:false` and destroying the cluster's true
+(finite) fixed point (`totalCarry` / `class-*.equityBasis` measured 0%).
+
+Fix: the loop is now **transient-tolerant** — a non-finite cell is excluded from the delta and the
+loop keeps iterating; non-finiteness is judged **only at the fixed point**. A TRANSIENT cold-0 warms
+and the cluster converges to the correct numbers; a STRUCTURAL `#DIV/0!` that never warms stays
+non-finite and stays `converged:false` (honest — the existing NaN-fill contract from PR #52 is
+preserved, never a silent wrong number). A structural-but-settled cell short-circuits after a few
+passes so a hopeless case does not churn to `MAX_ITER`. Mirrored in `eval/per-sheet-eval.mjs` so the
+fast eval harness and the shipped engine agree (lockstep). Division emission is **unchanged** (bare).
+
+New regression `pipelines/rust/tests/test-cluster-transient-div0.mjs` builds cross-sheet clusters
+through the real rust-parser and drives `eng.run()` (cold-start — the surface that reproduces the
+transient; per-sheet-eval warm-seeds full GT on a tiny model and would not): MODEL A transient
+converges (pre-fix `converged:false` + NaN — the negative control verified red on the pre-fix
+emitter), MODEL C structural `#DIV/0!` stays `converged:false` with NaN (not a fabricated value),
+MODEL D `IFERROR`-caught converges, MODEL E divergent cycle still NaN-fills. Wired into `npm test`.
+
+NOTE: this is the **convergence** half of #57 (Commit A). The separate latent honesty hole — the
+`SUM` reducer `(+b||0)` propagates `Infinity` but **silently drops** a `0/0` `NaN` (turns a real
+`#DIV/0!` into a confident wrong number) — is fixed in a follow-up (`_div` canonical NaN sentinel +
+NaN-propagating reducers) that is gated behind a real-A-1 before/after re-measure (it can move
+base-case numbers) and is therefore tracked separately, not in this change.
+
+## 2026-06-08 — per-sheet-eval: initialize `_sheetConvergence` in the child ctx [eval regression]
+
+PR #52 (circular-engine honesty) made emitted sheet modules with an intra-sheet cycle write
+`ctx._sheetConvergence[SHEET_NAME]` from inside `compute()`. `eval/per-sheet-eval.mjs` builds its own
+hand-rolled ctx in the child eval script and did not initialize `_sheetConvergence`, so the moment such
+a sheet ran it threw `Cannot set properties of undefined (setting '<sheet>')`. This silently broke the
+cluster recompute on any real model with an intra-sheet cycle (e.g. Outpost A-1's GPP Promote — the
+cluster ran ~10 min then crashed). `npm test` missed it because the only per-sheet-eval cluster fixture
+is **cross-sheet** (its sheets have no internal loop).
+
+Fix: add `_sheetConvergence: {}` to both child ctx templates (standalone + cluster). New parser-backed
+regression `pipelines/rust/tests/test-per-sheet-eval-intracycle.mjs` builds a single-sheet convergent
+mutual cycle and asserts per-sheet-eval evaluates it without error (wired into `npm test`).
+
+## 2026-06-08 — Transpiler error-guards: #DIV/0! (±Infinity) treated as an Excel error [engine defect]
+
+Found by running the real Outpost A-1 17-sheet returns cluster end-to-end. Excel's `#DIV/0!`
+surfaces in JS as **±Infinity** (`x/0`, x≠0), **not** NaN, but the transpiler's error guards tested
+only `isNaN`:
+
+- **`IFERROR(expr, fb)`** (`transpiler.rs`) returned **Infinity** instead of `fb` for `x/0` — on A-1
+  alone this is **194,175** IFERROR cells. The leaked Infinity then propagates through downstream sums
+  and poisons the circular-cluster convergence (a major root cause of the lock-grade non-convergence,
+  T-076): in an A/B recompute the first non-finite cell moved from `Owned Asset PP&E!N22`
+  (`=IFERROR(N23/N21,0)`, N21 a date-keyed SUMIFS that iterates to 0) past N22 once fixed.
+- **`ISERROR`/`ISNUMBER`** had the same gap (`IF(ISERROR(x/0),…)` is the pre-IFERROR idiom and leaked
+  the same Infinity).
+
+Fix: the numeric guards now treat any **non-finite number** (NaN **and** ±Infinity) as the error case
+(`!Number.isFinite` / `!isFinite` / `isFinite`), typeof-guarded so strings/finite/NaN behaviour is
+unchanged. New unit tests (`transpiler::error_guard_lowering_tests`) and an end-to-end regression
+(`pipelines/rust/tests/test-iferror-infinity.mjs`, wired into `npm test`). cargo 29/29, smoke 126/126.
+
+NOTE: this is necessary but **not sufficient** for a converged A-1 base case — bare (non-IFERROR)
+divisions still leak Infinity, where Excel propagates `#DIV/0!`. Tracked separately (lock-grade
+convergence).
 
 ## 2026-06-06 — Outstanding-work triage: 6 PRs merged (engine defects + contract + lite follow-ups)
 
