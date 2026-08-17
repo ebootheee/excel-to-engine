@@ -22,11 +22,32 @@ import { runExplain } from '../../cli/commands/explain.mjs';
 import { runInit } from '../../cli/commands/init.mjs';
 import { runManifestCommand } from '../../cli/commands/manifest.mjs';
 
+const VERIFIED_GRAPH_INTEGRITY = Object.freeze({
+  format: 'cell-dependency-edges-v3',
+  declaredEdgeCount: 0,
+  parsedEdgeCount: 0,
+  verifiedComplete: true,
+  allFormulaCells: true,
+});
+
+function graphDoc(edges, format = 'cell-dependency-edges-v3') {
+  return { format, edges, edgeCount: Object.keys(edges).length };
+}
+
 let passed = 0;
 let failed = 0;
 function assert(cond, msg) {
   if (cond) passed++;
   else { failed++; console.error(`  FAIL: ${msg}`); }
+}
+
+function assertThrows(fn, pattern, msg) {
+  try {
+    fn();
+    assert(false, msg);
+  } catch (error) {
+    assert(pattern.test(String(error?.message || error)), msg);
+  }
 }
 
 function baseFixture() {
@@ -77,7 +98,14 @@ function baseFixture() {
       },
     },
   };
-  return { workbook, groundTruth, edges, manifest, namedOutputs: { mipPayment: { cell: 'Equity!B4' } } };
+  return {
+    workbook,
+    groundTruth,
+    edges,
+    graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
+    manifest,
+    namedOutputs: { mipPayment: { cell: 'Equity!B4' } },
+  };
 }
 
 console.log('Testing: connected + explicitly absent anchors produce a complete truthful trace');
@@ -137,7 +165,7 @@ console.log('Testing: streamed graph load builds its range index in the same pas
   const root = mkdtempSync(join(tmpdir(), 'audit-lineage-graph-'));
   const graphPath = join(root, 'dependency-graph.json');
   writeFileSync(graphPath, [
-    '{"format":"cell-dependency-edges-v2","edges":{',
+    '{"format":"cell-dependency-edges-v3","edges":{',
     '"Calc!A2":["Inputs!A2"],',
     '"Calc!A3":["Inputs!A3"]',
     '},"edgeCount":2}',
@@ -146,8 +174,120 @@ console.log('Testing: streamed graph load builds its range index in the same pas
   const ranged = [];
   forEachCellInRange(graph.formulaIdx, parseRefToken('Calc!A1:A4'), (cell) => ranged.push(cell));
   assert(graph.edgeCount === 2 && Object.keys(graph.edges).length === 2, 'stream loader counts both formula edges');
+  assert(graph.integrity.verifiedComplete && graph.integrity.allFormulaCells, 'stream loader verifies the complete v3 contract');
   assert(JSON.stringify(ranged) === JSON.stringify(['Calc!A2', 'Calc!A3']), 'stream-built index serves compact ranges');
   rmSync(root, { recursive: true, force: true });
+}
+
+console.log('Testing: malformed, truncated, and count-mismatched graphs never become verified evidence');
+{
+  const root = mkdtempSync(join(tmpdir(), 'audit-lineage-corrupt-'));
+  const graphPath = join(root, 'dependency-graph.json');
+  const header = '{"format":"cell-dependency-edges-v3","edges":{\n';
+
+  writeFileSync(graphPath, header + '"Calc!A1":["Inputs!A1"],\nBROKEN\n},"edgeCount":1}\n');
+  assertThrows(() => loadDependencyGraph(graphPath, 0), /malformed edge line/, 'malformed edge line throws instead of being ignored');
+
+  writeFileSync(graphPath, header + '"Calc!A1":["Inputs!A1"]\n');
+  assertThrows(() => loadDependencyGraph(graphPath, 0), /truncated before its footer/, 'missing footer is reported as truncation');
+
+  writeFileSync(graphPath, header + '"Calc!A1":["Inputs!A1"]\n},"edgeCount":2}\n');
+  assertThrows(() => loadDependencyGraph(graphPath, 0), /edgeCount mismatch/, 'declared edge count must match parsed edges');
+
+  rmSync(root, { recursive: true, force: true });
+}
+
+console.log('Testing: legacy graph shape and dynamic reads cannot certify negative lineage');
+{
+  const workbook = {
+    SheetNames: ['S'],
+    Sheets: { S: {
+      A1: { t: 'n', v: 1, f: 'OFFSET(A2,0,1)' },
+      A2: { t: 'n', v: 1 },
+      Z9: { t: 'n', v: 9 },
+    } },
+  };
+  const groundTruth = { 'S!A1': 1, 'S!A2': 1, 'S!Z9': 9 };
+  const edges = { 'S!A1': ['S!A2'] };
+  const manifest = { auditTraces: { dynamic: {
+    root: 'S!A1', anchors: [{ name: 'candidate', cell: 'S!Z9', expect: 'not-in-lineage' }],
+  } } };
+
+  const legacy = buildAuditLineage({
+    manifest, workbook, groundTruth, edges,
+    graphIntegrity: { ...VERIFIED_GRAPH_INTEGRITY, format: 'cell-dependency-edges-v2', allFormulaCells: false },
+  });
+  assert(legacy.traces.dynamic.paths[0].status === 'unavailable', 'v2 graph cannot prove absence because it omits ref-less formula keys');
+
+  const dynamic = buildAuditLineage({
+    manifest, workbook, groundTruth, edges, graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
+  });
+  assert(dynamic.traces.dynamic.paths[0].status === 'unavailable', 'reachable OFFSET makes negative lineage unavailable');
+  assert(dynamic.traces.dynamic.staticCoverage.unknownFormulaCount === 1, 'dynamic coverage gap is disclosed with its formula cell');
+  assert(dynamic.status === 'partial', 'dynamic uncertainty fails the completeness gate');
+
+  const positive = buildAuditLineage({
+    manifest: { auditTraces: { positive: {
+      root: 'S!A1', anchors: [{ name: 'staticAnchor', cell: 'S!A2' }],
+    } } },
+    workbook, groundTruth, edges, graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
+  });
+  assert(positive.traces.positive.paths[0].status === 'connected', 'a positively observed static path remains valid around a dynamic branch');
+}
+
+console.log('Testing: required evidence, unique names, and global traversal budget are enforced');
+{
+  const workbook = {
+    SheetNames: ['S'],
+    Sheets: { S: {
+      A1: { t: 'n', v: 1, f: 'A2' },
+      A2: { t: 'n', v: 1, f: 'A3' },
+      A3: { t: 'n', v: 1 },
+      Z9: { t: 'n', v: 9 },
+    } },
+  };
+  const groundTruth = { 'S!A1': 1, 'S!A2': 1, 'S!A3': 1, 'S!Z9': 9 };
+  const edges = { 'S!A1': ['S!A2'], 'S!A2': ['S!A3'] };
+
+  const missingEvidence = buildAuditLineage({
+    manifest: { auditTraces: { evidence: { root: 'S!A1', anchors: [{ name: 'source', cell: 'S!A3' }] } } },
+    workbook: { SheetNames: ['S'], Sheets: { S: { A3: { t: 'n', v: 1 } } } },
+    groundTruth, edges, graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
+  });
+  assert(missingEvidence.traces.evidence.paths[0].status === 'connected', 'graph can still record the observed path');
+  assert(!missingEvidence.traces.evidence.evidence.complete && missingEvidence.status === 'partial', 'missing workbook/formula evidence prevents complete status');
+
+  const duplicateAnchors = buildAuditLineage({
+    manifest: { auditTraces: { duplicates: {
+      root: 'S!A1', anchors: [
+        { name: 'same', cell: 'S!A3' },
+        { name: 'same', cell: 'S!Z9', expect: 'not-in-lineage' },
+      ],
+    } } },
+    workbook, groundTruth, edges, graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
+  });
+  assert(duplicateAnchors.configurationErrors.some((e) => e.includes('Anchor names must be unique')), 'duplicate anchor names are a configuration error');
+  assert(duplicateAnchors.traces.duplicates.paths[0].status === 'connected'
+    && duplicateAnchors.traces.duplicates.paths[1].status === 'not-in-lineage', 'duplicate names no longer overwrite path results');
+
+  const duplicateTraces = buildAuditLineage({
+    manifest: { auditTraces: {
+      Foo: { root: 'S!A1', anchors: [{ name: 'a', cell: 'S!A3' }] },
+      foo: { root: 'S!A1', anchors: [{ name: 'b', cell: 'S!A3' }] },
+    } },
+    workbook, groundTruth, edges, graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
+  });
+  assert(duplicateTraces.configurationErrors.some((e) => e.includes('Trace names must be unique')), 'trace names are unique ignoring case');
+
+  const bounded = buildAuditLineage({
+    manifest: { auditTraces: {
+      first: { root: 'S!A1', anchors: [{ name: 'a', cell: 'S!A3' }] },
+      second: { root: 'S!A1', anchors: [{ name: 'b', cell: 'S!A3' }] },
+    } },
+    workbook, groundTruth, edges, graphIntegrity: VERIFIED_GRAPH_INTEGRITY, maxGlobalVisited: 2,
+  });
+  assert(bounded.traversalBudget.visited === 2 && bounded.traversalBudget.remaining === 0, 'all traces share one hard global visit budget');
+  assert(bounded.traces.second.visited === 0 && bounded.traces.second.paths[0].status === 'truncated', 'later traces stop truthfully when global budget is exhausted');
 }
 
 console.log('Testing: cycles terminate and bounded searches report truncated');
@@ -160,6 +300,7 @@ console.log('Testing: cycles terminate and bounded searches report truncated');
     workbook: { SheetNames: ['Cycle', 'Inputs'], Sheets: { Cycle: {}, Inputs: {} } },
     groundTruth: { 'Cycle!A1': 1, 'Cycle!A2': 1, 'Inputs!A1': 2 },
     edges: { 'Cycle!A1': ['Cycle!A2'], 'Cycle!A2': ['Cycle!A1'] },
+    graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
   });
   assert(cycle.traces.cycle.paths[0].status === 'not-in-lineage', 'cycle exhausts without looping forever');
 
@@ -171,6 +312,7 @@ console.log('Testing: cycles terminate and bounded searches report truncated');
     workbook: { SheetNames: ['Calc', 'Inputs'], Sheets: { Calc: {}, Inputs: {} } },
     groundTruth: { 'Calc!A1': 1, 'Calc!A2': 1, 'Calc!A3': 1, 'Inputs!A1': 1 },
     edges: { 'Calc!A1': ['Calc!A2'], 'Calc!A2': ['Calc!A3'], 'Calc!A3': ['Inputs!A1'] },
+    graphIntegrity: VERIFIED_GRAPH_INTEGRITY,
   });
   assert(truncated.status === 'partial', 'truncated document is partial');
   assert(truncated.traces.bounded.paths[0].status === 'truncated', 'bounded search reports truncated, not false absence');
@@ -178,7 +320,7 @@ console.log('Testing: cycles terminate and bounded searches report truncated');
 
 function writeIntegrationWorkbook(path) {
   const wb = XLSX.utils.book_new();
-  const assumptions = XLSX.utils.aoa_to_sheet([['Paid-in capital', 100], ['Unrelated', 999]]);
+  const assumptions = XLSX.utils.aoa_to_sheet([['Paid-in capital', 100, 'Unrelated value', 999]]);
   const equity = XLSX.utils.aoa_to_sheet([
     [''],
     ['Shares Issued', 100],
@@ -215,7 +357,7 @@ console.log('Testing: contract-map hook emits lineage, build manifest locks it, 
   const edges = baseFixture().edges;
   writeFileSync(join(chunked, 'manifest.json'), JSON.stringify(manifest, null, 2));
   writeFileSync(join(chunked, '_ground-truth.json'), JSON.stringify(gt));
-  writeFileSync(join(chunked, 'dependency-graph.json'), JSON.stringify({ edges }));
+  writeFileSync(join(chunked, 'dependency-graph.json'), JSON.stringify(graphDoc(edges)));
   writeFileSync(join(chunked, 'engine.js'), 'export function run(){return {values:{}};}\n');
   writeFileSync(join(chunked, 'sheets', 'Equity.mjs'), 'export function compute(){}\n');
 
@@ -282,7 +424,7 @@ console.log('Testing: re-ingest preserves owner-authored pins and --require-line
     }
     writeFileSync(join(chunked, 'manifest.json'), JSON.stringify(manifest, null, 2));
     writeFileSync(join(chunked, '_ground-truth.json'), JSON.stringify(baseFixture().groundTruth));
-    writeFileSync(join(chunked, 'dependency-graph.json'), JSON.stringify({ edges: baseFixture().edges }));
+    writeFileSync(join(chunked, 'dependency-graph.json'), JSON.stringify(graphDoc(baseFixture().edges)));
     writeFileSync(join(chunked, 'engine.js'), 'export function run(){return {values:{}};}\n');
     writeFileSync(join(chunked, 'sheets', 'Equity.mjs'), 'export function compute(){}\n');
     return { root, chunked, xlsxPath };

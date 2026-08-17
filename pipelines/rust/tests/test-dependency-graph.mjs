@@ -68,7 +68,7 @@ console.log('Testing: dependency-graph.json — compact range tokens + cross-she
   const { chunked, cleanup } = parse({ S, T });
 
   const dg = JSON.parse(readFileSync(join(chunked, 'dependency-graph.json'), 'utf-8'));
-  assert(dg.format === 'cell-dependency-edges-v2', 'graph carries the v2 format tag (compact ranges)');
+  assert(dg.format === 'cell-dependency-edges-v3', 'graph carries the v3 format tag (complete formula index + compact ranges)');
   const b2 = dg.edges['S!B2'] || [];
   assert(b2.length === 1 && b2[0] === 'S!A1:A3',
     `SUM(A1:A3) stays a single compact token, not 3 cells: ${JSON.stringify(b2)}`);
@@ -113,6 +113,8 @@ console.log('Testing: closure descends into formula cells inside a range token')
   const dg = JSON.parse(readFileSync(join(chunked, 'dependency-graph.json'), 'utf-8'));
   assert(JSON.stringify(dg.edges['Valuation!C1']) === '["Helper!B1:B3"]',
     `output edge is one range token: ${JSON.stringify(dg.edges['Valuation!C1'])}`);
+  assert(Array.isArray(dg.edges['Helper!B3']) && dg.edges['Helper!B3'].length === 0,
+    'v3 indexes a ref-less formula with [] so range traversal sees every formula cell');
 
   const manifest = {
     model: { name: 'R', source: 'm.xlsx' },
