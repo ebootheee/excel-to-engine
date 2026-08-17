@@ -13,7 +13,7 @@ import { join, resolve, dirname, sep as PATH_SEP } from 'path';
 import { fileURLToPath } from 'url';
 import { runManifestCommand } from './manifest.mjs';
 import { runSummary } from './summary.mjs';
-import { emitManifestMaps } from '../../lib/manifest-maps.mjs';
+import { emitConfiguredAuditLineage, emitManifestMaps } from '../../lib/manifest-maps.mjs';
 import { buildConesFromManifest } from '../../lib/cone-emit.mjs';
 import { emitIntegrationDoc } from '../../lib/integration-doc.mjs';
 import { emitBuildManifest } from '../../lib/build-manifest.mjs';
@@ -30,6 +30,10 @@ export function runInit(excelPath, args) {
   const outputDir = args.output || excelPath.replace(/\.xlsx?$/i, '');
   const absOutput = resolve(outputDir);
   const chunkedDir = join(absOutput, 'chunked');
+  // Capture owner-authored pins before the parser runs. A fresh parse may
+  // replace files in chunked/, while an explicit template is available without
+  // waiting for the expensive heuristic manifest generation pass.
+  const earlyAuditManifest = resolveEarlyAuditManifest(chunkedDir, args.template);
 
   const lines = [];
   lines.push(`Parsing: ${excelPath}`);
@@ -222,6 +226,43 @@ export function runInit(excelPath, args) {
   }
   const shared = sharedGt ? { _gt: sharedGt, _labelIndex: sharedLabelIndex } : {};
 
+  // Audit-lineage preflight: on multi-million-cell workbooks generateManifest()
+  // performs many independent full GT scans before writing manifest.json. When
+  // the model owner already supplied pins (prior manifest or explicit template),
+  // mint their proof first from the exact workbook + GT + dependency graph. This
+  // is intentionally independent of named inputs, fallback scans, closures, and
+  // cell typing; those continue below and do not weaken the proof if interrupted.
+  if (earlyAuditManifest && sharedGt) {
+    lines.push('');
+    lines.push('Audit-lineage preflight: verifying owner-authored pins...');
+    try {
+      const earlyLineage = emitConfiguredAuditLineage(chunkedDir, {
+        manifest: earlyAuditManifest,
+        gt: sharedGt,
+        excelPath,
+      });
+      lines.push(`  Wrote audit-lineage.json: ${earlyLineage.traceCount} trace(s), ${earlyLineage.status}`);
+      if (args.requireLineage && (!earlyLineage.written || earlyLineage.status !== 'complete')) {
+        return {
+          error: `Audit-lineage gate failed during preflight: artifact status is ${earlyLineage.status}.`,
+          _formatted: [
+            ...lines,
+            `  ✗ --require-lineage: preflight status is ${earlyLineage.status}.`,
+            '  Inspect audit-lineage.json for unavailable, truncated, or mismatched paths.',
+          ].join('\n'),
+        };
+      }
+    } catch (e) {
+      if (args.requireLineage) {
+        return {
+          error: `Audit-lineage gate failed during preflight: ${e.message}`,
+          _formatted: [...lines, `  ✗ --require-lineage preflight: ${e.message}`].join('\n'),
+        };
+      }
+      lines.push(`  (Audit-lineage preflight skipped: ${e.message})`);
+    }
+  }
+
   // Step 2: Generate manifest
   lines.push('');
   lines.push('Step 2/4: Generating manifest...');
@@ -374,6 +415,24 @@ export function runInit(excelPath, args) {
       lines.push(`  Skipped ${sk.file}: ${sk.reason}`);
     }
 
+    const auditLineage = maps.stats?.auditLineage;
+    if (auditLineage?.written) {
+      lines.push(`  Audit lineage: ${auditLineage.traceCount} trace(s), ${auditLineage.status}`);
+    }
+    if (args.requireLineage && (!auditLineage?.written || auditLineage.status !== 'complete')) {
+      const reason = !auditLineage?.configured
+        ? 'manifest.auditTraces is not configured'
+        : (!auditLineage?.written ? 'audit-lineage.json was not emitted' : `artifact status is ${auditLineage.status}`);
+      return {
+        error: `Audit-lineage gate failed: ${reason}.`,
+        _formatted: [
+          ...lines,
+          `  ✗ --require-lineage: ${reason}.`,
+          '  Configure manifest.auditTraces and rebuild with the source workbook + dependency graph available.',
+        ].join('\n'),
+      };
+    }
+
     // #26 correctness audit: named outputs whose dependency closure passes
     // through an unsupported-function stub (_fn). Surfaced, never swallowed:
     // a warning by default (the real models still carry many fallbacks), or a
@@ -398,6 +457,12 @@ export function runInit(excelPath, args) {
         ` ${names.slice(0, 5).join(', ')}${names.length > 5 ? ', …' : ''}`);
     }
   } catch (e) {
+    if (args.requireLineage) {
+      return {
+        error: `Audit-lineage gate failed during contract-map emission: ${e.message}`,
+        _formatted: [...lines, `  ✗ --require-lineage: ${e.message}`].join('\n'),
+      };
+    }
     lines.push(`  (Map emission skipped: ${e.message})`);
   }
 
@@ -609,6 +674,41 @@ function readToolVersion() {
 // ---------------------------------------------------------------------------
 
 /**
+ * Resolve the smallest truthful manifest needed for the early audit preflight.
+ * A prior manifest supplies durable owner pins; an explicit template overlays
+ * the same mappings/auditTraces that applyTemplate() will install later. This
+ * does no ground-truth scanning and therefore remains cheap before Step 2.
+ */
+function resolveEarlyAuditManifest(chunkedDir, templateName) {
+  let manifest = {};
+  const manifestPath = join(chunkedDir, 'manifest.json');
+  if (existsSync(manifestPath)) {
+    try { manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')); } catch { manifest = {}; }
+  }
+
+  if (templateName) {
+    const templatePath = findTemplate(templateName);
+    if (templatePath) {
+      try {
+        const template = JSON.parse(readFileSync(templatePath, 'utf-8'));
+        for (const [path, cellRef] of Object.entries(template.mappings || {})) {
+          if (path.startsWith('_')) continue;
+          if (typeof cellRef !== 'string' || !cellRef.includes('!')) continue;
+          setNested(manifest, path, cellRef);
+        }
+        if (template.auditTraces && typeof template.auditTraces === 'object' && !Array.isArray(template.auditTraces)) {
+          manifest.auditTraces = template.auditTraces;
+        }
+      } catch { /* normal template application below reports malformed files */ }
+    }
+  }
+
+  return manifest.auditTraces && typeof manifest.auditTraces === 'object'
+    ? manifest
+    : null;
+}
+
+/**
  * Apply a named template's cell mappings to the manifest in `chunkedDir`.
  * Returns `{ applied, path, hints }` on success or `{ error }` on failure.
  *
@@ -641,6 +741,13 @@ function applyTemplate(chunkedDir, templateName) {
   const hints = template.hints || {};
   if (Object.keys(hints).length > 0) {
     manifest._refineHints = hints;
+  }
+
+  // Audit traces carry names, expectations, and traversal limits in addition
+  // to cell refs, so preserve the block as a unit rather than flattening it
+  // through template.mappings.
+  if (template.auditTraces && typeof template.auditTraces === 'object' && !Array.isArray(template.auditTraces)) {
+    manifest.auditTraces = template.auditTraces;
   }
 
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));

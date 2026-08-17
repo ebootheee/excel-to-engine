@@ -269,6 +269,8 @@ Commands:
                                     default 1800, 0 disables),
                                     --assert-no-fallbacks (hard-fail if any named
                                     output resolves through an _fn() stub),
+                                    --require-lineage (hard-fail unless configured
+                                    audit traces emit completely),
                                     --emit-debug (retain dependency-graph.json,
                                     _graph.json, model-map.json for offline analysis),
                                     --lazy-engine (engine.js loads sheet modules on
