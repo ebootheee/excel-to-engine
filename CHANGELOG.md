@@ -26,6 +26,17 @@
   truncation, expected absence, map-phase emission, source hashes, build hash,
   streamed indexing, explain, stale cleanup, regeneration, preflight ordering,
   early failure, and the completeness gate.
+- Truthfulness hardening (2026-08-16): dependency graphs are now v3 and index
+  every formula cell, including empty static edge lists. The reader validates
+  generated headers, footers, edge shapes, duplicate keys, and `edgeCount`;
+  malformed or truncated prefixes cannot become evidence. Reachable
+  `OFFSET`/`INDIRECT`, defined names, structured/external references, and other
+  statically incomplete reads make absence `unavailable`. Complete traces also
+  require exact workbook cells, formulas, and ground-truth values. Trace/anchor
+  names are unique, counts are capped, and all traces share a 2M-node budget.
+  The focused suite now has 56 assertions, including negative controls for each
+  failure mode.
+
 ## 2026-06-10 — #33 warm-convergence measured (2 passes, fixed point == GT); per-sheet-eval fits the box; #46 row-chunked modules
 
 - **#33 warm-seed convergence measure (the post-v0.3.1 unblock, posted to #33):** the lean

@@ -14,12 +14,28 @@ trace pins survive manifest regeneration and template export/reapply. Synthetic
 tests cover connected/absent paths, compact ranges, cycles, truncation,
 determinism, re-ingest preservation, tamper detection, explain, and the gate.
 
+Hardening completed 2026-08-16: only a byte-verified v3 graph that indexes every
+formula cell may support `not-in-lineage`. Runtime-addressed or unsupported
+references make negative evidence unavailable, and missing workbook/formula/GT
+evidence makes the trace partial. Configuration and traversal work are globally
+bounded. The prior private proof must be re-minted with the v3 parser before it
+is treated as satisfying this stronger gate.
+
 Large-model follow-up completed 2026-08-15: configured pins now run through an
 audit-only preflight immediately after the parser, before `generateManifest`'s
 many independent full-GT detector scans and before named-input/fallback/closure/
 cell-type work. The 500MB-class graph loader builds the formula range index as
 it streams edge lines, removing the prior `Object.keys(edges)` materialization.
 The normal contract-map pass also writes lineage before its unrelated work.
+
+**Open performance follow-up:** a lineage-first full `ete init` currently
+streams the 500MB-class graph once for the early proof and again later for
+dependency closures. Reusing the in-memory edge map across the detector phase
+would retain a multi-GB object beside the 5.8M-cell GT and risks restoring the
+OOM this sequencing removed, so this patch deliberately does not do that. The
+durable fix is a parser-produced target-aware lineage/index sidecar (or an
+on-disk random-access graph) that can prove configured roots without
+materializing the full edge object twice.
 
 **Scoped follow-up completed 2026-08-15:** the proprietary Outpost A-1 trace
 coordinates were applied to a private template and a fresh build minted three

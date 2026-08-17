@@ -10,12 +10,20 @@
 - Build-manifest layout 1.1 identity-hashes the optional proof; `ete explain`
   reads cells and trace names; `ete init --require-lineage` gates completeness.
 - Re-ingest/template round-trip preserves model-owner pins. The private Outpost
-  A-1 artifact was rebuilt on 2026-08-15 with three complete identity-hashed
-  traces covering hurdle formation, MIP proceeds, and the summary tie-out.
+  A-1 artifact was rebuilt on 2026-08-15 with three identity-hashed traces, but
+  must be re-minted under the stronger v3 completeness gate before publication.
 - Large-model sequencing follow-up complete 2026-08-15: explicit-template/prior
   pins emit in an audit-only post-parse preflight; the streamed dependency loader
   builds its formula index in the same pass, and the normal map pass emits the
   proof before full contract/cell-type work.
+- Truthfulness hardening complete 2026-08-16: v3 indexes every formula cell;
+  corrupt/truncated graphs, dynamic reads, incomplete source evidence,
+  duplicate names, and unbounded aggregate traversal can no longer pass.
+
+Open scale follow-up: lineage-first builds currently stream the large graph
+twice (early proof, then closures). Do not retain the full graph across manifest
+detection beside the 5.8M-cell GT; add a parser-produced target-aware sidecar or
+disk-backed index before claiming the duplicate I/O/parse is eliminated.
 
 The remaining Mippy-side work is the audited two-person upload/publish/activate
 workflow; the generic converter and real-workbook proof are complete.
