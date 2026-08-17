@@ -1,5 +1,33 @@
 # excel-to-engine — Plan
 
+## Status: 2026-08-14 — Deterministic audit lineage for pinned outputs
+
+`manifest.auditTraces` now mints a compact `audit-lineage.json` during the
+contract-map phase, while the source workbook, ground truth, and compact
+dependency graph are simultaneously available. Each configured anchor records
+an exact source→output path or an explicit `not-in-lineage` / `truncated` /
+`unavailable` status, with source formulas, direct dependencies/range tokens,
+labels, values, and workbook/GT hashes. The artifact is deterministic and joins
+the build-manifest identity hash (layout 1.1); `ete explain` consumes it, and
+`ete init --require-lineage` is the opt-in completeness gate. Owner-authored
+trace pins survive manifest regeneration and template export/reapply. Synthetic
+tests cover connected/absent paths, compact ranges, cycles, truncation,
+determinism, re-ingest preservation, tamper detection, explain, and the gate.
+
+Large-model follow-up completed 2026-08-15: configured pins now run through an
+audit-only preflight immediately after the parser, before `generateManifest`'s
+many independent full-GT detector scans and before named-input/fallback/closure/
+cell-type work. The 500MB-class graph loader builds the formula range index as
+it streams edge lines, removing the prior `Object.keys(edges)` materialization.
+The normal contract-map pass also writes lineage before its unrelated work.
+
+**Scoped follow-up completed 2026-08-15:** the proprietary Outpost A-1 trace
+coordinates were applied to a private template and a fresh build minted three
+complete traces for hurdle formation, B-1 MIP proceeds, and the summary tie-out.
+Re-emission was byte-identical, and build-manifest layout 1.1 identity-hashes
+the proof alongside the workbook-derived engine and ground truth. No proprietary
+cells or values are committed here.
+
 ## Status: 2026-06-06 — Outstanding-work triage: 6 PRs merged (master-reviewed fan-out)
 
 A verified triage reprioritized all outstanding work (open issues + ADRs + lite follow-ups), then

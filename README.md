@@ -226,7 +226,7 @@ Excel (.xlsx)
     → Per-sheet JS modules (formulas transpiled to JavaScript)  ──┐
     → Ground truth JSON (every cell value from Excel)             │
     → Model manifest (financial concepts → cells)                 ├─→  engine.js (run())
-    → Contract maps (named-outputs / named-inputs / cell-types)  ─┘    + INTEGRATION.md + example.mjs
+    → Contract maps + configured audit-lineage proofs           ─┘    + INTEGRATION.md + example.mjs
       → CLI scenario engine (instant what-ifs via a delta cascade)
 ```
 
@@ -253,13 +253,26 @@ bug you get from guessing the wrong cell):
 | **`named-outputs.json`** | `name → { cell, label, type, format, baseCaseValue, source, dependsOnNamedInputs }` | The contract for downstream apps. Look up `grossMOIC`, get its cell + base-case value, spot-check on import. If your observed value ≠ `baseCaseValue`, your cell map is stale — fail the build. Time-series outputs are `type:"schedule"` with `cellRange` + `perYear:[{year,value}]`; their scalar `baseCaseValue` is a life-to-date `sum` for flows and the `terminal` level for balances (`aggregation` says which) — `perYear` is authoritative. |
 | **`named-inputs.json`** | `name → { cell, type, default, referencedBy, affectsOutputs }` | Drive `engine.run({ [cell]: value })` for what-ifs. `affectsOutputs` says which outputs to invalidate (don't regenerate the whole grid). Lists Excel **defined-name** cells **read by ≥1 formula** plus the model drivers `exitMultiple` / `exitYearSelector` / `hurdleRate` (`source:"manifest-driver"`, derived from the manifest + ground truth, so they emit even without the `.xlsx`). |
 | **`cell-types.json`** | `cell → "number" \| "label" \| "boolean" \| "empty"` | Tell a label string from a numeric output, and a real `0` (present, `"number"`) from a never-computed cell (absent from this map). |
-| **`build-manifest.json`** | `{ layoutVersion, engine:{ entry, export }, contentHash, complete, artifacts[] }` | The locked artifact layout + a stable `contentHash` over the identity artifacts (engine.js, sheets/, _ground-truth.json, manifest.json). Pin a build by its `contentHash`; it's stable across rebuilds of the same workbook and changes on drift, so you reconcile deliberately, not per version. `complete:false` / `missingRequired` flag an unrunnable build. |
+| **`audit-lineage.json`** *(when configured)* | `{ $schema, source, status, traces, nodes }` | A compact, deterministic proof for model-owner-pinned outputs. Each anchor records `connected`, `not-in-lineage`, `truncated`, or `unavailable`; connected paths run source → output and retain exact Excel formulas, direct dependencies/range tokens, labels, ground-truth values, and source hashes. It is emitted while the source workbook and full dependency graph are loaded, before the graph is slimmed. `ete explain <trace-name>` reads it directly. |
+| **`build-manifest.json`** | `{ layoutVersion, engine:{ entry, export }, contentHash, complete, artifacts[] }` | The locked artifact layout + a stable `contentHash` over the identity artifacts (engine.js, sheets/, _ground-truth.json, manifest.json, and audit-lineage.json when present). Pin a build by its `contentHash`; it's stable across rebuilds of the same workbook and changes on drift, so you reconcile deliberately, not per version. `complete:false` / `missingRequired` flag an unrunnable build. |
 | **`dependency-graph.json`** *(debug)* | `{ format:"cell-dependency-edges-v2", edges: cell → [cells/ranges it reads] }` | Cell-level forward edges — the raw material for the `dependsOnNamedInputs` / `affectsOutputs` closures above. Ranges are kept as **compact tokens** (`Sheet!A1:B10`), not expanded to interior cells: full expansion was 37 GB / ~7 min on the real models and OOM-killed the closure-baking step (#32); the compact form is ~0.5 GB. Written **one edge per line** (still valid JSON) so a >512 MiB graph can be read line-by-line without exceeding Node's max string length. Consumers expand a token lazily against the cells they care about. **Removed from the default output** once the closures are baked into the named maps; re-run `ete init --emit-debug` to keep it (plus the root `model-map.json`) for offline analysis or closure recomputation. |
 
 **Names come from the workbook's defined-name table** (the model owner's
 curated named cells) when present — these are authoritative and override
 heuristic detection. Regenerate without a re-parse:
 `ete manifest maps ./my-model/chunked/ --excel model.xlsx`.
+
+Configure durable proofs in `manifest.auditTraces` (or in a model-family
+template). A full re-ingest preserves this owner-authored block and rebuilds the
+proof against the new workbook. Use `ete init ... --require-lineage` in a release
+or publish workflow to fail unless every configured expectation was verified.
+See [templates/README.md](templates/README.md) for the exact schema.
+
+When pins are already known from an explicit template or prior manifest,
+`ete init` emits the audit proof in a preflight immediately after parsing—before
+the heuristic manifest detectors and full contract/cell-type passes. The large
+dependency graph is streamed while its range index is built, avoiding a second
+multi-million-key materialization solely to start lineage traversal.
 
 > Note: the **defined-name** inputs and defined-name enrichment of outputs
 > require the source `.xlsx`. Without it (e.g. `--reuse-parse` against an
@@ -275,7 +288,8 @@ by the per-sheet eval), the contract maps, the manifest, and
 `dependency-graph.json` (~0.5 GB) and the root `model-map.json` (600+ MB on the
 biggest models) — are dropped after the closures are computed. The high-value
 data survives as the closures inside the named maps. Pass `--emit-debug` to
-retain `dependency-graph.json`.
+retain `dependency-graph.json`. Configured `audit-lineage.json` stays in the
+default output because it is the compact durable derivative of that graph.
 
 **Golden-master gate.** `eval/golden-master.mjs` (run via `npm run golden <chunkedDir>`)
 is the post-build assert for these artifacts: with `--assert-no-fallbacks` it
@@ -357,6 +371,7 @@ excel-to-engine/
 |---------|---------|
 | `lib/manifest.mjs` | Manifest schema, auto-generation, validation, cell resolvers, label search |
 | `lib/manifest-maps.mjs` | Downstream contract maps (named-outputs/inputs.json, cell-types.json) |
+| `lib/audit-lineage.mjs` | Deterministic pinned-output formula/dependency proofs (audit-lineage.json) |
 | `lib/build-manifest.mjs` | Locked artifact layout + content hash (build-manifest.json) |
 | `lib/irr.mjs` | Newton-Raphson IRR with bisection fallback, XIRR for irregular dates |
 | `lib/waterfall.mjs` | American + European PE waterfall structures |

@@ -1,5 +1,25 @@
 # excel-to-engine — Roadmap
 
+## Done — Pinned-output audit lineage (2026-08-14)
+
+- Optional `manifest.auditTraces` → deterministic `chunked/audit-lineage.json`
+  during contract-map emission, before the large dependency graph is deleted.
+- Exact Excel formulas, values, labels, direct dependencies/range tokens, and
+  source→output paths; truthful `not-in-lineage`, `truncated`, and `unavailable`
+  outcomes; bounded cycle-safe traversal.
+- Build-manifest layout 1.1 identity-hashes the optional proof; `ete explain`
+  reads cells and trace names; `ete init --require-lineage` gates completeness.
+- Re-ingest/template round-trip preserves model-owner pins. The private Outpost
+  A-1 artifact was rebuilt on 2026-08-15 with three complete identity-hashed
+  traces covering hurdle formation, MIP proceeds, and the summary tie-out.
+- Large-model sequencing follow-up complete 2026-08-15: explicit-template/prior
+  pins emit in an audit-only post-parse preflight; the streamed dependency loader
+  builds its formula index in the same pass, and the normal map pass emits the
+  proof before full contract/cell-type work.
+
+The remaining Mippy-side work is the audited two-person upload/publish/activate
+workflow; the generic converter and real-workbook proof are complete.
+
 ## Now — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
 
 1. **Re-gate the real-model scoped cone (ADR-026 Tier 2) — re-gate was VACUOUS; label STAYS.** The

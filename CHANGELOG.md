@@ -1,5 +1,32 @@
 # excel-to-engine — Changelog
 
+## 2026-08-14 — Deterministic audit lineage for model-owner-pinned outputs
+
+- Added optional `manifest.auditTraces` and deterministic
+  `chunked/audit-lineage.json` emission during the contract-map pass, while the
+  source workbook, ground truth, and dependency graph are still loaded. The
+  artifact records exact formulas, formula hashes, values, adjacent labels,
+  direct dependencies/range evidence, and source→output paths. Disconnected,
+  bounded, and unavailable searches are disclosed as `not-in-lineage`,
+  `truncated`, and `unavailable`; cycles terminate safely.
+- `ete explain` now accepts a trace name and uses lineage formulas/dependencies
+  for traced cells. `ete init --require-lineage` is an opt-in publish/build gate.
+  Manifest regeneration and template export/reapply preserve owner-authored
+  pins, so a re-ingest refreshes the proof instead of dropping its configuration.
+- Build-manifest layout is now 1.1; `audit-lineage.json`, when present, is an
+  optional identity artifact, so proof tampering changes `contentHash` without
+  changing the engine-only `engineArtifactHash`.
+- Large-model sequencing (2026-08-15): an explicit template or prior manifest
+  now drives an audit-only preflight immediately after parsing, before the many
+  full-GT heuristic detector scans and full contract/cell-type work. The normal
+  contract pass also emits lineage before named-input/fallback/closure/cell-type
+  phases. Large newline-delimited graphs build their formula range index during
+  the stream load, eliminating a second multi-million-key materialization.
+- Added 40 synthetic assertions covering determinism, compact ranges, cycles,
+  truncation, expected absence, map-phase emission, source hashes, build hash,
+  streamed indexing, explain, stale cleanup, regeneration, preflight ordering,
+  early failure, and the completeness gate.
+
 ## 2026-06-06 — Outstanding-work triage: 6 PRs merged (engine defects + contract + lite follow-ups)
 
 A verified triage (adversarial workflow — every open issue/ADR/follow-up re-checked against `main` +
