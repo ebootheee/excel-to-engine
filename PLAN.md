@@ -1,5 +1,48 @@
 # excel-to-engine — Plan
 
+## Status: 2026-08-14 — Deterministic audit lineage for pinned outputs
+
+`manifest.auditTraces` now mints a compact `audit-lineage.json` during the
+contract-map phase, while the source workbook, ground truth, and compact
+dependency graph are simultaneously available. Each configured anchor records
+an exact source→output path or an explicit `not-in-lineage` / `truncated` /
+`unavailable` status, with source formulas, direct dependencies/range tokens,
+labels, values, and workbook/GT hashes. The artifact is deterministic and joins
+the build-manifest identity hash (layout 1.1); `ete explain` consumes it, and
+`ete init --require-lineage` is the opt-in completeness gate. Owner-authored
+trace pins survive manifest regeneration and template export/reapply. Synthetic
+tests cover connected/absent paths, compact ranges, cycles, truncation,
+determinism, re-ingest preservation, tamper detection, explain, and the gate.
+
+Hardening completed 2026-08-16: only a byte-verified v3 graph that indexes every
+formula cell may support `not-in-lineage`. Runtime-addressed or unsupported
+references make negative evidence unavailable, and missing workbook/formula/GT
+evidence makes the trace partial. Configuration and traversal work are globally
+bounded. The prior private proof must be re-minted with the v3 parser before it
+is treated as satisfying this stronger gate.
+
+Large-model follow-up completed 2026-08-15: configured pins now run through an
+audit-only preflight immediately after the parser, before `generateManifest`'s
+many independent full-GT detector scans and before named-input/fallback/closure/
+cell-type work. The 500MB-class graph loader builds the formula range index as
+it streams edge lines, removing the prior `Object.keys(edges)` materialization.
+The normal contract-map pass also writes lineage before its unrelated work.
+
+**Open performance follow-up:** a lineage-first full `ete init` currently
+streams the 500MB-class graph once for the early proof and again later for
+dependency closures. Reusing the in-memory edge map across the detector phase
+would retain a multi-GB object beside the 5.8M-cell GT and risks restoring the
+OOM this sequencing removed, so this patch deliberately does not do that. The
+durable fix is a parser-produced target-aware lineage/index sidecar (or an
+on-disk random-access graph) that can prove configured roots without
+materializing the full edge object twice.
+
+**Scoped follow-up completed 2026-08-15:** the proprietary Outpost A-1 trace
+coordinates were applied to a private template and a fresh build minted three
+complete traces for hurdle formation, B-1 MIP proceeds, and the summary tie-out.
+Re-emission was byte-identical, and build-manifest layout 1.1 identity-hashes
+the proof alongside the workbook-derived engine and ground truth. No proprietary
+cells or values are committed here.
 ## Status: 2026-06-10 — post-v0.3.1 queue executed: #33 warm measure (2 passes, == GT), eval harness fits the box (PR #69), #46 row-chunking landed + real-A-2 gated
 
 All three "next" items from the v0.3.1 entry, one session. (1) **#33 warm-seed convergence

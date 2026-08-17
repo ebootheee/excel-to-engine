@@ -1473,10 +1473,13 @@ function numToCol(n) {
 /// went from 1000 edge strings to 1. Reachability stays complete — the consumer
 /// expands a range token lazily against the (small) sets of cells it cares about
 /// (named inputs, fallback cells) plus the formula-cell keys, via indexed
-/// interval queries. Schema bumped to `cell-dependency-edges-v2`.
+/// interval queries. Schema v3 additionally emits formula cells whose detected
+/// reference list is empty. That makes the formula-key index complete enough
+/// for an audit consumer to notice runtime-addressed formulas (OFFSET/INDIRECT)
+/// and refuse an unsupported negative-lineage conclusion.
 ///
-/// Only formula cells with ≥1 detected ref appear as keys; literal/input cells
-/// and ref-less formulas (e.g. `=TODAY()`) are omitted. Iteration follows
+/// Every formula cell appears as a key; literal/input cells are omitted and a
+/// ref-less formula (e.g. `=TODAY()` or a dynamic-only read) has `[]`. Iteration follows
 /// partition order then cell order — stable for a given workbook, so the output
 /// is deterministic across builds of the same model. Returns the entry count.
 fn write_dependency_graph(partitions: &[SheetPartition<'_>], path: &Path) -> Result<usize, String> {
@@ -1494,7 +1497,7 @@ fn write_dependency_graph(partitions: &[SheetPartition<'_>], path: &Path) -> Res
     // create a string longer than 0x1fffffe8 characters" and the closures were
     // silently dropped). See `loadDependencyEdges` in lib/manifest-maps.mjs.
     w.write_all(
-        br#"{"format":"cell-dependency-edges-v2","note":"Forward edges: cell -> [cells/ranges it reads]. Ranges are kept as compact tokens (Sheet!A1:B10), not expanded; consumers expand lazily against cells of interest. Only formula cells appear as keys. One edge per line (newline-delimited) so the file is readable without materializing a >512 MiB string.","edges":{
+        br#"{"format":"cell-dependency-edges-v3","note":"Forward edges: formula cell -> [statically detected cells/ranges it reads]. Ranges are compact tokens (Sheet!A1:B10). Every formula cell appears as a key, including [] for formulas with no statically detected refs, so consumers can account for dynamic reads. One edge per line (newline-delimited) supports files above Node's string limit.","edges":{
 "#,
     )
     .map_err(werr)?;
@@ -1509,9 +1512,6 @@ fn write_dependency_graph(partitions: &[SheetPartition<'_>], path: &Path) -> Res
         for cell in &partition.formula_cells {
             if let Some(formula) = &cell.formula {
                 let refs = extract_refs_ranges(formula, &partition.name);
-                if refs.is_empty() {
-                    continue;
-                }
                 let key = format!("{}!{}", partition.name, cell.address);
                 // serde_json handles all JSON string/array escaping; only a
                 // single entry is held in memory at a time.
