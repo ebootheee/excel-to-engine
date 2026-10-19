@@ -10,6 +10,16 @@ Synthetic regression suite: 34 passing tests (initial reproduction: 21 failures,
 7 positive controls). Fresh release parser build and full `npm test` passed.
 Metadata scaling and intermittent runtime stalls remain separate follow-ups.
 
+## Status: 2026-10-19 — bounded output discovery ready for review
+
+Output discovery now builds an invocation-scoped numeric-column index and probes
+candidate rows directly. Ranking, source addresses, and other metadata detectors
+retain their behavior. The synthetic 20,000-cell fixture reduced whole-grid
+enumerations with 80 matching labels from 95 to 16 (the one-label case stays 16).
+Six regressions cover scaling, sparse columns, sheet punctuation, ties, mutations,
+and noncanonical addresses. Fresh release parser build and full `npm test` passed.
+This does not bound total init time or change the parser-only timeout contract.
+
 ## Status: 2026-06-10 — post-v0.3.1 queue executed: #33 warm measure (2 passes, == GT), eval harness fits the box (PR #69), #46 row-chunking landed + real-A-2 gated
 
 All three "next" items from the v0.3.1 entry, one session. (1) **#33 warm-seed convergence

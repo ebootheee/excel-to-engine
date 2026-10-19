@@ -5,12 +5,21 @@
 - **Completed:** base-case verification loads lazy bundles and fails honestly for
   absent expected outputs, non-finite values, non-convergence, and empty coverage;
   CLI and generated demo agree, with explicit skipped-baseline reporting.
-- **Next:** investigate repeated full-ground-truth scans in manifest detection
-  with synthetic correctness and scaling tests. Keep performance changes separate
-  from the verification contract. `init --timeout` currently caps the parser;
-  whole-init cancellation is a separate feature.
+- **Next:** the repeated full-ground-truth scan in output discovery is now indexed
+  (see the metadata scaling follow-up below); profile the remaining detectors
+  separately from the verification contract. `init --timeout` currently caps the
+  parser; whole-init cancellation is a separate feature.
 - **Unresolved:** intermittent runtime stalls need a reproducible synthetic case
   before changing engine runtime behavior or recommending VM flags.
+
+## Metadata scaling follow-up (2026-10-19)
+
+- **Completed:** output discovery uses an invocation-scoped numeric-column index
+  instead of rescanning the entire ground truth for each candidate label.
+  Synthetic scan-count and mapping-equivalence tests cover the change.
+- **Next:** profile remaining metadata stages independently before extending
+  indexing to equity, debt, and other detectors. This targeted change does not
+  claim to bound total `init` time. `--timeout` remains a parser wall-clock cap.
 
 ## Now — post-v0.3.1: fidelity DONE to the floor; next = convergence measure + scale (2026-06-09)
 
