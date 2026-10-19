@@ -1,5 +1,18 @@
 # excel-to-engine — Changelog
 
+## 2026-10-19 — bounded row lookup during output discovery
+
+- Output candidate discovery now indexes observed numeric columns once per
+  invocation and probes candidate rows directly, avoiding a full-ground-truth
+  scan for every matching label. The index stores column names, not duplicate
+  numeric cell maps, and is rebuilt on each generation.
+- Existing range/ranking rules, equal-score label order, sparse far-right
+  columns, sheet names containing `!`, and noncanonical source row spellings
+  retain their behavior. Other manifest detectors keep their existing path.
+- Synthetic 20,000-cell regression: increasing matching labels from 1 to 80 used
+  to increase whole-grid enumerations from 16 to 95; both now take 16. Timing is
+  reported for context only; deterministic scan count is the regression gate.
+
 ## 2026-06-10 — #33 warm-convergence measured (2 passes, fixed point == GT); per-sheet-eval fits the box; #46 row-chunked modules
 
 - **#33 warm-seed convergence measure (the post-v0.3.1 unblock, posted to #33):** the lean

@@ -1,5 +1,14 @@
 # excel-to-engine — Roadmap
 
+## Metadata scaling follow-up (2026-10-19)
+
+- **Completed:** output discovery uses an invocation-scoped numeric-column index
+  instead of rescanning the entire ground truth for each candidate label.
+  Synthetic scan-count and mapping-equivalence tests cover the change.
+- **Next:** profile remaining metadata stages independently before extending
+  indexing to equity, debt, and other detectors. This targeted change does not
+  claim to bound total `init` time. `--timeout` remains a parser wall-clock cap.
+
 ## Now — post-v0.3.1: fidelity DONE to the floor; next = convergence measure + scale (2026-06-09)
 
 **v0.3.0 + v0.3.1 shipped same day.** Sweep progression (all 17 cluster sheets, fresh warm-GT
