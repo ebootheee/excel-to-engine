@@ -1,5 +1,46 @@
 # excel-to-engine — Changelog
 
+## 2026-10-19 — SUMPRODUCT arrays and multi-argument emission
+
+- Fix invalid JavaScript for three or more SUMPRODUCT arguments (repeated `const`
+  declarations were comma-separated). Use one emission path for all arities.
+- Evaluate binary arithmetic/comparisons and unary coercion inside SUMPRODUCT
+  element by element, including scalar broadcasting and `--(range=cell)` masks.
+  Propagate errors through comparisons and reject unequal flattened array lengths.
+- Synthetic XLSX regression fails before the repair with a syntax error, then
+  with a zero instead of the expected weighted total after the syntax-only fix.
+  The complete repair passes 19 checks, including changed inputs, mixed anchors,
+  error propagation, text/blank entries and mismatched lengths. Full JavaScript
+  suite and all 29 Rust unit tests pass. No proprietary workbook is committed.
+
+## 2026-10-19 — honest verification for lazy and incomplete engines
+
+- `ete verify` now awaits full lazy loading and async execution. Missing expected
+  outputs, incomplete numeric schedules, non-finite values, explicit
+  non-convergence, and zero comparable outputs cannot report success.
+- Baseline-less outputs are reported as skipped; exact text/boolean comparisons,
+  numeric tolerances, GT fallback, and engines without convergence metadata remain
+  supported. Known blank/text schedule cells, and cells the source workbook left
+  empty (absent from `_ground-truth.json`), retain Excel SUM behavior; a recorded
+  numeric member the engine did not produce still fails.
+- Verification failure returns a nonzero CLI status while preserving the JSON
+  report. Generated `example.mjs` shares the comparison implementation and failure
+  semantics; integration snippets now await lazy loading.
+- Synthetic regressions cover library, CLI, and standalone bundle behavior.
+
+## 2026-10-19 — bounded row lookup during output discovery
+
+- Output candidate discovery now indexes observed numeric columns once per
+  invocation and probes candidate rows directly, avoiding a full-ground-truth
+  scan for every matching label. The index stores column names, not duplicate
+  numeric cell maps, and is rebuilt on each generation.
+- Existing range/ranking rules, equal-score label order, sparse far-right
+  columns, sheet names containing `!`, and noncanonical source row spellings
+  retain their behavior. Other manifest detectors keep their existing path.
+- Synthetic 20,000-cell regression: increasing matching labels from 1 to 80 used
+  to increase whole-grid enumerations from 16 to 95; both now take 16. Timing is
+  reported for context only; deterministic scan count is the regression gate.
+
 ## 2026-08-14 — Deterministic audit lineage for model-owner-pinned outputs
 
 - Added optional `manifest.auditTraces` and deterministic
@@ -36,6 +77,7 @@
   names are unique, counts are capped, and all traces share a 2M-node budget.
   The focused suite now has 56 assertions, including negative controls for each
   failure mode.
+
 
 ## 2026-06-10 — #33 warm-convergence measured (2 passes, fixed point == GT); per-sheet-eval fits the box; #46 row-chunked modules
 

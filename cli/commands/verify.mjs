@@ -42,23 +42,19 @@ export async function runVerify(modelDir, args = {}) {
   }
 
   const lines = [];
-  if (res.error && res.checked === 0 && res.matched === 0 && res.drifted.length === 0) {
-    // hard failure (no engine / no outputs) vs. clean pass with a note
-    if (/not found|no run|import failed|threw/.test(res.error)) {
-      return { error: res.error, _formatted: `Error: ${res.error}` };
-    }
-  }
   lines.push('Engine base-case verification');
   lines.push('─'.repeat(52));
   lines.push(`  Outputs checked: ${res.checked}`);
   lines.push(`  Match base case: ${res.matched}`);
   lines.push(`  Drifted:         ${res.drifted.length}`);
+  lines.push(`  Skipped:         ${res.skipped?.length || 0} (no recorded baseline)`);
+  if (res.error) lines.push(`  Verification failed: ${res.error}`);
   if (res.meta?.elapsedMs != null) lines.push(`  Engine run:      ${res.meta.elapsedMs} ms`);
   lines.push('');
   if (res.drifted.length > 0) {
     lines.push('  These outputs do NOT match the spreadsheet base case:');
     for (const d of res.drifted) {
-      lines.push(`    ${d.name}  (${d.cell})  computed ${fmt(d.computed)}  vs base ${fmt(d.expected)}`);
+      lines.push(`    ${d.name}  (${d.cell})  computed ${fmt(d.computed)}  vs base ${fmt(d.expected)} (${d.reason})`);
     }
     lines.push('');
     lines.push('  Likely causes: a mis-mapped output cell (run: ete manifest doctor <dir>),');
@@ -66,9 +62,9 @@ export async function runVerify(modelDir, args = {}) {
     lines.push('  the same sheet). See skill/SKILL.md → "Engine fidelity".');
   } else if (res.checked === 0) {
     lines.push(`  Nothing to verify: ${res.error || 'no named outputs with base-case values'}.`);
-  } else {
-    lines.push('  ✓ engine.run() reproduces the model\'s base case exactly.');
-    lines.push('  Safe to hand the chunked/ bundle to a developer.');
+  } else if (res.ok) {
+    lines.push('  ✓ engine.run() reproduces the model\'s base case within tolerance.');
+    if (res.skipped?.length) lines.push('  Outputs without a recorded baseline remain unverified.');
   }
 
   return { ...res, _formatted: lines.join('\n') };

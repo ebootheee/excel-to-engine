@@ -958,7 +958,7 @@ mod name_fallback_tests {
         // the exact real-A1 shape: a real range product, not `* null`.
         let sp = tj("SUMPRODUCT(J8:J22*R$8:R$22)");
         assert!(
-            sp.contains("ctx.range(\"S!J8:J22\") * ctx.range(\"S!R8:R22\")"),
+            sp.contains("ctx.range(\"S!J8:J22\")") && sp.contains("ctx.range(\"S!R8:R22\")"),
             "real-A1 SUMPRODUCT lost its second operand: {sp}"
         );
         assert!(!sp.contains("#NAME?"), "second operand mis-parsed as #NAME?: {sp}");

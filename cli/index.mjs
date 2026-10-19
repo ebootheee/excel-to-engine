@@ -185,7 +185,7 @@ async function main() {
 
     // Output result
     if (result) {
-      if (result.error) {
+      if (result.error && !(command === 'verify' && typeof result.ok === 'boolean')) {
         console.error(`Error: ${result.error}`);
         process.exit(1);
       }
@@ -195,6 +195,7 @@ async function main() {
         : result._formatted || formatOutput(result, 'json');
 
       console.log(output);
+      if (command === 'verify' && result.ok === false) process.exitCode = 1;
     }
 
   } catch (err) {

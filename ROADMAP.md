@@ -1,5 +1,33 @@
 # excel-to-engine — Roadmap
 
+## 2026-10-19 — SUMPRODUCT regression closed
+
+Three-or-more-argument emission and elementwise arithmetic/comparison masks now have
+an executed synthetic regression, including input changes and errors. Whole-model
+convergence and independent workbook recalculation remain model-specific gates;
+passing these compiler tests does not establish a new model's financial fidelity.
+
+## Verification and metadata follow-up (2026-10-19)
+
+- **Completed:** base-case verification loads lazy bundles and fails honestly for
+  absent expected outputs, non-finite values, non-convergence, and empty coverage;
+  CLI and generated demo agree, with explicit skipped-baseline reporting.
+- **Next:** the repeated full-ground-truth scan in output discovery is now indexed
+  (see the metadata scaling follow-up below); profile the remaining detectors
+  separately from the verification contract. `init --timeout` currently caps the
+  parser; whole-init cancellation is a separate feature.
+- **Unresolved:** intermittent runtime stalls need a reproducible synthetic case
+  before changing engine runtime behavior or recommending VM flags.
+
+## Metadata scaling follow-up (2026-10-19)
+
+- **Completed:** output discovery uses an invocation-scoped numeric-column index
+  instead of rescanning the entire ground truth for each candidate label.
+  Synthetic scan-count and mapping-equivalence tests cover the change.
+- **Next:** profile remaining metadata stages independently before extending
+  indexing to equity, debt, and other detectors. This targeted change does not
+  claim to bound total `init` time. `--timeout` remains a parser wall-clock cap.
+
 ## Done — Pinned-output audit lineage (2026-08-14)
 
 - Optional `manifest.auditTraces` → deterministic `chunked/audit-lineage.json`
@@ -28,7 +56,6 @@ disk-backed index before claiming the duplicate I/O/parse is eliminated.
 The remaining Mippy-side work is the audited two-person upload/publish/activate
 workflow; the generic converter and real-workbook proof are complete.
 
-## Now — two open threads (2026-06-05) — see `docs/HANDOFF-lite-and-cone.md`
 ## Now — post-v0.3.1: fidelity DONE to the floor; next = convergence measure + scale (2026-06-09)
 
 **v0.3.0 + v0.3.1 shipped same day.** Sweep progression (all 17 cluster sheets, fresh warm-GT
