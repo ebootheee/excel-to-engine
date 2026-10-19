@@ -1,5 +1,17 @@
 # excel-to-engine — Roadmap
 
+## Verification and metadata follow-up (2026-10-19)
+
+- **Completed:** base-case verification loads lazy bundles and fails honestly for
+  absent expected outputs, non-finite values, non-convergence, and empty coverage;
+  CLI and generated demo agree, with explicit skipped-baseline reporting.
+- **Next:** the repeated full-ground-truth scan in output discovery is now indexed
+  (see the metadata scaling follow-up below); profile the remaining detectors
+  separately from the verification contract. `init --timeout` currently caps the
+  parser; whole-init cancellation is a separate feature.
+- **Unresolved:** intermittent runtime stalls need a reproducible synthetic case
+  before changing engine runtime behavior or recommending VM flags.
+
 ## Metadata scaling follow-up (2026-10-19)
 
 - **Completed:** output discovery uses an invocation-scoped numeric-column index

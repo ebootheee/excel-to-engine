@@ -102,7 +102,7 @@ ok('INTEGRATION.md emitted', existsSync(join(chunked, 'INTEGRATION.md')));
 ok('example.mjs emitted', existsSync(join(chunked, 'example.mjs')));
 if (existsSync(join(chunked, 'INTEGRATION.md'))) {
   const ig = readFileSync(join(chunked, 'INTEGRATION.md'), 'utf-8');
-  ok('INTEGRATION.md documents run() API', /import \{ run \}/.test(ig) && /run\(/.test(ig));
+  ok('INTEGRATION.md documents run() API', /import \* as engine/.test(ig) && /run\(/.test(ig));
   ok('INTEGRATION.md lists named outputs with cells', /grossMOIC|grossIRR|terminalValue|exitMultiple/.test(ig));
 }
 

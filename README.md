@@ -77,7 +77,9 @@ If an analyst handed you a converted model folder, **open `chunked/INTEGRATION.m
 and run `node chunked/example.mjs`.** That's the fast path. In short:
 
 ```js
-import { run } from './engine.js';
+import * as engine from './engine.js';
+if (typeof engine.load === 'function') await engine.load(); // lazy bundles: all sheets
+const { run } = engine;
 
 const base = run();                                   // base case (matches Excel)
 const alt  = run({ "Assumptions!B4": 14 });           // override a lever, recompute everything
@@ -166,12 +168,24 @@ pipeline.
 
 ```bash
 node cli/index.mjs verify ./my-model/chunked/
-# → "✓ engine.run() reproduces the model's base case exactly. Safe to hand off."
+# → "✓ engine.run() reproduces the model's base case within tolerance."
 ```
 
-Runs the generated engine with no overrides and checks every named output against
-its base-case value. The trust signal to run before handing the bundle to a
-developer (also available as `ete init --verify`).
+Loads all sheets in a lazy bundle, runs the generated engine without overrides,
+and checks named outputs against recorded base-case values (relative `1e-6` plus
+absolute `1e-6` tolerance). Missing expected outputs, non-finite numbers, drift,
+explicit non-convergence, or zero comparable outputs fail verification and exit
+nonzero, including with `--format json`. Outputs without a recorded baseline are
+reported as skipped; a pass does not verify those outputs or untested scenarios.
+Legacy engines without convergence metadata remain supported.
+
+`node chunked/example.mjs` uses the same comparison rules. Flow schedules ignore
+text/blank members and, when `_ground-truth.json` is present, members the source
+workbook left empty. A recorded numeric member the engine did not produce, or an
+absent member with no ground truth to consult, cannot pass. The optional
+`_ground-truth.json` also supplies missing scalar baselines. Run verification
+before handing the bundle to a developer (also available as `ete init --verify`,
+which includes the verification report).
 
 ### `ete query` — Find Anything
 

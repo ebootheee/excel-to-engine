@@ -1,5 +1,15 @@
 # excel-to-engine — Plan
 
+## Status: 2026-10-19 — honest base-case verification ready for review
+
+Implemented lazy-engine loading, awaited execution, missing-output and finite-value
+checks, explicit non-convergence rejection, and nonzero verification exit status.
+The standalone example embeds the same comparison helpers. Baseline-less outputs
+remain optional and are reported as skipped; zero comparisons cannot pass.
+Synthetic regression suite: 34 passing tests (initial reproduction: 21 failures,
+7 positive controls). Fresh release parser build and full `npm test` passed.
+Metadata scaling and intermittent runtime stalls remain separate follow-ups.
+
 ## Status: 2026-10-19 — bounded output discovery ready for review
 
 Output discovery now builds an invocation-scoped numeric-column index and probes

@@ -1,5 +1,20 @@
 # excel-to-engine — Changelog
 
+## 2026-10-19 — honest verification for lazy and incomplete engines
+
+- `ete verify` now awaits full lazy loading and async execution. Missing expected
+  outputs, incomplete numeric schedules, non-finite values, explicit
+  non-convergence, and zero comparable outputs cannot report success.
+- Baseline-less outputs are reported as skipped; exact text/boolean comparisons,
+  numeric tolerances, GT fallback, and engines without convergence metadata remain
+  supported. Known blank/text schedule cells, and cells the source workbook left
+  empty (absent from `_ground-truth.json`), retain Excel SUM behavior; a recorded
+  numeric member the engine did not produce still fails.
+- Verification failure returns a nonzero CLI status while preserving the JSON
+  report. Generated `example.mjs` shares the comparison implementation and failure
+  semantics; integration snippets now await lazy loading.
+- Synthetic regressions cover library, CLI, and standalone bundle behavior.
+
 ## 2026-10-19 — bounded row lookup during output discovery
 
 - Output candidate discovery now indexes observed numeric columns once per
