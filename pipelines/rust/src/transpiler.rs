@@ -221,6 +221,11 @@ fn transpile_sumproduct_arg(expr: &Expr, config: &TranspileConfig) -> String {
     match expr {
         Expr::UnaryOp { op, operand } => {
             let inner = transpile_sumproduct_arg(operand, config);
+            // Unary plus is a no-op in Excel (`+"abc"` stays "abc"); mirror the scalar
+            // lowering so JS `+(_x)` cannot turn a text member into NaN and poison the sum.
+            if op == "+" {
+                return inner;
+            }
             format!("((_v)=>{{const _op=(_x)=>({}(_x));return Array.isArray(_v)?_v.map(_op):_op(_v);}})({})", op, inner)
         }
         Expr::BinOp { op, left, right } => {

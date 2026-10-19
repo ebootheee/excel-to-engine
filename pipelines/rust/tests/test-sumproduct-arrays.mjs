@@ -30,6 +30,8 @@ const formulas = [
   ['IFERROR(SUMPRODUCT(--(E1:E3=0),B1:B3),-9)', -9],
   ['SUMPRODUCT(B1:B3,C1:C3,F1:F3)', 90],
   ['SUMPRODUCT(2,3,4)', 24],
+  ['SUMPRODUCT(+(F1:F3),B1:B3)', 30],
+  ['SUMPRODUCT(-(-(B1:B3)),C1:C3)', 140],
 ];
 const sheet = XLSX.utils.aoa_to_sheet([
   ['group-a', 10, 1, 2, 1, 'text'],
