@@ -154,6 +154,14 @@ Carry: $50.3M (3 tiers), 8% pref
 Equity: 1 class (Series A), basis $270.0M
 ```
 
+### Metadata generation on large models
+
+Output discovery builds an index of each sheet's observed numeric columns once
+per invocation, then probes candidate rows without rescanning every cell for each
+label. Candidate ranking and value ranges are unchanged. Other metadata stages
+still scan ground truth; `init --timeout` limits the parser, not the entire init
+pipeline.
+
 ### `ete verify` — Confirm the engine matches your spreadsheet
 
 ```bash
