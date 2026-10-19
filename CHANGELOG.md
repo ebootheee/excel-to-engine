@@ -1,5 +1,18 @@
 # excel-to-engine — Changelog
 
+## 2026-10-19 — SUMPRODUCT arrays and multi-argument emission
+
+- Fix invalid JavaScript for three or more SUMPRODUCT arguments (repeated `const`
+  declarations were comma-separated). Use one emission path for all arities.
+- Evaluate binary arithmetic/comparisons and unary coercion inside SUMPRODUCT
+  element by element, including scalar broadcasting and `--(range=cell)` masks.
+  Propagate errors through comparisons and reject unequal flattened array lengths.
+- Synthetic XLSX regression fails before the repair with a syntax error, then
+  with a zero instead of the expected weighted total after the syntax-only fix.
+  The complete repair passes 19 checks, including changed inputs, mixed anchors,
+  error propagation, text/blank entries and mismatched lengths. Full JavaScript
+  suite and all 29 Rust unit tests pass. No proprietary workbook is committed.
+
 ## 2026-06-10 — #33 warm-convergence measured (2 passes, fixed point == GT); per-sheet-eval fits the box; #46 row-chunked modules
 
 - **#33 warm-seed convergence measure (the post-v0.3.1 unblock, posted to #33):** the lean

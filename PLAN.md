@@ -1,5 +1,13 @@
 # excel-to-engine — Plan
 
+## Status: 2026-10-19 — SUMPRODUCT compiler regression repaired
+
+Synthetic workbook execution reproduced invalid JavaScript with three or more
+arguments and scalarized array masks. SUMPRODUCT lowering is repaired; 19 execution
+checks, the full JavaScript suite and 29 Rust unit tests pass. Workbook-specific
+validation remains separate from this compiler regression. No published engine is
+overwritten, and no proprietary model artifacts belong in this public repository.
+
 ## Status: 2026-06-10 — post-v0.3.1 queue executed: #33 warm measure (2 passes, == GT), eval harness fits the box (PR #69), #46 row-chunking landed + real-A-2 gated
 
 All three "next" items from the v0.3.1 entry, one session. (1) **#33 warm-seed convergence

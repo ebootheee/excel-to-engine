@@ -191,19 +191,7 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
         Expr::BinOp { op, left, right } => {
             let l = transpile(left, config);
             let r = transpile(right, config);
-            match op.as_str() {
-                "=" => format!("({} === {})", l, r),
-                "<>" => format!("({} !== {})", l, r),
-                "^" => format!("Math.pow({}, {})", l, r),
-                "&" => format!("(String({}) + String({}))", l, r),
-                // Excel `A/0` and `0/0` both produce #DIV/0!. Route every division through
-                // _div so both collapse to ONE canonical sentinel (NaN) that IFERROR/
-                // ISERROR/ISNUMBER already catch (post-#55, they test !Number.isFinite) —
-                // instead of bare `(l / r)` which yields signed Infinity for `A/0` (which the
-                // SUM reducer then PROPAGATES) and NaN for `0/0` (which it silently DROPS).
-                "/" => format!("_div({}, {})", l, r),
-                _ => format!("({} {} {})", l, op, r),
-            }
+            scalar_binary(op, &l, &r)
         }
 
         Expr::FunctionCall { name, args } => transpile_function(name, args, config),
@@ -212,6 +200,38 @@ pub fn transpile(expr: &Expr, config: &TranspileConfig) -> String {
             let parts: Vec<String> = items.iter().map(|e| transpile(e, config)).collect();
             format!("[{}]", parts.join(", "))
         }
+    }
+}
+
+fn scalar_binary(op: &str, l: &str, r: &str) -> String {
+    match op {
+        "=" => format!("({} === {})", l, r),
+        "<>" => format!("({} !== {})", l, r),
+        "^" => format!("Math.pow({}, {})", l, r),
+        "&" => format!("(String({}) + String({}))", l, r),
+        // Preserve the shared NaN sentinel for both A/0 and 0/0.
+        "/" => format!("_div({}, {})", l, r),
+        _ => format!("({} {} {})", l, op, r),
+    }
+}
+
+/// SUMPRODUCT evaluates arithmetic and comparison operands element by element.
+/// Keep this array context local: ordinary scalar formulas retain their lowering.
+fn transpile_sumproduct_arg(expr: &Expr, config: &TranspileConfig) -> String {
+    match expr {
+        Expr::UnaryOp { op, operand } => {
+            let inner = transpile_sumproduct_arg(operand, config);
+            format!("((_v)=>{{const _op=(_x)=>({}(_x));return Array.isArray(_v)?_v.map(_op):_op(_v);}})({})", op, inner)
+        }
+        Expr::BinOp { op, left, right } => {
+            let l = transpile_sumproduct_arg(left, config);
+            let r = transpile_sumproduct_arg(right, config);
+            let scalar = scalar_binary(op, "_x", "_y");
+            // A comparison involving an Excel error must remain an error, not
+            // become false and silently remove the row from the weighted total.
+            format!("((_l,_r)=>{{const _op=(_x,_y)=>((typeof _x==='number'&&!Number.isFinite(_x))||(typeof _y==='number'&&!Number.isFinite(_y)))?NaN:{};const _la=Array.isArray(_l),_ra=Array.isArray(_r);if(_la&&_ra&&_l.length!==_r.length)return NaN;return _la?_l.map((_x,_i)=>_op(_x,_ra?_r[_i]:_r)):_ra?_r.map(_y=>_op(_l,_y)):_op(_l,_r);}})({},{})", scalar, l, r)
+        }
+        _ => transpile(expr, config),
     }
 }
 
@@ -313,28 +333,22 @@ fn transpile_function(name: &str, args: &[Expr], config: &TranspileConfig) -> St
         "SUMPRODUCT" => {
             // SUMPRODUCT(array1, array2, ...) → zip and multiply then sum.
             // _aggNum propagates a non-finite NUMBER (#DIV/0!) as NaN but treats text as 0.
-            if args.len() == 1 {
-                let arr = transpile(&args[0], config);
-                return format!("[{}].flat().reduce((a,b)=>a+_aggNum(b),0)", arr);
+            if args.is_empty() {
+                return "NaN /* SUMPRODUCT requires an array */".to_string();
             }
-            if args.len() == 2 {
-                let a0 = transpile(&args[0], config);
-                let a1 = transpile(&args[1], config);
-                // Wrap in IIFE to make self-contained expression
-                // (prevents paren mismatches when used in SUMPRODUCT/SUM or IFERROR)
-                return format!("(()=>{{const _a=[{}].flat(),_b=[{}].flat();return _a.reduce((acc,v,i)=>acc+(_aggNum(v)*_aggNum(_b[i])),0);}})()", a0, a1);
-            }
-            // 3+ arrays: multiply element-wise then sum (IIFE-wrapped)
-            let arrays: Vec<String> = args.iter().map(|a| transpile(a, config)).collect();
+            let arrays: Vec<String> = args.iter().map(|a| transpile_sumproduct_arg(a, config)).collect();
             let arr_decls: Vec<String> = arrays.iter().enumerate()
                 .map(|(i, a)| format!("const _a{}=[{}].flat()", i, a))
                 .collect();
-            let products: String = (1..arrays.len())
+            let products: String = (0..arrays.len())
                 .map(|i| format!("_aggNum(_a{}[i])", i))
                 .collect::<Vec<_>>()
                 .join("*");
-            format!("(()=>{{{};return _a0.reduce((acc,v,i)=>acc+(_aggNum(v)*{}),0);}})()",
-                arr_decls.join(","), products)
+            let guards = (1..arrays.len())
+                .map(|i| format!("if(_a{}.length!==_a0.length)return NaN;", i))
+                .collect::<Vec<_>>().join("");
+            format!("(()=>{{{};{}return _a0.reduce((acc,v,i)=>acc+({}),0);}})()",
+                arr_decls.join(";"), guards, products)
         }
 
         "SUMIF" | "SUMIFS" => {

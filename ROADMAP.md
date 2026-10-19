@@ -1,5 +1,12 @@
 # excel-to-engine — Roadmap
 
+## 2026-10-19 — SUMPRODUCT regression closed
+
+Three-or-more-argument emission and elementwise arithmetic/comparison masks now have
+an executed synthetic regression, including input changes and errors. Whole-model
+convergence and independent workbook recalculation remain model-specific gates;
+passing these compiler tests does not establish a new model's financial fidelity.
+
 ## Now — post-v0.3.1: fidelity DONE to the floor; next = convergence measure + scale (2026-06-09)
 
 **v0.3.0 + v0.3.1 shipped same day.** Sweep progression (all 17 cluster sheets, fresh warm-GT

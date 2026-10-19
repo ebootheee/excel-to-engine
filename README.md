@@ -401,6 +401,10 @@ The engine is built around a small set of non-negotiable rules:
   through `SUM`/`SUMIFS`/`AVERAGE`/… (the naive `(+x||0)` reducer would quietly
   turn `=SUM(100, 0/0, 250)` into `350`). `IFERROR`/`ISERROR` catch it exactly
   where Excel would.
+- **SUMPRODUCT array expressions.** Arithmetic, comparisons and unary coercion
+  within SUMPRODUCT operate element by element, including `--(range=cell)` masks
+  and scalar broadcasting. Unequal flattened array lengths return the error
+  sentinel. This support does not imply general dynamic-array formula support.
 - **Honest convergence.** Real models have circular references (returns ↔ debt
   ↔ fees). The engine converges them transient-tolerantly — a divide-by-cold-0
   that warms as the cluster solves is fine — but a cluster that does **not**
