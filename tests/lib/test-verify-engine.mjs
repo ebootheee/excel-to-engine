@@ -120,6 +120,15 @@ await test('flow schedules cannot silently discard absent cells', async t => {
   assert.equal((await verifyEngine(fixture(t, engine("{'Results!B1':5,'Results!D1':7}"), outputs))).ok, false);
   assert.equal((await verifyEngine(fixture(t, engine("{'Results!B1':5,'Results!C1':0,'Results!D1':7}"), outputs))).ok, true);
 });
+await test('members the source workbook left empty are blanks when ground truth is present', async t => {
+  const outputs = { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } };
+  const gt = { 'Results!B1': 5, 'Results!D1': 7 }; // C1 has no value in Excel
+  assert.equal((await verifyEngine(fixture(t, engine("{'Results!B1':5,'Results!D1':7}"), outputs, gt))).ok, true);
+  // ...but a recorded numeric member the engine dropped is still a hole.
+  const dropped = await verifyEngine(fixture(t, engine("{'Results!B1':5}"), outputs, gt));
+  assert.equal(dropped.ok, false);
+  assert.equal(dropped.drifted[0].reason, 'missing computed value');
+});
 await test('terminal schedules require the terminal cell, not the last available one', () => {
   const output = { cellRange: 'Results!B1:D1', aggregation: 'terminal' };
   assert.equal(resolveOutput(output, { 'Results!B1': 12 }), undefined);
@@ -133,6 +142,7 @@ await test('complete schedules retain sum semantics for explicit text blanks', (
 for (const [name, code, outputs, expectedStatus, gt = {}] of [
   ['matching lazy', `let loaded=false; export async function load(){loaded=true;} export function run(){if(!loaded)throw new Error('load first');return {values:{'Results!B1':12}};}`, scalar, 0],
   ['known blank flow', engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, 0, { 'Results!B1': 5, 'Results!C1': null, 'Results!D1': 7 }],
+  ['source-blank flow', engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, 0, { 'Results!B1': 5, 'Results!D1': 7 }],
   ['missing numeric flow', engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, 1, { 'Results!B1': 5, 'Results!C1': 0, 'Results!D1': 7 }],
   ['optional skipped', engine("{'Results!B1':12}"), { ...scalar, optional: { cell: 'Results!B2' } }, 0],
   ['text and boolean', engine("{'Results!B1':'Ready','Results!B2':false}"), { text: { cell: 'Results!B1', baseCaseValue: 'Ready' }, flag: { cell: 'Results!B2', baseCaseValue: false } }, 0],

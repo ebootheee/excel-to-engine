@@ -7,7 +7,9 @@
   non-convergence, and zero comparable outputs cannot report success.
 - Baseline-less outputs are reported as skipped; exact text/boolean comparisons,
   numeric tolerances, GT fallback, and engines without convergence metadata remain
-  supported. Known blank/text schedule cells retain Excel SUM behavior.
+  supported. Known blank/text schedule cells, and cells the source workbook left
+  empty (absent from `_ground-truth.json`), retain Excel SUM behavior; a recorded
+  numeric member the engine did not produce still fails.
 - Verification failure returns a nonzero CLI status while preserving the JSON
   report. Generated `example.mjs` shares the comparison implementation and failure
   semantics; integration snippets now await lazy loading.
