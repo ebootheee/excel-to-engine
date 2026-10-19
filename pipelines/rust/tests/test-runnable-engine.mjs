@@ -107,7 +107,7 @@ console.log('Testing: streamed dependency-graph.json — schema + edges intact')
 {
   const { chunked, cleanup } = parse(model(100));
   const dg = JSON.parse(readFileSync(join(chunked, 'dependency-graph.json'), 'utf-8'));
-  assert(dg.format === 'cell-dependency-edges-v2', 'graph carries the v2 format tag (compact ranges)');
+  assert(dg.format === 'cell-dependency-edges-v3', 'graph carries the v3 format tag (complete formula index + compact ranges)');
   assert(typeof dg.edgeCount === 'number', 'edgeCount present (written last, after streaming)');
   const b3 = dg.edges['Assumptions!B3'] || [];
   assert(b3.length === 1 && b3[0] === 'Assumptions!B1:B2',

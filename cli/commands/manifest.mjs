@@ -103,7 +103,7 @@ function runExport(modelDir, args) {
   function walk(obj, path) {
     if (!obj || typeof obj !== 'object') return;
     for (const [k, v] of Object.entries(obj)) {
-      if (k === 'baseCaseOutputs' || k === 'customCells') continue; // stripped per convention
+      if (k === 'baseCaseOutputs' || k === 'customCells' || k === 'auditTraces') continue; // handled/stripped per convention
       const p = path ? `${path}.${k}` : k;
       if (typeof v === 'string' && v.includes('!') && /^[^!]+!\$?[A-Z]+\$?\d+$/.test(v)) {
         mappings[p] = v;
@@ -125,6 +125,9 @@ function runExport(modelDir, args) {
     },
     mappings,
   };
+  if (manifest.auditTraces && typeof manifest.auditTraces === 'object') {
+    template.auditTraces = manifest.auditTraces;
+  }
 
   return {
     template,
@@ -148,14 +151,29 @@ function runGenerate(chunkedDir, args) {
     gt = JSON.parse(readFileSync(gtPath, 'utf-8'));
   }
 
+  const outPath = join(chunkedDir, 'manifest.json');
+  let priorAuditTraces = null;
+  if (existsSync(outPath)) {
+    try {
+      const prior = JSON.parse(readFileSync(outPath, 'utf-8'));
+      if (prior.auditTraces && typeof prior.auditTraces === 'object' && !Array.isArray(prior.auditTraces)) {
+        priorAuditTraces = prior.auditTraces;
+      }
+    } catch { /* a malformed old manifest will be replaced by the generated one */ }
+  }
+
   const { manifest, confidence, reviewChecklist } = generateManifest(gt, {
     groundTruthPath: './_ground-truth.json',
     engineDir: './',
     source: args.source,
   });
 
+  // `auditTraces` is model-owner-authored configuration, not detector output.
+  // Preserve it across a full init/re-ingest so regeneration refreshes the
+  // proof against the new workbook instead of silently dropping the pins.
+  if (priorAuditTraces) manifest.auditTraces = priorAuditTraces;
+
   // Write manifest
-  const outPath = join(chunkedDir, 'manifest.json');
   writeFileSync(outPath, JSON.stringify(manifest, null, 2));
 
   // Format output

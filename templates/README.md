@@ -48,6 +48,16 @@ mapping. Edit the `signature.sheetNames` field to control auto-match.
     "summarySheets": ["UW Comparison", "Cheat Sheet"],
     "scenarioColumns": { "UW Comparison": ["H", "I"], "default": ["H"] },
     "peakEquityLabels": ["Peak Net Equity", "Peak Equity"]
+  },
+  "auditTraces": {
+    "capitalToMip": {
+      "root": "mipPayment",
+      "anchors": [
+        { "name": "paidInCapital", "cell": "Inputs!B4" },
+        { "name": "excludedCheck", "cell": "Inputs!B5", "expect": "not-in-lineage" }
+      ],
+      "maxVisited": 250000
+    }
   }
 }
 ```
@@ -61,3 +71,19 @@ Signature fields:
 
 Mappings are cell references; the CLI writes them verbatim into the
 generated manifest.
+
+`auditTraces` is optional model-owner configuration. `root` is either a named
+output (preferred) or a direct `Sheet!A1` cell. Each anchor has a stable name,
+cell, and optional expectation: `connected` (default), `not-in-lineage`, or
+`any`. `maxVisited` bounds traversal (default 250,000; maximum 2,000,000). An
+unresolved or bounded search is reported honestly as `unavailable` or
+`truncated`; it is never converted into a false `not-in-lineage`. The whole
+block survives template export and manifest regeneration. Trace and anchor
+names must be unique ignoring case; a trace accepts at most 256 anchors, a
+manifest at most 64 traces / 1,024 anchors, and all traces share a hard 2M-node
+visit budget. `not-in-lineage` additionally requires a verified v3 graph with
+complete formula indexing. Reachable runtime-addressed reads such as `OFFSET`
+or `INDIRECT` make absence `unavailable` until they can be resolved statically.
+
+When configured, `ete init` emits `chunked/audit-lineage.json`. Add
+`--require-lineage` to make an incomplete or mismatched trace fail the build.

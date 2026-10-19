@@ -33,11 +33,27 @@ export function runExplain(modelDir, target, args) {
   const manifest = loadManifest(modelDir);
   const gt = loadGroundTruth(manifest, modelDir);
   const baseOutputs = resolveBaseCaseOutputs(manifest, gt);
+  const auditLineage = loadAuditLineage(modelDir);
 
   // Two dispatch modes:
   //   - cell ref (contains "!") → direct cell lookup
   //   - name → walk manifest for the cell, then explain that cell
   const isCellRef = target.includes('!') && /^[^!]+!\$?[A-Z]+\$?\d+$/.test(target);
+
+  // A configured trace name is itself explainable. This is the durable,
+  // compact replacement for asking users to inspect a deleted 500 MB graph.
+  if (!isCellRef && auditLineage?.traces?.[target]) {
+    const trace = auditLineage.traces[target];
+    return {
+      target,
+      auditTrace: target,
+      status: trace.status,
+      root: trace.root,
+      paths: trace.paths,
+      warnings: trace.warnings,
+      _formatted: formatAuditTrace(target, trace),
+    };
+  }
 
   let cellRef = null;
   let manifestPath = null;
@@ -57,7 +73,13 @@ export function runExplain(modelDir, target, args) {
 
   const value = cellRef ? resolveCell(gt, cellRef) : valueFromManifest;
   const adjacentLabel = cellRef ? findAdjacentLabel(gt, cellRef) : null;
-  const formula = cellRef ? findFormula(modelDir, cellRef) : null;
+  const formula = cellRef ? findFormula(modelDir, cellRef, auditLineage) : null;
+  const auditTraces = cellRef && auditLineage?.traces
+    ? Object.entries(auditLineage.traces)
+      .filter(([, trace]) => trace.root?.cell === cellRef || trace.paths?.some((path) => path.nodes?.includes(cellRef)))
+      .map(([name]) => name)
+      .sort()
+    : [];
 
   const result = {
     target,
@@ -69,6 +91,7 @@ export function runExplain(modelDir, target, args) {
     formula: formula?.formula || null,
     transpiledJs: formula?.js || null,
     dependencies: formula?.deps || null,
+    auditTraces,
   };
 
   result._formatted = formatExplain(result);
@@ -185,7 +208,15 @@ function findAdjacentLabel(gt, cellRef) {
 // may not have this; degrade gracefully).
 // ---------------------------------------------------------------------------
 
-function findFormula(modelDir, cellRef) {
+function findFormula(modelDir, cellRef, auditLineage = null) {
+  const lineageNode = auditLineage?.nodes?.[cellRef];
+  if (lineageNode) {
+    return {
+      formula: lineageNode.formula || null,
+      js: null,
+      deps: lineageNode.dependsOn || [],
+    };
+  }
   const candidates = [
     join(modelDir, 'formulas.json'),
     join(modelDir, 'chunked', 'formulas.json'),
@@ -212,6 +243,21 @@ function findFormula(modelDir, cellRef) {
     } catch { /* ignore */ }
   }
   return findFormulaInSheetModule(modelDir, cellRef);
+}
+
+function loadAuditLineage(modelDir) {
+  const candidates = [
+    join(modelDir, 'audit-lineage.json'),
+    join(modelDir, 'chunked', 'audit-lineage.json'),
+  ];
+  for (const path of candidates) {
+    if (!existsSync(path)) continue;
+    try {
+      const doc = JSON.parse(readFileSync(path, 'utf-8'));
+      if (doc?.$schema === 'excel-audit-lineage-v1') return doc;
+    } catch { /* malformed optional artifact — fall through to legacy sources */ }
+  }
+  return null;
 }
 
 function findFormulaInSheetModule(modelDir, cellRef) {
@@ -259,9 +305,30 @@ function formatExplain(r) {
   if (Array.isArray(r.dependencies) && r.dependencies.length > 0) {
     lines.push(`Dependencies:    ${r.dependencies.slice(0, 10).join(', ')}${r.dependencies.length > 10 ? ` (+${r.dependencies.length - 10} more)` : ''}`);
   }
+  if (Array.isArray(r.auditTraces) && r.auditTraces.length > 0) {
+    lines.push(`Audit traces:    ${r.auditTraces.join(', ')}`);
+  }
   if (!r.formula && !r.transpiledJs) {
     lines.push(`Formula:         (not available — chunked mode skips cell-level formula metadata)`);
   }
+  return lines.join('\n');
+}
+
+function formatAuditTrace(name, trace) {
+  const lines = [];
+  lines.push(`Audit trace: ${name}`);
+  lines.push('─'.repeat(60));
+  lines.push(`Status:          ${trace.status}`);
+  lines.push(`Root:            ${trace.root?.name || '—'} (${trace.root?.cell || 'unresolved'})`);
+  for (const path of trace.paths || []) {
+    const anchor = path.anchor?.name || path.from || 'anchor';
+    const chain = Array.isArray(path.nodes) && path.nodes.length > 0
+      ? path.nodes.join(' → ')
+      : '—';
+    lines.push(`${anchor}: ${path.status}${path.expectationMet ? '' : ` (expected ${path.anchor?.expect})`}`);
+    if (chain !== '—') lines.push(`  ${chain}`);
+  }
+  for (const warning of trace.warnings || []) lines.push(`Warning:         ${warning}`);
   return lines.join('\n');
 }
 
