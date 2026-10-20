@@ -1,12 +1,12 @@
 /** Synthetic trust-boundary regressions; no workbook or parser required. */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { verifyEngine, resolveOutput, close } from '../../lib/verify-engine.mjs';
-import { emitIntegrationDoc } from '../../lib/integration-doc.mjs';
+import { emitIntegrationDoc, selectGroundTruthSubset } from '../../lib/integration-doc.mjs';
 
 const scalar = { value: { cell: 'Results!B1', baseCaseValue: 12 } };
 function fixture(t, code, outputs = scalar, gt = {}) {
@@ -144,6 +144,9 @@ for (const [name, code, outputs, expectedStatus, gt = {}] of [
   ['known blank flow', engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, 0, { 'Results!B1': 5, 'Results!C1': null, 'Results!D1': 7 }],
   ['source-blank flow', engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, 0, { 'Results!B1': 5, 'Results!D1': 7 }],
   ['missing numeric flow', engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, 1, { 'Results!B1': 5, 'Results!C1': 0, 'Results!D1': 7 }],
+  // Ground truth exists but records none of the range members: with the full map
+  // the CLI treats C1 as a source blank; the demo's empty slice must agree.
+  ['unrelated ground truth only', engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, 0, { 'Other!A1': 1 }],
   ['optional skipped', engine("{'Results!B1':12}"), { ...scalar, optional: { cell: 'Results!B2' } }, 0],
   ['text and boolean', engine("{'Results!B1':'Ready','Results!B2':false}"), { text: { cell: 'Results!B1', baseCaseValue: 'Ready' }, flag: { cell: 'Results!B2', baseCaseValue: false } }, 0],
   ['GT fallback', engine("{'Results!B1':12}"), { value: { cell: 'Results!B1' } }, 0, { 'Results!B1': 12 }],
@@ -176,4 +179,73 @@ await test('recorded numeric schedule member cannot be replaced by null or text'
       { 'Results!B1': 12, 'Results!C1': 0 });
     assert.equal((await verifyEngine(dir)).ok, false);
   }
+});
+
+await test('gtPresent overrides key-derived presence; omitted keeps the full-map rule', () => {
+  const flow = { cellRange: 'Results!B1:D1', aggregation: 'sum' };
+  const values = { 'Results!B1': 5, 'Results!D1': 7 };
+  assert.equal(resolveOutput(flow, values, {}), undefined);               // no GT: unverifiable
+  assert.equal(resolveOutput(flow, values, { 'Other!A1': 1 }), 12);       // full GT present: C1 is a blank
+  assert.equal(resolveOutput(flow, values, {}, true), 12);                // empty slice, GT existed at build
+  assert.equal(resolveOutput(flow, values, { 'Other!A1': 1 }, false), undefined);
+  assert.equal(resolveOutput(flow, values, { 'Results!C1': 0 }, true), undefined); // recorded hole still fails
+});
+
+await test('ground-truth slice holds only scalar output cells and schedule range members', t => {
+  const outputs = {
+    flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 },
+    terminal: { cell: 'Results!D2', cellRange: 'Results!B2:D2', aggregation: 'terminal', baseCaseValue: 3 },
+    legacy: { cell: 'Results!B3' },                      // baseline comes from GT
+    unrecorded: { cell: 'Results!B4', baseCaseValue: 1 }, // not in GT: nothing to copy
+  };
+  const gt = { 'Results!B1': 5, 'Results!D1': 7, 'Results!B2': 1, 'Results!C2': 2, 'Results!D2': 3, 'Results!B3': 9, 'Results!B4:D4': 0 };
+  for (let i = 0; i < 500; i++) gt[`Bulk!A${i + 1}`] = i; // the part of a real file that must NOT ship
+  const want = { 'Results!B1': 5, 'Results!D1': 7, 'Results!B2': 1, 'Results!C2': 2, 'Results!D2': 3, 'Results!B3': 9 };
+  const sel = selectGroundTruthSubset(outputs, gt);
+  assert.deepEqual(sel, { subset: want, present: true, cells: 6 });
+  assert.deepEqual(selectGroundTruthSubset(outputs, {}), { subset: {}, present: false, cells: 0 });
+  assert.deepEqual(selectGroundTruthSubset(outputs, null), { subset: {}, present: false, cells: 0 });
+
+  // The emitted demo inlines exactly that slice and no longer reads the file.
+  const dir = fixture(t, engine("{'Results!B1':5,'Results!D1':7,'Results!D2':3,'Results!B3':9,'Results!B4':1}"), outputs, gt);
+  emitIntegrationDoc(dir);
+  const src = readFileSync(join(dir, 'example.mjs'), 'utf8');
+  assert.doesNotMatch(src, /readFileSync|node:fs|import\.meta\.url/);
+  const m = src.match(/^const gt = (.*);$/m);
+  assert.ok(m, 'example.mjs inlines a single-line gt slice');
+  const inlined = JSON.parse(m[1]);
+  assert.deepEqual(inlined, want);
+  assert.equal(Object.keys(inlined).length, 6);
+  assert.ok(Object.keys(inlined).every(k => !k.startsWith('Bulk!')));
+  assert.match(src, /^const GT_PRESENT = true;$/m);
+  assert.ok(src.length < 20000, `example.mjs is small (${src.length} bytes) despite a 500-cell ground truth`);
+});
+
+await test('generated demo passes with _ground-truth.json deleted when the slice covers its cells', t => {
+  const cases = [
+    // flow with a source-blank member: only the slice + GT_PRESENT make C1 a blank
+    [engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, { 'Results!B1': 5, 'Results!D1': 7, 'Other!Z9': 1 }],
+    // scalar whose baseline exists only in ground truth
+    [engine("{'Results!B1':12}"), { value: { cell: 'Results!B1' } }, { 'Results!B1': 12, 'Other!Z9': 1 }],
+    // ground truth present but recording none of the members (the GT_PRESENT edge)
+    [engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, { 'Other!Z9': 1 }],
+  ];
+  for (const [code, outputs, gt] of cases) {
+    const dir = fixture(t, code, outputs, gt);
+    emitIntegrationDoc(dir);
+    rmSync(join(dir, '_ground-truth.json'));
+    assert.equal(existsSync(join(dir, '_ground-truth.json')), false);
+    const result = spawnSync(process.execPath, [join(dir, 'example.mjs')], { encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(result.stdout, /1 outputs match baseCaseValue/);
+  }
+  // Negative control: built without ground truth, the same absent member stays a
+  // hole — the slice cannot manufacture presence the build never had.
+  const dir = fixture(t, engine("{'Results!B1':5,'Results!D1':7}"), { flow: { cellRange: 'Results!B1:D1', aggregation: 'sum', baseCaseValue: 12 } }, {});
+  emitIntegrationDoc(dir);
+  assert.match(readFileSync(join(dir, 'example.mjs'), 'utf8'), /^const GT_PRESENT = false;$/m);
+  rmSync(join(dir, '_ground-truth.json'));
+  const result = spawnSync(process.execPath, [join(dir, 'example.mjs')], { encoding: 'utf8', timeout: 15000 });
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /missing computed value/);
 });

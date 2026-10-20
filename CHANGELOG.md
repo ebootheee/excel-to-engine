@@ -1,5 +1,27 @@
 # excel-to-engine — Changelog
 
+## 2026-10-19 — example.mjs no longer parses the full ground truth
+
+- The generated `chunked/example.mjs` used to `JSON.parse` all of
+  `_ground-truth.json` at start-up — hundreds of MB on multi-million-cell models —
+  just to run a demo. `emitIntegrationDoc` now slices the ground truth once at
+  bundle-emission time (`selectGroundTruthSubset`) to the cells the shared checks
+  consult: each scalar output's `cell` (baseline fallback) and every member of
+  each schedule's `cellRange` (blank-vs-hole rule). The slice is inlined as `gt`
+  and the demo no longer imports `node:fs`; `ete init` hands the emitter its
+  already-parsed shared ground truth so no second parse occurs.
+- Verification semantics are unchanged. `resolveOutput`/`compareOutputs` take an
+  optional `gtPresent`; the demo inlines `GT_PRESENT` from build time so a
+  schedule member absent from both maps is a source blank exactly when the full
+  ground truth existed — including when it recorded none of the range members.
+  Omitted, the flag derives from the map as before, so `ete verify` and other
+  callers behave identically.
+- Tests: a parity row where the ground truth holds only unrelated cells; the
+  demo passes with `_ground-truth.json` deleted when the slice covers its cells
+  (and still fails for a build that had no ground truth); the inlined map holds
+  exactly the range/scalar cells and none of 500 bulk cells. INTEGRATION.md and
+  README no longer say the demo reads the optional ground-truth file.
+
 ## 2026-10-19 — SUMPRODUCT arrays and multi-argument emission
 
 - Fix invalid JavaScript for three or more SUMPRODUCT arguments (repeated `const`
