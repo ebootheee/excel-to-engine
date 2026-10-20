@@ -1,5 +1,14 @@
 # excel-to-engine — Plan
 
+## Status: 2026-10-19 — standalone demo decoupled from the full ground truth
+
+`example.mjs` now carries a build-time slice of `_ground-truth.json` (named output
+cells + schedule range members) plus a `GT_PRESENT` flag, and never opens the full
+file. The shared helpers in `lib/verify-engine.mjs` gained an optional `gtPresent`
+pass-through; `ete verify` still reads the full file and derives presence as
+before. Parity rows, a deleted-file run, and a slice-size assertion are green.
+Not changed: how `ete verify` loads ground truth, or any comparison tolerance.
+
 ## Status: 2026-10-19 — SUMPRODUCT compiler regression repaired
 
 Synthetic workbook execution reproduced invalid JavaScript with three or more

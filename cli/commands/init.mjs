@@ -471,7 +471,9 @@ export function runInit(excelPath, args) {
   // self-contained guide to wiring engine.run() into an app, plus a runnable
   // demo. Best-effort — never blocks init.
   try {
-    const ig = emitIntegrationDoc(chunkedDir, { modelTitle: manifestResult?.manifest?.model?.title });
+    // sharedGt (when pre-loaded) spares a second parse of a file that can run to
+    // hundreds of MB; the emitter slices it down to the cells example.mjs needs.
+    const ig = emitIntegrationDoc(chunkedDir, { modelTitle: manifestResult?.manifest?.model?.title, gt: sharedGt || undefined });
     if (ig.written?.length > 0) {
       lines.push(`  Handoff bundle: ${ig.written.join(', ')} (run: node ${join(chunkedDir, 'example.mjs')})`);
     }

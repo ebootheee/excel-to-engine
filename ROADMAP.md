@@ -1,5 +1,15 @@
 # excel-to-engine — Roadmap
 
+## 2026-10-19 — demo ground-truth slice landed
+
+- **Completed:** `example.mjs` inlines only the ground-truth cells its checks
+  consult and records build-time presence, so the standalone demo is O(outputs)
+  rather than O(workbook) and survives removal of `_ground-truth.json`.
+- **Next:** `ete verify` still parses the full file for the same comparison; a
+  streaming or sliced read there would make `init --verify` cheaper on large
+  models, but must keep the `gtPresent` derivation exact. Other `_ground-truth.json`
+  readers (`summary`, `query`, manifest detectors) are a separate scaling track.
+
 ## 2026-10-19 — SUMPRODUCT regression closed
 
 Three-or-more-argument emission and elementwise arithmetic/comparison masks now have

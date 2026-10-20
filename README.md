@@ -180,12 +180,16 @@ reported as skipped; a pass does not verify those outputs or untested scenarios.
 Legacy engines without convergence metadata remain supported.
 
 `node chunked/example.mjs` uses the same comparison rules. Flow schedules ignore
-text/blank members and, when `_ground-truth.json` is present, members the source
-workbook left empty. A recorded numeric member the engine did not produce, or an
-absent member with no ground truth to consult, cannot pass. The optional
-`_ground-truth.json` also supplies missing scalar baselines. Run verification
-before handing the bundle to a developer (also available as `ete init --verify`,
-which includes the verification report).
+text/blank members and, when the bundle was built with `_ground-truth.json`
+present, members the source workbook left empty. A recorded numeric member the
+engine did not produce, or an absent member with no ground truth to consult,
+cannot pass. Ground truth also supplies missing scalar baselines. The demo does
+not open `_ground-truth.json` at run time: `ete init` (and the handoff refresh in
+`manifest set`/`refine`) inlines a build-time slice of it — only the named output
+cells and schedule range members — so `node example.mjs` stays fast on
+multi-million-cell models and still runs if that file is removed. `ete verify`
+reads the full file. Run verification before handing the bundle to a developer
+(also available as `ete init --verify`, which includes the verification report).
 
 ### `ete query` — Find Anything
 
